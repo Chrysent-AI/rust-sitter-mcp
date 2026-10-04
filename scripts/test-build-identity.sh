@@ -34,8 +34,9 @@ cargo tree --offline --locked -e no-dev | awk 'NR>1' > "$scratch/tree-before"
 for mode in patch minor major 2.3.4; do
   git restore --source=HEAD --worktree -- Cargo.toml Cargo.lock
   case "$mode" in patch) version=0.1.1 ;; minor) version=0.2.0 ;; major) version=1.0.0 ;; *) version=$mode ;; esac
-  # Array and single-table metadata assignments must not be rewritten.
-  printf '\n[[package.metadata.examples]]\nversion = "9.9.9"\n[package.metadata.fixture]\nversion = "8.8.8"\n' >> Cargo.toml
+  # The array table must immediately follow [package] to test section reset.
+  awk '/^\[dependencies\]$/ { printf "[[package.metadata.examples]]\nversion = \"9.9.9\"\n[package.metadata.fixture]\nversion = \"8.8.8\"\n\n" } { print }' Cargo.toml > "$scratch/manifest"
+  cp "$scratch/manifest" Cargo.toml
   bash scripts/bump-version.sh "$mode"
   grep -q '^version = "9.9.9"$' Cargo.toml
   grep -q '^version = "8.8.8"$' Cargo.toml
