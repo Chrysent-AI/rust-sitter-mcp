@@ -359,13 +359,22 @@ pub fn render(
             span: lines.slice(*start, *end, text_bytes),
             reason: reason.clone(),
             default_disposition: "keep_in_place".into(),
-            classification: "ambiguous".into(),
+            classification: if reason == "scope_prologue" {
+                "scope"
+            } else {
+                "ambiguous"
+            }
+            .into(),
             owner: None,
-            suggested_dispositions: vec![
-                "keep_in_place".into(),
-                "before_match".into(),
-                "after_match".into(),
-            ],
+            suggested_dispositions: if reason == "scope_prologue" {
+                vec!["keep_in_place".into()]
+            } else {
+                vec![
+                    "keep_in_place".into(),
+                    "before_match".into(),
+                    "after_match".into(),
+                ]
+            },
             selected_disposition: "keep_in_place".into(),
             preservable: true,
             match_ids: vec![format!("m/{file_ordinal}/{match_ordinal}")],
