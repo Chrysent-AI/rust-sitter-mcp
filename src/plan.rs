@@ -1,12 +1,12 @@
 //! Complete read-only replacement planning over the same source/matching pipeline.
 use crate::{
     edit::{self, Edit},
-    matching::{self, Candidate},
-    patch,
+    matching, patch,
     pattern::Pattern,
     result::*,
     scope::{self, Scope},
     template::Template,
+    trivia,
 };
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -329,6 +329,8 @@ fn build(
     }
     let compiled = Pattern::compile(&request.pattern)?;
     let template = Template::new(&request.replacement, &compiled)?;
+    let overrides = request.trivia_overrides.as_deref().unwrap_or_default();
+    trivia::validate_overrides(overrides)?;
     let mut anchors = BTreeSet::new();
     if let Some(selection) = &request.selection {
         for anchor in selection {
@@ -413,21 +415,20 @@ fn build(
         ));
     }
     result.plan.selected_count = Some(result.plan.matches.len());
-    if request
-        .trivia_overrides
-        .as_ref()
-        .is_some_and(|o| !o.is_empty())
-    {
-        result.blocker(
-            "UNSUPPORTED_TRIVIA_DISPOSITION",
-            "override preservation is not yet supported by this build",
-            None,
-            None,
-        );
-    }
     let mut edits = Vec::new();
+    let mut prepared = Vec::new();
+    let mut consumed_overrides = BTreeSet::new();
     for (ordinal, data, chosen) in &selected {
         let file = &files[*ordinal];
+        if chosen.is_empty() {
+            continue;
+        }
+        let Some(tree) = trivia::parse(&file.source, deadline, cancelled)? else {
+            result.incomplete("trivia_deadline");
+            return Ok(());
+        };
+        let inventory = trivia::inventory(&tree, &file.source);
+        let mut primaries = Vec::new();
         for index in chosen {
             let candidate = &data.matches[*index];
             if data.recovery {
@@ -440,16 +441,29 @@ fn build(
             }
             let expansion = template.expand(candidate, &file.source);
             let id = format!("m/{ordinal}/{index}");
-            check_internal(&file.source, candidate, &expansion, result, &file.path)?;
-            edits.push(Edit::new(
-                &file.path,
-                &file.source,
-                candidate.start,
-                candidate.end,
-                expansion.text,
-                &id,
-            ));
+            primaries.push(trivia::Primary::new(*index, id, expansion));
         }
+        let (file_edits, used) = trivia::account(
+            (&file.path, *ordinal),
+            &file.source,
+            &data.matches,
+            &inventory,
+            &mut primaries,
+            overrides,
+            result,
+        )?;
+        edits.extend(file_edits);
+        consumed_overrides.extend(used);
+        prepared.push((*ordinal, inventory, primaries));
+    }
+    if overrides
+        .iter()
+        .any(|o| !consumed_overrides.contains(&o.trivia))
+    {
+        return Err(DomainError::new(
+            "INVALID_TRIVIA_OVERRIDE",
+            "trivia anchor is unknown, changed or unrelated to selection",
+        ));
     }
     if let Err(error) = edit::sort_validate(&mut edits) {
         result.blocker(&error.code, &error.message, None, None);
@@ -461,7 +475,9 @@ fn build(
     }
     edits.retain(|edit| edit.original_text != edit.replacement_text);
     let mut patch_text = String::new();
-    for file in &files {
+    for (ordinal, inventory, primaries) in &prepared {
+        let file = &files[*ordinal];
+        let data = &selected[*ordinal].1;
         let file_edits: Vec<_> = edits
             .iter()
             .filter(|edit| edit.path == file.path)
@@ -471,13 +487,20 @@ fn build(
             continue;
         }
         let proposed = edit::reconstruct(&file.source, &file_edits)?;
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_rust::LANGUAGE.into())
-            .map_err(|_| DomainError::new("INTERNAL", "grammar ABI failed"))?;
-        let tree = parser
-            .parse(&proposed, None)
-            .ok_or_else(|| DomainError::new("INTERNAL", "virtual parse failed"))?;
+        let Some(tree) = trivia::parse(&proposed, deadline, cancelled)? else {
+            result.incomplete("reparse_deadline");
+            return Ok(());
+        };
+        let proposed_trivia = trivia::inventory(&tree, &proposed);
+        let origins = trivia::origins(file.source.len(), &file_edits, primaries, &data.matches);
+        if !trivia::verify(inventory, &proposed_trivia, &origins) {
+            result.blocker(
+                "ATTRIBUTE_ATTACHMENT_CHANGED",
+                "trivia origin or protected owner/scope could not be verified after reparsing",
+                Some(&file.path),
+                None,
+            );
+        }
         if tree.root_node().has_error() {
             result.blocker(
                 "NEW_SYNTAX_ERROR",
@@ -523,55 +546,38 @@ fn build(
     result.plan.patch = Some(patch_text);
     Ok(())
 }
-fn check_internal(
-    source: &str,
-    candidate: &Candidate,
-    expansion: &crate::template::Expansion,
-    result: &mut PlanEnvelope,
-    path: &str,
-) -> Result<(), DomainError> {
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .map_err(|_| DomainError::new("INTERNAL", "grammar ABI failed"))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| DomainError::new("INTERNAL", "trivia parse failed"))?;
-    let mut nodes = vec![tree.root_node()];
-    while let Some(node) = nodes.pop() {
-        if matches!(
-            node.kind(),
-            "line_comment"
-                | "block_comment"
-                | "attribute_item"
-                | "inner_attribute_item"
-                | "shebang"
-        ) {
-            let range = node.byte_range();
-            if range.start >= candidate.start
-                && range.end <= candidate.end
-                && !expansion.copies.iter().any(|copy| {
-                    copy.original.start <= range.start
-                        && copy.original.end >= range.end
-                        && expansion.text.get(copy.output.clone())
-                            == source.get(copy.original.clone())
-                })
-            {
-                result.blocker(
-                    "UNRETAINED_TRIVIA",
-                    "template consumes trivia without original-capture provenance",
-                    Some(path),
-                    Some(ByteRange {
-                        start_byte: range.start,
-                        end_byte: range.end,
-                    }),
-                );
-            }
-            continue;
-        }
-        for i in 0..node.child_count() {
-            nodes.push(node.child(i).expect("child"));
-        }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn source_changed_between_plan_and_fingerprint_recheck() {
+        let root =
+            std::env::temp_dir().join(format!("rust-sitter-freshness-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let file = root.join("a.rs");
+        std::fs::write(&file, "fn f(){ x.unwrap(); }").unwrap();
+        let request:ReplaceRequest=serde_json::from_value(serde_json::json!({"repo_path":root,"pattern":"$a.unwrap()","replacement":"$a.expect(\"why\")"})).unwrap();
+        let result = run_with_recheck(&root, request, &AtomicBool::new(false), || {
+            std::fs::write(&file, "fn f(){ y.unwrap(); }").unwrap()
+        });
+        assert_eq!(result.plan.state, "incomplete");
+        assert!(
+            result
+                .plan
+                .blockers
+                .iter()
+                .any(|b| b.code == "SOURCE_CHANGED")
+        );
+        assert!(result.plan.patch.is_none() && result.plan.edits.is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
-    Ok(())
 }

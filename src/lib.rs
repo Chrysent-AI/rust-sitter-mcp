@@ -11,3 +11,4 @@ mod query;
 pub mod result;
 mod scope;
 mod template;
+mod trivia;

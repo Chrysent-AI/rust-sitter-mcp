@@ -96,37 +96,6 @@ pub fn execute(
                 });
             }
         }
-        if matches!(node.kind(), "line_comment" | "block_comment") {
-            // Bound trivia descriptors separately; exact omission counts are retained during rendering.
-            let text = &file.source[node.byte_range()];
-            let before = &file.source[..node.start_byte()];
-            let content = text
-                .strip_prefix("//")
-                .or_else(|| text.strip_prefix("/*"))
-                .unwrap_or(text)
-                .trim_start();
-            let reason = if ["---", "===", "***", "###"]
-                .iter()
-                .any(|prefix| content.starts_with(prefix))
-            {
-                "banner"
-            } else if before.trim().is_empty() {
-                "scope_prologue"
-            } else if before.ends_with("\n\n") || before.ends_with("\r\n\r\n") {
-                "blank_separator"
-            } else {
-                ""
-            };
-            if !reason.is_empty() {
-                result
-                    .comments
-                    .push((node.start_byte(), node.end_byte(), reason.into()));
-                if result.comments.len() > 100_000 {
-                    result.stopped = Some("trivia_descriptor_limit".into());
-                    return Ok(result);
-                }
-            }
-        }
         if walker.goto_first_child() {
             continue;
         }
@@ -141,6 +110,15 @@ pub fn execute(
         if walker.node() == tree.root_node() {
             break;
         }
+    }
+    result.comments = crate::trivia::inventory(&tree, &file.source)
+        .into_iter()
+        .filter(|t| matches!(t.classification.as_str(), "ambiguous" | "scope"))
+        .map(|t| (t.range.start, t.range.end, t.reason))
+        .collect();
+    if result.comments.len() > 100_000 {
+        result.stopped = Some("trivia_descriptor_limit".into());
+        return Ok(result);
     }
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(limits.query_state_limit);
@@ -381,6 +359,16 @@ pub fn render(
             span: lines.slice(*start, *end, text_bytes),
             reason: reason.clone(),
             default_disposition: "keep_in_place".into(),
+            classification: "ambiguous".into(),
+            owner: None,
+            suggested_dispositions: vec![
+                "keep_in_place".into(),
+                "before_match".into(),
+                "after_match".into(),
+            ],
+            selected_disposition: "keep_in_place".into(),
+            preservable: true,
+            match_ids: vec![format!("m/{file_ordinal}/{match_ordinal}")],
         })
         .collect();
     MatchRecord {

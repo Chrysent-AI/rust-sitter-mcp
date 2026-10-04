@@ -204,6 +204,12 @@ pub struct TriviaDecision {
     pub span: SourceSlice,
     pub reason: String,
     pub default_disposition: String,
+    pub classification: String,
+    pub owner: Option<ByteRange>,
+    pub suggested_dispositions: Vec<String>,
+    pub selected_disposition: String,
+    pub preservable: bool,
+    pub match_ids: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
