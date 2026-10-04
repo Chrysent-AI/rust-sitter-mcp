@@ -1,0 +1,19 @@
+# Dependency decisions
+
+Dependency additions and re-pins are researched before changing the manifest and recorded in the same commit. See [AGENTS.md](../AGENTS.md) for the binding policy. Cargo.lock pins the binary's resolved graph; normal gates use `--locked`.
+
+## 2026-10-04 — clap 4.6.7
+
+- **Slot:** CLI help and build-version reporting; manifest requirement `4.6` (caret), resolved version **4.6.7** in Cargo.lock. Stable-major compatible updates are deliberate lockfile changes, not automatic upgrades.
+- **Candidates:** [clap](https://crates.io/crates/clap), a hand-written std-only parser (the symbol-index tooling precedent), and [lexopt](https://crates.io/crates/lexopt). A manual parser saves dependencies but duplicates help/error/version behavior as the CLI grows; lexopt supplies low-level argument iteration, not the declarative help/version contract (`cargo info lexopt` verified 0.3.2, MIT, undeclared MSRV). Clap provides one maintained CLI implementation from the skeleton onward.
+- **Maintenance:** `cargo info clap@4.6.7` verified MIT OR Apache-2.0 and Rust 1.85. The same-day dependency research's crates.io metadata records latest 4.6.7, updated 2026-09-14; releases 4.6.2–4.6.7 from July–September, approximately 1.191 billion total / 245.6 million recent downloads, with the chosen release not yanked. A fresh direct crates.io API fetch returned HTTP 403; metadata evidence is the already completed same-day registry research, not an invented refresh.
+- **Features:** defaults disabled; only `derive`, `std`, `help`, `usage`, `error-context`. No color, suggestions, environment parsing, or runtime metadata dependency. Derive/build-version attributes were checked against installed clap 4.6.7 source and [the derive tutorial](https://docs.rs/clap/4.6.7/clap/_derive/_tutorial/index.html).
+- **Compatibility/weight:** Rust 1.85 fits the tested 1.97.1 toolchain; either upstream license fits the MIT application. The introducing `cargo tree -e no-dev` audit resolves ten packages beyond this application: clap 4.6.7, clap_builder 4.6.7, clap_derive 4.6.7, anstyle 1.0.14, clap_lex 1.1.1, heck 0.5.0, proc-macro2 1.0.107, quote 1.0.47, syn 3.0.6, and unicode-ident 1.0.26. This is the builder/derive chain and its parser/proc-macro helpers; default color/suggestions are not enabled. No other direct application dependency or dev-dependency is introduced.
+
+## 2026-10-04 — cargo-deny 0.20.2 (developer tool)
+
+Required advisory/license/source gate, installed with `cargo install --locked cargo-deny --version 0.20.2`; not a Cargo dependency of this application. Same-day `cargo info`/registry research records Rust 1.88, MIT OR Apache-2.0, last release 2026-07-09, active May–July releases and approximately 6.13 million total / 1.79 million recent downloads. Installed version reverified. [cargo-deny](https://crates.io/crates/cargo-deny) wins over [cargo-audit](https://crates.io/crates/cargo-audit) plus separate license checks because one reviewed policy checks advisories, licenses and allowed sources. Exact tool pin keeps gate semantics stable; upgrades require review. Its transitive graph is a developer-tool cost, not part of the shipped binary.
+
+## 2026-10-04 — cargo-machete 0.9.2 (developer tool)
+
+Required unused-direct-dependency gate, installed with `cargo install --locked cargo-machete --version 0.9.2`; not an application dependency. Same-day registry research records MIT, release 2026-04-15 following 0.9.0/0.9.1 in August 2025, approximately 3.00 million total / 550 thousand recent downloads. Declared MSRV is unavailable; the installed binary works with this development environment. [cargo-machete](https://crates.io/crates/cargo-machete) wins over [cargo-udeps](https://crates.io/crates/cargo-udeps) because it works without a nightly compiler. Exact pin and no blanket unused-dependency exemptions. Build the locked tool separately if reinstalling; tool transitive weight is not shipped in the application.
