@@ -1,4 +1,4 @@
-//! One simultaneous, read-only relocation plan. Dependency repairs are deliberately not applied.
+//! One simultaneous, read-only relocation plan with itemized written-binding repairs.
 use crate::{
     edit::{self, Edit},
     items::{self, Item, ModuleEvidence, ParsedFile},
@@ -6,6 +6,7 @@ use crate::{
     patch,
     plan::{BaseFile, Blocker, Integrity, SourceAnchor},
     result::*,
+    rewrites::{self, Repair},
     scope::{self, FileSnapshot, Scope},
     trivia::{self, MoveOrigin},
 };
@@ -969,7 +970,17 @@ fn build(
         &mut result.counts.analysis_descriptor_bytes,
     )?;
     result.counts.reference_candidates = candidates;
-    for need in needs {
+    let analysis = rewrites::analyze(
+        request,
+        &files,
+        &parsed,
+        &tuples,
+        &contexts,
+        &new_contexts,
+        needs,
+        (deadline, cancelled),
+    )?;
+    for need in analysis.needs {
         items::check(deadline, cancelled)?;
         if result.plan.decisions.len() == 100_000 {
             return Err(DomainError::new(
@@ -1085,6 +1096,7 @@ fn build(
         &parsed,
         &selected,
         &mut creations,
+        &analysis.repairs,
         (deadline, cancelled),
         result,
     )?;
@@ -1457,7 +1469,7 @@ fn rewrite(
                         && !after
                             .bytes()
                             .all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n')))
-                    || (kind == "module_declaration" && after != text)
+                    || (kind != "separator" && after != text)
                 {
                     return Err(error(
                         "INVALID_REWRITE_OVERRIDE",
@@ -1536,17 +1548,69 @@ fn add_separator(
         .push((id, range(start, insertion.text.len())));
     Ok(())
 }
+fn copy_run(
+    insertion: &mut Insertion,
+    files: &BTreeMap<String, FileSnapshot>,
+    path: &str,
+    start: usize,
+    end: usize,
+) {
+    if start == end {
+        return;
+    }
+    let at = insertion.text.len();
+    insertion.text.push_str(&files[path].source[start..end]);
+    insertion.copies.push(MoveOrigin {
+        id: String::new(),
+        source_path: path.into(),
+        source_range: range(start, end),
+        output_path: insertion.path.clone(),
+        output_range: range(at, insertion.text.len()),
+        role: "item".into(),
+    });
+}
+#[allow(clippy::too_many_arguments)] // The original-coordinate assembly has one immutable corpus.
 fn assemble(
     request: &MoveRequest,
     files: &BTreeMap<String, FileSnapshot>,
     parsed: &BTreeMap<String, ParsedFile>,
     selected: &[Selection],
     creations: &mut BTreeMap<String, Creation>,
+    repairs: &[Repair],
     controls: (Instant, &AtomicBool),
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
     let (deadline, cancelled) = controls;
     let mut used = BTreeSet::new();
+    let mut authored = Vec::new();
+    for repair in repairs {
+        items::check(deadline, cancelled)?;
+        let (id, after) = rewrite(
+            request,
+            &mut used,
+            result,
+            repair.target.clone(),
+            repair.kind,
+            &repair.after,
+            &repair.item_ids,
+        )?;
+        let audit = result.plan.rewrites.last_mut().expect("repair audit");
+        audit.before_text = files
+            .get(&repair.path)
+            .map(|f| f.source[repair.range.start_byte..repair.range.end_byte].to_owned())
+            .unwrap_or_default();
+        audit.anchors = repair.anchors.clone();
+        audit.rationale = repair.rationale.clone();
+        audit.evidence = repair
+            .anchors
+            .iter()
+            .map(|a| format!("{}:{}..{}", a.path, a.range.start_byte, a.range.end_byte))
+            .collect();
+        if matches!(repair.target, RewriteTarget::Source { .. }) {
+            audit.origin = "copied".into();
+        }
+        authored.push((repair, id, after));
+    }
     let mut groups: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
     for (index, s) in selected.iter().enumerate() {
         items::check(deadline, cancelled)?;
@@ -1587,7 +1651,21 @@ fn assemble(
                 .push(path.clone());
         }
     }
-    let keys: BTreeSet<_> = groups.keys().chain(declarations.keys()).cloned().collect();
+    let mut imports: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
+    for (index, (repair, _, _)) in authored.iter().enumerate() {
+        if repair.kind == "import_insert" {
+            imports
+                .entry((repair.path.clone(), repair.range.start_byte))
+                .or_default()
+                .push(index);
+        }
+    }
+    let keys: BTreeSet<_> = groups
+        .keys()
+        .chain(declarations.keys())
+        .chain(imports.keys())
+        .cloned()
+        .collect();
     let mut insertions = Vec::new();
     for (path, at) in keys {
         items::check(deadline, cancelled)?;
@@ -1628,6 +1706,45 @@ fn assemble(
             rewrites: Vec::new(),
             item_ids: Vec::new(),
         };
+        let mut import_indexes = imports.remove(&key).unwrap_or_default();
+        import_indexes.sort_by_key(|i| authored[*i].2.clone());
+        for index in import_indexes {
+            let (repair, id, text) = &authored[index];
+            let contributors: Vec<_> = selected
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| repair.item_ids.contains(&s.item.id))
+                .map(|(i, _)| i)
+                .collect();
+            if (!insertion.text.is_empty() && !insertion.text.ends_with('\n'))
+                || (insertion.text.is_empty() && at > 0 && !original[..at].ends_with('\n'))
+            {
+                add_separator(
+                    request,
+                    &mut used,
+                    result,
+                    &mut insertion,
+                    &contributors,
+                    selected,
+                    (eol, "before_payload", format!("import:{}", repair.after)),
+                )?;
+            }
+            let start = insertion.text.len();
+            insertion.text.push_str(text);
+            insertion
+                .rewrites
+                .push((id.clone(), range(start, insertion.text.len())));
+            insertion.item_ids.extend(repair.item_ids.clone());
+            add_separator(
+                request,
+                &mut used,
+                result,
+                &mut insertion,
+                &contributors,
+                selected,
+                (eol, "after_payload", format!("import:{}", repair.after)),
+            )?;
+        }
         for created_path in declarations.remove(&key).unwrap_or_default() {
             items::check(deadline, cancelled)?;
             let creation = &creations[&created_path];
@@ -1706,18 +1823,33 @@ fn assemble(
                         ),
                     )?;
                 }
-                let start = insertion.text.len();
-                insertion
-                    .text
-                    .push_str(&files[&run.path].source[run.range.start_byte..run.range.end_byte]);
-                insertion.copies.push(MoveOrigin {
-                    id: String::new(),
-                    source_path: run.path.clone(),
-                    source_range: run.range.clone(),
-                    output_path: path.clone(),
-                    output_range: range(start, insertion.text.len()),
-                    role: "item".into(),
-                });
+                let mut cursor = run.range.start_byte;
+                let mut internal: Vec<_> = authored
+                    .iter()
+                    .filter(|(r, _, _)| {
+                        r.kind != "import_insert"
+                            && r.path == run.path
+                            && r.range.start_byte >= run.range.start_byte
+                            && r.range.end_byte <= run.range.end_byte
+                    })
+                    .collect();
+                internal.sort_by_key(|(r, _, _)| r.range.clone());
+                for (repair, id, text) in internal {
+                    copy_run(
+                        &mut insertion,
+                        files,
+                        &run.path,
+                        cursor,
+                        repair.range.start_byte,
+                    );
+                    let start = insertion.text.len();
+                    insertion.text.push_str(text);
+                    insertion
+                        .rewrites
+                        .push((id.clone(), range(start, insertion.text.len())));
+                    cursor = repair.range.end_byte;
+                }
+                copy_run(&mut insertion, files, &run.path, cursor, run.range.end_byte);
             }
         }
         if at < original.len() && !insertion.text.ends_with('\n') {
@@ -1732,6 +1864,29 @@ fn assemble(
             )?;
         }
         insertions.push(insertion);
+    }
+    let mut absorbed = BTreeSet::new();
+    for (repair, id, text) in &authored {
+        if repair.kind != "import_insert"
+            && repair.range.start_byte == repair.range.end_byte
+            && !selected.iter().any(|s| {
+                s.runs.iter().any(|run| {
+                    run.path == repair.path
+                        && run.range.start_byte <= repair.range.start_byte
+                        && repair.range.start_byte < run.range.end_byte
+                })
+            })
+            && let Some(insertion) = insertions
+                .iter_mut()
+                .find(|i| i.path == repair.path && i.at == repair.range.start_byte)
+        {
+            let start = insertion.text.len();
+            insertion.text.push_str(text);
+            insertion
+                .rewrites
+                .push((id.clone(), range(start, insertion.text.len())));
+            absorbed.insert(id.clone());
+        }
     }
     if used.len()
         != request
@@ -1773,6 +1928,32 @@ fn assemble(
                 .collect();
             edits.push(deletion);
         }
+    }
+    for (repair, id, text) in &authored {
+        if repair.kind == "import_insert"
+            || absorbed.contains(id)
+            || selected.iter().any(|s| {
+                s.runs.iter().any(|run| {
+                    run.path == repair.path
+                        && repair.range.start_byte >= run.range.start_byte
+                        && repair.range.end_byte <= run.range.end_byte
+                })
+            })
+        {
+            continue;
+        }
+        let mut edit = Edit::new(
+            &repair.path,
+            &files[&repair.path].source,
+            repair.range.start_byte,
+            repair.range.end_byte,
+            text.clone(),
+            "",
+        );
+        edit.match_ids.clear();
+        edit.item_ids = repair.item_ids.clone();
+        edit.rewrite_ids.push(id.clone());
+        edits.push(edit);
     }
     // Sort deletions first; any consumed overlap already has a blocker. No arbitrary folding.
     if edit::sort_validate(&mut edits).is_err() {
@@ -1898,6 +2079,20 @@ fn assemble(
                             index: edit_index,
                             replacement_range: local_range.clone(),
                         });
+                }
+            }
+            for id in &e.rewrite_ids {
+                let audit = result
+                    .plan
+                    .rewrites
+                    .iter_mut()
+                    .find(|r| r.id == *id)
+                    .expect("audit");
+                if audit.artifact_links.is_empty() {
+                    audit.artifact_links.push(ArtifactLink::Edit {
+                        index: edit_index,
+                        replacement_range: range(0, e.replacement_text.len()),
+                    });
                 }
             }
             output_at += e.replacement_text.len();

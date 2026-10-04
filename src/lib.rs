@@ -11,6 +11,7 @@ mod pattern;
 pub mod plan;
 mod query;
 pub mod result;
+mod rewrites;
 mod scope;
 mod template;
 mod trivia;
