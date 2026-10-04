@@ -243,7 +243,7 @@ fn insertion_both_boundaries_replay_and_touching_sources() {
 
 #[test]
 fn destination_adversary_matrix_and_walker_parity() {
-    let repo = fixture("fn selected() {}");
+    let repo = fixture("fn selected() {}\nfn other() {}\n");
     let make = |path: &str| request(&repo, json!([entry(&repo, "fn selected() {}", new(path))]));
     for (path, expected) in [
         ("../escape.rs", "INVALID_DESTINATION"),
@@ -256,8 +256,19 @@ fn destination_adversary_matrix_and_walker_parity() {
         ("cases/layout/destination.rs", "DESTINATION_ALREADY_EXISTS"),
         ("cases/layout/missing/new.rs", "INVALID_DESTINATION"),
     ] {
-        code(&run(&repo, make(path)), expected);
+        let result = run(&repo, make(path));
+        code(&result, expected);
+        assert_eq!(result["error"]["field"], "moves[0].destination.path");
     }
+    let mut batch = make("cases/layout/valid.rs");
+    batch["moves"].as_array_mut().unwrap().push(entry(
+        &repo,
+        "fn other() {}",
+        new("cases/layout/bad-name.rs"),
+    ));
+    let result = run(&repo, batch);
+    code(&result, "INVALID_NEW_FILE_NAME");
+    assert_eq!(result["error"]["field"], "moves[1].destination.path");
     let mut wrong = make("cases/layout/valid.rs");
     wrong["moves"][0]["destination"]["parent_path"] = json!("cases/layout/source.rs");
     code(&run(&repo, wrong), "INVALID_DECLARATION_PARENT");
@@ -435,6 +446,79 @@ fn quoted_directories_legacy_layout_root_extraction_and_override_errors() {
     let choice = json!({"target":module["target"],"action":"accept_default"});
     duplicate["rewrite_overrides"] = json!([choice, choice]);
     code(&run(&repo, duplicate), "INVALID_REWRITE_OVERRIDE");
+}
+
+#[test]
+fn visibility_guards_use_syntax_not_whitespace_spelling() {
+    let repo = fixture("pub fn selected() {}");
+    repo.write(
+        "cases/layout/lib.rs",
+        "pub\tmod source;\nmod destination;\n",
+    );
+    let args = request(
+        &repo,
+        json!([entry(
+            &repo,
+            "pub fn selected() {}",
+            new("cases/layout/target.rs")
+        )]),
+    );
+    for declaration in [
+        "pub\tmod source;\nmod destination;\n",
+        "pub/* api */mod source;\nmod destination;\n",
+    ] {
+        repo.write("cases/layout/lib.rs", declaration);
+        code(&run(&repo, args.clone()), "REEXPORT_DEPENDENCY");
+    }
+    repo.write(
+        "cases/layout/lib.rs",
+        "mod source;\nmod destination;\npub /* scope */ ( self ) mod target;\n",
+    );
+    repo.write("cases/layout/source.rs", "fn selected() {}");
+    code(
+        &run(
+            &repo,
+            request(
+                &repo,
+                json!([entry(
+                    &repo,
+                    "fn selected() {}",
+                    new("cases/layout/target.rs")
+                )]),
+            ),
+        ),
+        "VISIBILITY_CONTEXT",
+    );
+    repo.write("cases/layout/lib.rs", "mod source;\nmod destination;\n");
+    repo.write("cases/layout/source.rs", "pub ( self ) fn selected() {}");
+    code(
+        &run(
+            &repo,
+            request(
+                &repo,
+                json!([entry(
+                    &repo,
+                    "pub ( self ) fn selected() {}",
+                    new("cases/layout/target.rs")
+                )]),
+            ),
+        ),
+        "VISIBILITY_CONTEXT",
+    );
+    let written = "pub /* local */ ( crate ) fn selected() {}";
+    repo.write("cases/layout/source.rs", written);
+    let result = run(
+        &repo,
+        request(
+            &repo,
+            json!([entry(&repo, written, new("cases/layout/target.rs"))]),
+        ),
+    );
+    assert_eq!(
+        result["plan"]["moves"][0]["item"]["visibility"],
+        "pub /* local */ ( crate )"
+    );
+    apply(&repo, &result);
 }
 
 #[test]

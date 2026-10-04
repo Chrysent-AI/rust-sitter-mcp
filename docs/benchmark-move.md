@@ -36,8 +36,8 @@ The server does not apply patches or execute Cargo.
 
 | Workload | Selected bytes | New files | Relevant candidates | Audited rewrites | Structured bytes | Duplicated wire bytes¹ |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| One item | 49,185 | 1 | 0 | 1 | 392,194 | 789,561 |
-| 100-item batch | 16,400 | 2 | 0 | 101 | 711,618 | 1,476,890 |
+| One item | 49,185 | 1 | 0 | 1 | 392,195 | 789,563 |
+| 100-item batch | 16,400 | 2 | 0 | 101 | 711,619 | 1,476,892 |
 
 ¹ Includes the same conservative 4,096-byte framing reserve used by the
 planner. Path lengths can change these sizes on another host. The rewrites
@@ -47,8 +47,8 @@ not a claim of compiler-resolved independence in arbitrary code.
 
 Ten repetitions, milliseconds:
 
-- One item: **171, 154, 154, 157, 157, 161, 160, 156, 157, 156**.
-- 100-item batch: **220, 220, 226, 221, 219, 226, 222, 218, 217, 219**.
+- One item: **162, 162, 163, 164, 162, 163, 159, 159, 160, 163**.
+- 100-item batch: **227, 226, 226, 225, 224, 227, 222, 226, 224, 229**.
 
 Both workloads satisfy their respective ≤5,000-ms / ≤10,000-ms targets in
 **10 of 10** native macOS runs. The batch's 16,400 selected bytes are below

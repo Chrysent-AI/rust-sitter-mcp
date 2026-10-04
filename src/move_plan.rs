@@ -672,7 +672,14 @@ fn build(
             cancelled,
             &mut result.counts.inventory_items,
         )?;
-        result.account(descriptor_bytes(&(&data.items, &data.trivia))?)?;
+        result.account(
+            descriptor_bytes(&(&data.items, &data.trivia))?
+                + data
+                    .items
+                    .iter()
+                    .map(|i| i.visibility_key.len())
+                    .sum::<usize>(),
+        )?;
         if result.counts.inventory_items > 100_000 {
             return Err(DomainError::new(
                 "inventory_work_limit",
@@ -727,7 +734,10 @@ fn build(
             .expect("validated item")
             .clone();
         let destination = entry.destination.path();
-        scope::normalized_path(destination)?;
+        scope::normalized_path(destination).map_err(|mut e| {
+            e.field = Some(format!("moves[{index}].destination.path"));
+            e
+        })?;
         if destination == entry.item.path {
             return Err(error(
                 "INVALID_DESTINATION",
@@ -773,7 +783,10 @@ fn build(
                 }
             }
             Destination::NewSibling { path, parent_path } => {
-                let name = items::module_name(path)?;
+                let name = items::module_name(path).map_err(|mut e| {
+                    e.field = Some(format!("moves[{index}].destination.path"));
+                    e
+                })?;
                 if Path::new(path).parent() != Path::new(&entry.item.path).parent() {
                     return Err(error(
                         "INVALID_DESTINATION",
@@ -790,7 +803,12 @@ fn build(
                         &format!("moves[{index}].destination.parent_path"),
                     ));
                 }
-                scope.admit_new_path(path, deadline, cancelled)?;
+                scope
+                    .admit_new_path(path, deadline, cancelled)
+                    .map_err(|mut e| {
+                        e.field = Some(format!("moves[{index}].destination.path"));
+                        e
+                    })?;
                 let competing = format!("{}/mod.rs", path.trim_end_matches(".rs"));
                 if items::present(&scope, &competing)? {
                     return Err(error(
@@ -883,8 +901,7 @@ fn build(
                     "moves.destination",
                 ));
             }
-            if declaration.visibility.starts_with("pub(") && declaration.visibility != "pub(crate)"
-            {
+            if declaration.visibility_key == "restricted" {
                 result.blocker("VISIBILITY_CONTEXT", "reused restricted declaration needs verified absolute access context; no visibility repair is performed", Some(&creation.parent), Some(declaration.span.range.clone()));
             }
             creation.link = Some(DeclarationLink::Reused {
@@ -914,19 +931,11 @@ fn build(
         let new_exposure = match creations.get(selection.destination.path()) {
             Some(creation) => {
                 matches!(&creation.link, Some(DeclarationLink::Reused { .. }))
-                    && new.is_some_and(|e| {
-                        e.declaration_anchors
-                            .iter()
-                            .all(|a| a.expected_text.starts_with("pub "))
-                    })
+                    && new.is_some_and(|e| items::public_chain(e, &parsed))
             }
-            None => new.is_some_and(|e| {
-                e.declaration_anchors
-                    .iter()
-                    .all(|a| a.expected_text.starts_with("pub "))
-            }),
+            None => new.is_some_and(|e| items::public_chain(e, &parsed)),
         };
-        if selection.item.visibility == "pub" && new_exposure {
+        if selection.item.visibility_key == "pub" && new_exposure {
             result.blocker(
                 "REEXPORT_DEPENDENCY",
                 "destination would expose a changed public path; explicit API decision required",

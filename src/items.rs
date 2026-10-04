@@ -25,6 +25,9 @@ pub struct Item {
     pub kind: String,
     pub name: Option<String>,
     pub visibility: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) visibility_key: &'static str,
     pub attributes: Vec<SourceSlice>,
     pub trivia: Vec<SourceSlice>,
     pub bytes: usize,
@@ -112,6 +115,7 @@ pub fn parse(
             .find(|n| n.kind() == "visibility_modifier")
             .map(|n| file.source[n.byte_range()].to_owned())
             .unwrap_or_else(|| "private".into());
+        let visibility_key = visibility_key(node, &file.source, deadline, cancelled)?;
         items.push(Item {
             id: format!("i/{}/{}/{}", file.path, node.start_byte(), node.end_byte()),
             path: file.path.clone(),
@@ -123,6 +127,7 @@ pub fn parse(
                 .child_by_field_name("name")
                 .map(|n| file.source[n.byte_range()].into()),
             visibility,
+            visibility_key,
             attributes: associated
                 .iter()
                 .filter(|t| t.is_attribute())
@@ -156,6 +161,41 @@ pub fn parse(
         trivia,
     })
 }
+/// Guard keys come from significant grammar tokens, never formatted source prefixes.
+/// Written visibility remains raw in public descriptors and copied payloads.
+fn visibility_key(
+    node: Node<'_>,
+    source: &str,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<&'static str, DomainError> {
+    let visibility = (0..node.named_child_count())
+        .filter_map(|i| node.named_child(i as u32))
+        .find(|n| n.kind() == "visibility_modifier");
+    let Some(visibility) = visibility else {
+        return Ok("private");
+    };
+    let mut key = String::new();
+    let mut stack = vec![visibility];
+    while let Some(node) = stack.pop() {
+        check(deadline, cancelled)?;
+        if matches!(node.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if node.child_count() == 0 {
+            key.push_str(&source[node.byte_range()]);
+        } else {
+            for i in (0..node.child_count()).rev() {
+                stack.push(node.child(i).expect("child"));
+            }
+        }
+    }
+    Ok(match key.as_str() {
+        "pub" => "pub",
+        "pub(crate)" | "crate" => "pub(crate)",
+        _ => "restricted",
+    })
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ModuleEvidence {
@@ -165,6 +205,15 @@ pub struct ModuleEvidence {
     pub filesystem_paths: Vec<String>,
     pub assumptions: Vec<String>,
     pub unresolved: Vec<String>,
+}
+pub fn public_chain(evidence: &ModuleEvidence, parsed: &BTreeMap<String, ParsedFile>) -> bool {
+    evidence.declaration_anchors.iter().all(|a| {
+        parsed.get(&a.path).is_some_and(|file| {
+            file.items
+                .iter()
+                .any(|item| item.span.range == a.range && item.visibility_key == "pub")
+        })
+    })
 }
 pub fn child_path(parent: &str, root: &str, name: &str) -> String {
     let parent = Path::new(parent);
@@ -541,15 +590,13 @@ pub fn dependencies(
                 "source has several same-named written declarations; binding identity is ambiguous",
             ));
         }
-        if item.visibility.starts_with("pub(") && item.visibility != "pub(crate)" {
+        if item.visibility_key == "restricted" {
             needs.push(need("visibility_context", source_path, node, "restricted visibility changes lexical scope; explicit repair is outside dependency-free moves"));
         }
-        let publicly_exposed = item.visibility == "pub"
-            && contexts.get(source_path).is_some_and(|e| {
-                e.declaration_anchors
-                    .iter()
-                    .all(|a| a.expected_text.starts_with("pub "))
-            });
+        let publicly_exposed = item.visibility_key == "pub"
+            && contexts
+                .get(source_path)
+                .is_some_and(|e| public_chain(e, parsed));
         if publicly_exposed {
             needs.push(need("reexport_dependency", source_path, node, "observed public path changes; choose a non-exposed item or an explicit API decision"));
         }
@@ -840,7 +887,9 @@ pub fn dependencies(
                                     .any(|s| module_spellings.contains(s))))
                     {
                         needs.push(need(
-                            if text.starts_with("pub ") {
+                            if visibility_key(current, other_source, deadline, cancelled)?
+                                != "private"
+                            {
                                 "reexport_dependency"
                             } else if text.contains('*') {
                                 "glob_dependency"
