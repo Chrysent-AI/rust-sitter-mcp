@@ -27,7 +27,19 @@ if [[ ${2:-} == --version ]]; then
 fi
 if [[ ${FAIL_GATE:-} == "$1" ]]; then echo "fixture failure: $1" >&2; exit 1; fi
 STUB
-chmod +x "$scratch/bin/cargo"
+cat > "$scratch/bin/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == version ]]; then echo "${FAKE_GITLEAKS_VERSION:-8.30.1}"; exit 0; fi
+[[ "$*" == 'protect --staged --redact --no-banner --log-level warn --exit-code 1' ]] || exit 126
+printf 'gitleaks %s\n' "$*" >> "$FAKE_LOG"
+if [[ -n ${FAIL_GITLEAKS:-} ]]; then echo 'fixture scanner error' >&2; exit "$FAIL_GITLEAKS"; fi
+staged=$(git diff --cached --no-ext-diff --unified=0)
+if printf '%s\n' "$staged" | grep -Eq '^\+.*AKIA[0-9A-Z]{16}'; then
+  echo 'gitleaks: leaks found (fake AWS fixture, redacted)' >&2; exit 1
+fi
+STUB
+chmod +x "$scratch/bin/cargo" "$scratch/bin/gitleaks"
 export PATH="$scratch/bin:$PATH"
 export FAKE_LOG="$scratch/cargo.log"
 cd "$repo"
@@ -48,6 +60,53 @@ reject() {
 }
 git add Cargo.toml Cargo.lock rust-toolchain.toml Makefile .githooks scripts src docs/dependency-log.md
 commit -qm 'build: seed disposable hook fixture' > "$scratch/seed.log" 2>&1
+# Generate a fake key only inside the disposable repo, not in tracked test source.
+printf 'aws_access_key_id = AKIA%s\n' 'BCDEFGHIJKLMNOPQ' > secret-fixture.txt
+git add secret-fixture.txt
+: > "$FAKE_LOG"
+reject commit -qm 'test: reject a staged fake secret'
+grep -q 'gitleaks: leaks found' "$scratch/rejection.log"
+[[ $(< "$FAKE_LOG") == 'gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1' ]]
+# A clean index passes even when the worktree holds an unstaged fake key.
+printf 'clean fixture\n' > secret-fixture.txt
+git add secret-fixture.txt
+printf 'aws_access_key_id = AKIA%s\n' 'BCDEFGHIJKLMNOPQ' >> secret-fixture.txt
+gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1
+git restore --worktree -- secret-fixture.txt
+: > "$FAKE_LOG"
+commit -qm 'test: accept clean staged content' > "$scratch/clean.log" 2>&1
+IFS= read -r first_gate < "$FAKE_LOG"
+[[ "$first_gate" == 'gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1' ]]
+grep -q '^machete$' "$FAKE_LOG"
+grep -q 'fixture-tooling-gate' "$scratch/clean.log"
+# Scanner failures other than the findings code must fail before Cargo checks.
+for code in 2 126; do
+  export FAIL_GITLEAKS="$code"
+  : > "$FAKE_LOG"
+  reject bash .githooks/pre-commit
+  grep -q 'fixture scanner error' "$scratch/rejection.log"
+  [[ $(< "$FAKE_LOG") == 'gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1' ]]
+  unset FAIL_GITLEAKS
+done
+# A curated PATH really has no scanner; do not depend on host installations.
+mkdir "$scratch/no-gitleaks"
+for tool in bash git; do ln -s "$(command -v "$tool")" "$scratch/no-gitleaks/$tool"; done
+for command in 'commit' 'check-tools'; do
+  if [[ "$command" == commit ]]; then
+    PATH="$scratch/no-gitleaks" reject commit -qm 'test: reject missing scanner'
+  else
+    PATH="$scratch/no-gitleaks" reject bash scripts/check-tools.sh
+  fi
+  grep -q 'Missing required tool: gitleaks' "$scratch/rejection.log"
+  grep -q 'brew install gitleaks / make install-tools (Go install with pinned module/version flags)' "$scratch/rejection.log"
+  grep -q 'https://github.com/gitleaks/gitleaks/releases (Ubuntu)' "$scratch/rejection.log"
+done
+export FAKE_GITLEAKS_VERSION=9.0.0
+reject bash .githooks/pre-commit
+grep -q 'Require gitleaks 8.x' "$scratch/rejection.log"
+unset FAKE_GITLEAKS_VERSION
+FAKE_GITLEAKS_VERSION=8.99.1 bash scripts/check-tools.sh
+FAKE_GITLEAKS_VERSION=v8.30.1 bash scripts/check-tools.sh
 printf '\n// fixture change\n' >> src/lib.rs
 git add src/lib.rs
 for gate in fmt clippy test deny machete; do
@@ -70,11 +129,11 @@ printf 'target/\n' > .gitignore
 git add .gitignore
 commit -qm 'test(tooling): accept valid subject and harmless receipt' > "$scratch/valid.log" 2>&1
 test -f target/receipt-sentinel
-# Parity failures happen before any Cargo gate.
+# Parity failures follow the staged scan but precede any Cargo gate.
 printf '\n// unstaged\n' >> src/lib.rs
 : > "$FAKE_LOG"
 reject bash .githooks/pre-commit
-[[ ! -s "$FAKE_LOG" ]]
+[[ $(< "$FAKE_LOG") == 'gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1' ]]
 git restore --worktree -- src/lib.rs
 printf 'untracked\n' > parity-file
 reject bash .githooks/pre-commit
@@ -168,4 +227,4 @@ test -f target/receipt-sentinel
 git worktree add -q -b fixture-linked "$scratch/linked checkout"
 (cd "$scratch/linked checkout" && make install-hooks && make install-hooks) > "$scratch/linked.log"
 test -x "$scratch/linked checkout/.githooks/pre-commit"
-printf '%s\n' 'Tooling fixtures passed: idempotency/conflicts, five failing and missing gates, parity, messages, dependency ordering/notes, receipts, linked worktrees.'
+printf '%s\n' 'Tooling fixtures passed: staged secrets/clean content, scanner errors/missing/version, idempotency/conflicts, five failing and missing Cargo gates, parity, messages, dependency ordering/notes, receipts, linked worktrees.'

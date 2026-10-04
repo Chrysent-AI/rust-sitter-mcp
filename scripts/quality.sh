@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == --precommit ]]; then
+  printf '%s\n' 'Gate: staged secrets (gitleaks)'
+  command -v gitleaks >/dev/null || { echo 'Missing required tool: gitleaks; brew install gitleaks / make install-tools (Go install with pinned module/version flags); or install a release binary from https://github.com/gitleaks/gitleaks/releases (Ubuntu).' >&2; exit 1; }
+  gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1
   git diff --quiet || { echo 'Stage all tracked changes before committing.' >&2; exit 1; }
   [[ -z $(git ls-files --others --exclude-standard) ]] || { echo 'Stage or deliberately ignore untracked files before committing.' >&2; exit 1; }
   git diff --cached --check

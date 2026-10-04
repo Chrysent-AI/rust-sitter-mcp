@@ -7,7 +7,7 @@ This package currently provides the Rust library/binary skeleton and `--help` / 
 Use Git 2.39+, Make, Bash 3.2+, POSIX awk and rustup/Cargo. The tested toolchain is **Rust 1.97.1** (edition 2024), pinned in `rust-toolchain.toml` with rustfmt and Clippy. Build tooling targets macOS Apple Silicon and Ubuntu; native Windows is not claimed. Later parser builds also need a C11 compiler and archive tools.
 
 ```sh
-make install-tools       # cargo-deny 0.20.2 and cargo-machete 0.9.2, locked installs
+make install-tools       # pinned Cargo gates plus gitleaks (Homebrew, then Go)
 make install-hooks       # activate tracked .githooks; safe to run twice
 make build
 make version
@@ -15,17 +15,27 @@ make version
 
 `make install` sequentially ensures components/tools, installs hooks, fetches the locked graph, runs the full gate, builds and installs the binary with Cargo, and prints its version. Tool/dependency installation and the advisory database refresh may require network access. This is developer setup, not runtime behavior. `make help` lists all commands.
 
+Gitleaks is required: compatible **8.x** releases (8.0.0 ≤ version < 9.0.0, optional `v` prefix), tested with **8.30.1**. `make install-tools` uses `brew install gitleaks` when Homebrew is present; otherwise it uses Go to install the tested release with its build-version flag:
+
+```sh
+go install -ldflags '-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1' github.com/zricethezav/gitleaks/v8@v8.30.1
+```
+
+The [8.30.1 Go module](https://github.com/gitleaks/gitleaks/blob/v8.30.1/go.mod) still uses `zricethezav`, not the GitHub organization path, and requires Go 1.24.11+. A plain `go install ...@latest` omits the version stamp and fails our compatibility check; use the pinned command above and add the Go binary directory to `PATH`. Without Homebrew or Go (for example on Ubuntu), install the matching Linux architecture's binary from [upstream releases](https://github.com/gitleaks/gitleaks/releases), verify its published checksum, and put `gitleaks` on `PATH` before retrying. No installer silently skips this tool. Review upgrades deliberately, rechecking staged-scan behavior; a future major requires a compatibility decision.
+
 The hook installer sets only the local `core.hooksPath=.githooks`, ensures hook executable bits, and refuses an existing conflicting hook manager. Relative hooks resolve within the active checkout, including linked worktrees. It does not replace `.git/hooks` files. Fresh clones must install the hooks deliberately.
 
 ## Commits and required gates
 
-Stage all intended changes before committing: hooks reject tracked unstaged changes, nonignored untracked paths and staged whitespace errors. Checks evaluate the disk tree, which must equal the staged tree. No documentation-only shortcut, automatic bypass, or missing-tool exemption exists.
+Stage all intended changes before committing: after the staged secret scan, hooks reject tracked unstaged changes, nonignored untracked paths and staged whitespace errors. The remaining checks evaluate the disk tree, which must equal the staged tree. No documentation-only shortcut, automatic bypass, or missing-tool exemption exists.
 
 Subjects follow `type(scope)!: description`: scope and `!` are optional; scope is lowercase alphanumeric plus `.`, `_`, `-`; description is 1–72 characters. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Git-generated `Merge ...` and complete `Revert "<subject>"` subjects (including the closing quote) are exempt. Example: `build: establish Rust tooling and package skeleton`.
 
-`make quality` and pre-commit share these fail-closed gates:
+Pre-commit (also `make precommit`) starts with `gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1`, before parity checks or other tools. This scans only staged additions, not unstaged/untracked content or the whole history; findings and **every** scanner error/nonzero exit reject the commit. Output redacts secret values. No baseline, repository allowlist or skip switch is supplied; committed-content findings require human remediation, not a suppression added to pass the gate.
 
-1. Pinned toolchain, rustfmt/Clippy, cargo-deny and cargo-machete availability/version checks.
+`make quality` and pre-commit then share these fail-closed gates (`make quality` does not scan the index):
+
+1. Gitleaks 8.x plus pinned toolchain, rustfmt/Clippy, cargo-deny and cargo-machete availability/version checks.
 2. `cargo fmt --all -- --check`.
 3. `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`.
 4. `cargo test --workspace --all-features --locked --quiet`.
@@ -58,7 +68,7 @@ make test-tooling
 make quality
 ```
 
-The fast tooling suite uses isolated `/tmp` Git repositories, paths with spaces, and explicit local Cargo test doubles to exercise installation twice/conflicts, every failing/unavailable gate, staging parity, commit-message rejection, dependency-note changes and harmless receipts. It does not recursively run the parent suite. These test doubles test hook control flow, not actual Rust lint/audit correctness; the real gates run separately against this package.
+The fast tooling suite uses isolated `/tmp` Git repositories, paths with spaces, and explicit local Cargo/gitleaks test doubles to exercise installation twice/conflicts, a staged fake AWS-style key rejection, clean staged commits, staged-only scanning, scanner errors/missing-tool install hints/version checks, every failing/unavailable Cargo gate, staging parity, commit-message rejection, dependency-note changes and harmless receipts. The fake key is generated only in the disposable checkout, not stored as a complete key in tracked fixtures. The suite does not recursively run itself. These test doubles test hook control flow, not the real scanner's detection rules or Rust lint/audit correctness; the real gates run separately against this package.
 
 The build-identity/version regression suite uses real Cargo in disposable copies:
 
