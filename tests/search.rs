@@ -500,6 +500,27 @@ fn successful_empty_failed_and_incomplete_calls_do_not_mutate_source_or_git() {
     );
 }
 #[test]
+fn continuation_does_not_resume_when_snapshot_cannot_be_validated() {
+    let repo = Repo::new();
+    repo.write("a.rs", "fn f(){x();x();}");
+    repo.write("b.rs", "fn f(){y();}");
+    let engine = repo.engine();
+    let mut request = repo.request("(call_expression) @match");
+    request.page_size = 1;
+    request.cursor = run(&engine, request.clone()).next_cursor;
+    assert!(request.cursor.is_some());
+    std::fs::set_permissions(repo.0.join("b.rs"), std::fs::Permissions::from_mode(0o0)).unwrap();
+    let result = run(&engine, request);
+    std::fs::set_permissions(repo.0.join("b.rs"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    ok(&result);
+    assert_eq!(result.status, "partial");
+    assert!(result.matches.is_empty());
+    assert!(result.next_cursor.is_none());
+    assert_eq!(result.has_more, None);
+    assert_eq!(result.counts.total_matches, None);
+}
+
+#[test]
 fn execution_guard_discards_unfinished_file_but_keeps_observed_count() {
     let repo = Repo::new();
     repo.write(

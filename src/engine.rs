@@ -84,6 +84,14 @@ impl Engine {
             .transpose()?;
         let (files, snapshot) = scope::discover(&scope, result, deadline, cancelled)?;
         result.snapshot_id = snapshot.clone();
+        if resume.is_some() && snapshot.is_none() {
+            result.status = "partial".into();
+            result.has_more = None;
+            result
+                .truncation_reasons
+                .push("scan_incomplete: cannot validate continuation; narrow paths/globs".into());
+            return Ok(());
+        }
         if let Some((_, series, _, _)) = &resume
             && snapshot
                 .as_ref()
