@@ -14,8 +14,8 @@ esac
 tmp=$(mktemp ./Cargo.toml.bump.XXXXXX)
 trap 'rm -f "$tmp"' EXIT
 awk -v choice="$choice" '
-  /^\[[^][]+\][ \t]*(#.*)?$/ {
-    package=($0 ~ /^\[package\][ \t]*(#.*)?$/)
+  /^[ \t]*\[/ {
+    package=($0 ~ /^[ \t]*\[package\][ \t]*(#.*)?$/)
     if (package) packages++
   }
   package && /^[ \t]*version[ \t]*=/ {

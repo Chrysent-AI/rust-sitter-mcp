@@ -21,7 +21,7 @@ The hook installer sets only the local `core.hooksPath=.githooks`, ensures hook 
 
 Stage all intended changes before committing: hooks reject tracked unstaged changes, nonignored untracked paths and staged whitespace errors. Checks evaluate the disk tree, which must equal the staged tree. No documentation-only shortcut, automatic bypass, or missing-tool exemption exists.
 
-Subjects follow `type(scope)!: description`: scope and `!` are optional; scope is lowercase alphanumeric plus `.`, `_`, `-`; description is 1–72 characters. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Git-generated `Merge ...` and `Revert "...` subjects are exempt. Example: `build: establish Rust tooling and package skeleton`.
+Subjects follow `type(scope)!: description`: scope and `!` are optional; scope is lowercase alphanumeric plus `.`, `_`, `-`; description is 1–72 characters. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Git-generated `Merge ...` and complete `Revert "<subject>"` subjects (including the closing quote) are exempt. Example: `build: establish Rust tooling and package skeleton`.
 
 `make quality` and pre-commit share these fail-closed gates:
 
@@ -33,7 +33,7 @@ Subjects follow `type(scope)!: description`: scope and `!` are optional; scope i
 6. `cargo machete` (no blanket unused-dependency suppression).
 7. Bash syntax checks and disposable tooling regression fixtures.
 
-Pre-commit additionally checks staged dependency changes against added staged entries in `docs/dependency-log.md`. Package-version and metadata-only edits do not trigger it. Normal/dev/build/target-specific dependency entries, including their inline feature changes, are compared without hunk-context false positives; package feature-table changes conservatively require fresh notes for the affected graph. Added headings must name the crate and its resolved version in the staged lockfile. Unsupported dependency TOML syntax fails closed for review; prefer one-line entries or per-dependency subtables. This heuristic checks co-staging, not research quality. Review still checks each decision.
+Pre-commit additionally checks staged dependency changes against added staged entries in `docs/dependency-log.md`. Package-version and metadata-only edits do not trigger it. Normal/dev/build/target-specific dependency entries, including their inline feature changes, are compared independent of entry order and without hunk-context false positives; package feature-table changes conservatively require fresh notes for the affected graph. Added headings must name the crate and its resolved version in the staged lockfile. Unsupported dependency TOML syntax fails closed for review; prefer one-line entries or per-dependency subtables. This heuristic checks co-staging, not research quality. Review still checks each decision.
 
 See [AGENTS.md](AGENTS.md) for the dependency policy and [the dependency log](docs/dependency-log.md) for research. No Cargo dependencies should be added speculatively; add them with first use and a matching decision. Tool installations are separate from application dependencies.
 

@@ -8,8 +8,8 @@ else
   : > "$scratch/old.toml"
 fi
 git show :Cargo.toml > "$scratch/new.toml"
-awk -f scripts/dependency-tables.awk "$scratch/old.toml" > "$scratch/old"
-awk -f scripts/dependency-tables.awk "$scratch/new.toml" > "$scratch/new"
+awk -f scripts/dependency-tables.awk "$scratch/old.toml" | LC_ALL=C sort > "$scratch/old"
+awk -f scripts/dependency-tables.awk "$scratch/new.toml" | LC_ALL=C sort > "$scratch/new"
 if cmp -s "$scratch/old" "$scratch/new"; then exit 0; fi
 # Compare entries, not diff hunk context: package/metadata edits are irrelevant.
 awk -F '\t' '
@@ -36,6 +36,7 @@ awk -F '\t' '
     for (name in names) print name
   }
 ' "$scratch/old" "$scratch/new" > "$scratch/names"
+[[ -s "$scratch/names" ]] || exit 0
 git diff --cached --unified=0 -- docs/dependency-log.md | awk '/^\+[^+]/ { print substr($0,2) }' > "$scratch/notes"
 git show :Cargo.lock > "$scratch/lock"
 [[ -s "$scratch/notes" ]] || { echo 'Dependency changes require an added staged dependency-log entry.' >&2; exit 1; }

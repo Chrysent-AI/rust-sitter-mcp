@@ -85,11 +85,11 @@ reject make install-hooks
 [[ $(git config --local --get core.hooksPath) == elsewhere ]]
 git config --local core.hooksPath .githooks
 # Direct subject checks cover optional scope/bang, exemptions and the boundary.
-for subject in 'feat(cli)!: change the CLI' 'Merge branch example' 'Revert "example"' "docs: $(printf '%072d' 0)"; do
+for subject in 'feat(cli)!: change the CLI' 'Merge branch example' 'Revert "feat: example"' 'Revert "feat: quote "example""' "docs: $(printf '%072d' 0)"; do
   printf '%s\n' "$subject" > "$scratch/message"
   bash .githooks/commit-msg "$scratch/message"
 done
-for subject in 'fixup! fix: example' 'feat(UPPER): example' 'fix:no space' "docs: $(printf '%073d' 0)"; do
+for subject in 'fixup! fix: example' 'feat(UPPER): example' 'fix:no space' 'Revert "unfinished' 'Revert ""' 'Revert "feat: example" trailing' "docs: $(printf '%073d' 0)"; do
   printf '%s\n' "$subject" > "$scratch/message"
   reject bash .githooks/commit-msg "$scratch/message"
 done
@@ -128,6 +128,35 @@ printf '\n[features]\nfixture = ["clap/help"]\n' >> Cargo.toml
 git add Cargo.toml
 reject bash scripts/check-dependency-log.sh
 git restore --source=HEAD --staged --worktree -- Cargo.toml
+# Dependency ordering is irrelevant, but real additions/removals still need notes.
+deps_repo="$scratch/dependency checkout"
+mkdir -p "$deps_repo/scripts" "$deps_repo/docs"
+cp "$root/scripts/check-dependency-log.sh" "$root/scripts/dependency-tables.awk" "$deps_repo/scripts/"
+cp "$root/Cargo.toml" "$root/Cargo.lock" "$deps_repo/"
+(
+  cd "$deps_repo"
+  git init -q
+  printf 'clap_builder = "4.6"\n' >> Cargo.toml
+  printf 'Fixture dependency log.\n' > docs/dependency-log.md
+  git add Cargo.toml Cargo.lock scripts/check-dependency-log.sh scripts/dependency-tables.awk docs/dependency-log.md
+  commit -qm 'test: seed dependency ordering fixture'
+  awk '/^clap = / { clap=$0; next } /^clap_builder = / { print; print clap; next } { print }' Cargo.toml > "$scratch/manifest"
+  cp "$scratch/manifest" Cargo.toml
+  git add Cargo.toml
+  bash scripts/check-dependency-log.sh
+  for change in add remove; do
+    git restore --source=HEAD --staged --worktree -- Cargo.toml
+    if [[ "$change" == add ]]; then
+      printf 'clap_derive = "4.6"\n' >> Cargo.toml
+    else
+      awk '!/^clap_builder = /' Cargo.toml > "$scratch/manifest"
+      cp "$scratch/manifest" Cargo.toml
+    fi
+    git add Cargo.toml
+    reject bash scripts/check-dependency-log.sh
+    grep -q 'Dependency changes require an added staged dependency-log entry.' "$scratch/rejection.log"
+  done
+)
 # An unavailable Git receipt still succeeds and does not mutate artifacts.
 mkdir "$scratch/no-git"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 127' > "$scratch/no-git/git"
@@ -139,4 +168,4 @@ test -f target/receipt-sentinel
 git worktree add -q -b fixture-linked "$scratch/linked checkout"
 (cd "$scratch/linked checkout" && make install-hooks && make install-hooks) > "$scratch/linked.log"
 test -x "$scratch/linked checkout/.githooks/pre-commit"
-printf '%s\n' 'Tooling fixtures passed: idempotency/conflicts, five failing and missing gates, parity, messages, dependency notes, receipts, linked worktrees.'
+printf '%s\n' 'Tooling fixtures passed: idempotency/conflicts, five failing and missing gates, parity, messages, dependency ordering/notes, receipts, linked worktrees.'
