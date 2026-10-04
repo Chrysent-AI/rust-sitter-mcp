@@ -22,7 +22,12 @@ pub struct Server {
     router: ToolRouter<Self>,
     engine: Arc<Engine>,
     admission: Arc<tokio::sync::Semaphore>,
-    active: Arc<Mutex<Vec<Weak<AtomicBool>>>>,
+    active: Arc<Mutex<ActiveRequests>>,
+}
+#[derive(Default)]
+struct ActiveRequests {
+    cancelled: bool,
+    flags: Vec<Weak<AtomicBool>>,
 }
 struct CancelOnDrop(Arc<AtomicBool>);
 impl Drop for CancelOnDrop {
@@ -47,19 +52,19 @@ impl Server {
             router: Self::tool_router(),
             engine: Arc::new(Engine::new(launch)?),
             admission: Arc::new(tokio::sync::Semaphore::new(1)),
-            active: Arc::new(Mutex::new(Vec::new())),
+            active: Arc::new(Mutex::new(ActiveRequests::default())),
         })
     }
-    pub async fn shutdown(&self) {
-        for flag in self
-            .active
-            .lock()
-            .expect("active lock")
-            .iter()
-            .filter_map(Weak::upgrade)
-        {
+    pub fn cancel_requests(&self) {
+        let mut active = self.active.lock().expect("active lock");
+        // Also cancel handlers already dispatched but not yet registered at EOF.
+        active.cancelled = true;
+        for flag in active.flags.iter().filter_map(Weak::upgrade) {
             flag.store(true, Ordering::Relaxed);
         }
+    }
+    pub async fn shutdown(&self) {
+        self.cancel_requests();
         // The owned permit lives until all blocking workers and Git children have joined.
         let _permit = self.admission.acquire().await;
     }
@@ -86,8 +91,9 @@ impl Server {
         let _guard = CancelOnDrop(flag.clone());
         {
             let mut active = self.active.lock().expect("active lock");
-            active.retain(|weak| weak.strong_count() > 0);
-            active.push(Arc::downgrade(&flag));
+            flag.store(active.cancelled, Ordering::Relaxed);
+            active.flags.retain(|weak| weak.strong_count() > 0);
+            active.flags.push(Arc::downgrade(&flag));
         }
         let request_id: String = format!("{:?}", context.id).chars().take(128).collect();
         let span = tracing::info_span!("search_call", tool = "search_query", request = %request_id, paths_count = request.paths.as_ref().map_or(0, Vec::len), globs_count = request.globs.as_ref().map_or(0, Vec::len));
