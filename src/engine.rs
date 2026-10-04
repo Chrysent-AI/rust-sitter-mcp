@@ -295,6 +295,13 @@ impl Engine {
         }
         Ok(())
     }
+    pub fn replace(
+        &self,
+        request: crate::plan::ReplaceRequest,
+        cancelled: &AtomicBool,
+    ) -> crate::plan::PlanEnvelope {
+        crate::plan::run(&self.launch, request, cancelled)
+    }
     pub fn launch_directory(&self) -> &Path {
         &self.launch
     }

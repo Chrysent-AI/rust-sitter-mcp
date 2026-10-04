@@ -19,6 +19,7 @@ struct PatternNode {
     named: bool,
     leaf: Option<String>,
     variable: Option<String>,
+    range: std::ops::Range<usize>,
     children: Vec<(Option<String>, usize)>,
 }
 fn comment(node: Node<'_>) -> bool {
@@ -323,6 +324,11 @@ impl Pattern {
                 named: node.is_named(),
                 leaf: (atomic && variable.is_none()).then(|| wrapped[node.byte_range()].to_owned()),
                 variable,
+                range: offset(node, source.len())
+                    ..node
+                        .end_byte()
+                        .saturating_sub(PREFIX.len())
+                        .min(source.len()),
                 children: Vec::new(),
             });
             if !atomic {
@@ -376,6 +382,16 @@ impl Pattern {
             arity: vec![Vec::new()],
             sugar: Some(pattern),
         })
+    }
+    pub(crate) fn references(&self) -> Vec<(String, std::ops::Range<usize>)> {
+        self.nodes
+            .iter()
+            .filter_map(|node| {
+                node.variable
+                    .as_ref()
+                    .map(|name| (name.clone(), node.range.clone()))
+            })
+            .collect()
     }
     fn query_text(&self) -> String {
         // An explicit stack keeps deeply nested, bounded input off the Rust call stack.

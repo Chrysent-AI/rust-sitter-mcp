@@ -156,8 +156,9 @@ impl DomainError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
 #[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct ByteRange {
     pub start_byte: usize,
     pub end_byte: usize,

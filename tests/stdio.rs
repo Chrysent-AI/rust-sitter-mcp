@@ -50,8 +50,8 @@ fn real_stdio_query() {
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
     let advertised = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(advertised.len(), 2);
-    for name in ["search", "search_query"] {
+    assert_eq!(advertised.len(), 3);
+    for name in ["search", "search_query", "replace"] {
         let tool = advertised.iter().find(|t| t["name"] == name).unwrap();
         assert!(tool["outputSchema"].is_object());
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
@@ -129,6 +129,37 @@ fn real_stdio_query() {
         "INVALID_PARAMS"
     );
     assert_eq!(invalid["result"]["structuredContent"]["status"], "failed");
+    let replacement = exchange(
+        json!({"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"replace","arguments":{"repo_path":root,"pattern":"$a.unwrap()","replacement":"$a.expect(\"reason\")"}}}),
+    );
+    let plan = &replacement["result"]["structuredContent"]["plan"];
+    assert_eq!(plan["state"], "applicable", "{replacement}");
+    let patch = plan["patch"].as_str().unwrap();
+    let copy = root.with_extension("apply");
+    std::fs::create_dir(&copy).unwrap();
+    for path in ["sample.rs", "other.rs"] {
+        std::fs::copy(root.join(path), copy.join(path)).unwrap();
+    }
+    let mut check = Command::new("git")
+        .arg("-C")
+        .arg(&copy)
+        .args(["apply", "--check", "-"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    check
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    assert!(check.wait().unwrap().success());
+    assert!(
+        std::fs::read_to_string(root.join("sample.rs"))
+            .unwrap()
+            .contains("thing.unwrap()")
+    );
+    std::fs::remove_dir_all(copy).unwrap();
     drop(input);
     assert!(child.wait().unwrap().success());
     let mut diagnostics = String::new();
