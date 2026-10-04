@@ -89,6 +89,41 @@ pub struct SearchRequest {
     pub page_size: usize,
     pub cursor: Option<String>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+pub struct PatternRequest {
+    /// Required existing path inside a Git worktree; relative paths use the immutable launch directory.
+    pub repo_path: String,
+    /// One Rust expression, no trailing semicolon. $name binds one expression node; repeated names require byte-identical source. Field/method/path names are concrete; sequences and @capture annotations are unsupported. Dollars inside Rust literals/comments are literal; no $$ escape. At most 64 KiB, 4,096 significant nodes and 64 metavariable occurrences.
+    pub pattern: String,
+    /// Union of existing root-relative files/directories. No symlink components or '..'. ANDed with globs and discovery; empty arrays are invalid.
+    pub paths: Option<Vec<String>>,
+    /// Positive root-anchored gitignore-style inclusion globs; union then AND with paths. '*' does not cross '/', '**' does. No negation, braces or directory-only patterns.
+    pub globs: Option<Vec<String>>,
+    #[serde(default)]
+    pub context: Context,
+    #[serde(default)]
+    pub limits: Limits,
+    /// Default 100, range 1–1000. Repeat the identical effective request with next_cursor to continue.
+    #[serde(default = "default_page_size")]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+impl From<PatternRequest> for SearchRequest {
+    fn from(request: PatternRequest) -> Self {
+        Self {
+            repo_path: request.repo_path,
+            query: request.pattern,
+            paths: request.paths,
+            globs: request.globs,
+            context: request.context,
+            limits: request.limits,
+            page_size: request.page_size,
+            cursor: request.cursor,
+        }
+    }
+}
 fn default_page_size() -> usize {
     100
 }
@@ -99,6 +134,10 @@ fn default_page_size() -> usize {
 pub struct DomainError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<usize>,
 }
 impl DomainError {
     pub fn new(code: &str, message: impl AsRef<str>) -> Self {
@@ -106,7 +145,14 @@ impl DomainError {
         Self {
             code: code.into(),
             message,
+            field: None,
+            byte_offset: None,
         }
+    }
+    pub fn at_pattern(mut self, byte_offset: usize) -> Self {
+        self.field = Some("pattern".into());
+        self.byte_offset = Some(byte_offset);
+        self
     }
 }
 

@@ -5,6 +5,7 @@ pub struct CompiledQuery {
     pub query: Query,
     pub root: u32,
     pub arity: Vec<Vec<(u32, u32)>>,
+    pub sugar: Option<crate::pattern::Pattern>,
 }
 impl CompiledQuery {
     pub fn new(source: &str) -> Result<Self, DomainError> {
@@ -80,7 +81,12 @@ impl CompiledQuery {
             }
             arity.push(checks);
         }
-        Ok(Self { query, root, arity })
+        Ok(Self {
+            query,
+            root,
+            arity,
+            sugar: None,
+        })
     }
 }
 

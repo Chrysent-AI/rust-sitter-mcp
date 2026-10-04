@@ -1,6 +1,6 @@
-# Structural query search
+# Structural Rust search
 
-`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. The current increment advertises `search_query`; sugar search and replacement are not yet implemented. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
+`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. The current increment advertises primary `search` and the raw `search_query` escape hatch; replacement is not yet implemented. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
 
 A stdio launch configuration is:
 
@@ -11,6 +11,16 @@ A stdio launch configuration is:
 Build with `cargo build --locked`; `target/debug/rust-sitter-mcp --version` reports the package version and embedded build revision. No Git version command runs at startup. Logging uses stderr, controlled by `RUST_LOG`; source/query/capture bodies are not logged. Stdout is exclusively newline-delimited MCP JSON-RPC while serving.
 
 ## Calls
+
+Call primary `search` for written zero-argument unwrap calls:
+
+```json
+{"repo_path":"/absolute/project","pattern":"$a.unwrap()","paths":["src"]}
+```
+
+`$name` captures a single expression node; field/method names are concrete. Comments/whitespace between tokens do not prevent matching, but an explicit argument list has exact arity: the pattern above does not match `foo.unwrap(x)`. Captures are occurrence arrays under user names, with original ranges/text (no internal query captures). Repeated names require byte-identical source. Patterns are one expression without a statement semicolon; sequence placeholders, `@capture` annotations and `$$` escapes are unsupported. Dollars inside Rust literals/comments remain literal. This increment supports call/field compositions and expression metavariables; the remaining enumerated expression forms follow in the next increment.
+
+Call `search_query` for the broader raw syntax surface:
 
 ```json
 {"repo_path":"/absolute/project","query":"(call_expression) @match","paths":["src"]}

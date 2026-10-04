@@ -14,7 +14,11 @@ fn real_stdio_query() {
             .unwrap()
             .success()
     );
-    std::fs::write(root.join("sample.rs"), "fn f() { thing.unwrap(); }\n").unwrap();
+    std::fs::write(
+        root.join("sample.rs"),
+        "fn f() { thing.unwrap(); wrong.unwrap(x); }\n",
+    )
+    .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rust-sitter-mcp"))
         .env("RUST_LOG", "info")
         .stdin(Stdio::piped())
@@ -45,8 +49,26 @@ fn real_stdio_query() {
     );
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
-    assert_eq!(tools["result"]["tools"][0]["name"], "search_query");
-    assert!(tools["result"]["tools"][0]["outputSchema"].is_object());
+    let advertised = tools["result"]["tools"].as_array().unwrap();
+    assert_eq!(advertised.len(), 2);
+    for name in ["search", "search_query"] {
+        let tool = advertised.iter().find(|t| t["name"] == name).unwrap();
+        assert!(tool["outputSchema"].is_object());
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+    }
+    let sugar = exchange(
+        json!({"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search","arguments":{"repo_path":root,"pattern":"$a.unwrap()"}}}),
+    );
+    let envelope = &sugar["result"]["structuredContent"];
+    assert_eq!(envelope["tool"], "search");
+    assert_eq!(envelope["status"], "complete");
+    assert_eq!(envelope["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(envelope["matches"][0]["span"]["text"], "thing.unwrap()");
+    assert_eq!(envelope["matches"][0]["captures"]["a"][0]["text"], "thing");
+    assert_eq!(
+        envelope["matches"][0]["span"]["range"],
+        json!({"start_byte":9,"end_byte":23})
+    );
     let result = exchange(
         json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_query","arguments":{"repo_path":root,"query":"(call_expression) @match"}}}),
     );

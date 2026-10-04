@@ -199,8 +199,18 @@ pub fn execute(
                 continue;
             }
             let node = roots[0].node;
-            let mut capture_ranges: Vec<(String, usize, usize)> = Vec::new();
-            for capture in captures.iter().filter(|c| c.index != compiled.root) {
+            let mut capture_ranges = if let Some(sugar) = &compiled.sugar {
+                let Some(bindings) = sugar.captures(node, &file.source) else {
+                    continue;
+                };
+                bindings
+            } else {
+                Vec::new()
+            };
+            for capture in captures
+                .iter()
+                .filter(|c| c.index != compiled.root && compiled.sugar.is_none())
+            {
                 let range = capture.node.byte_range();
                 if file.source.get(range.clone()).is_none() {
                     return Err(DomainError::new(

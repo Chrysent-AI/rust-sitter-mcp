@@ -1,6 +1,6 @@
 use crate::{
     engine::Engine,
-    result::{DomainError, Limits, SearchEnvelope, SearchRequest},
+    result::{DomainError, Limits, PatternRequest, SearchEnvelope, SearchRequest},
 };
 use rmcp::{
     RoleServer, ServerHandler,
@@ -63,6 +63,57 @@ impl Server {
             flag.store(true, Ordering::Relaxed);
         }
     }
+    async fn run_search(
+        &self,
+        request: SearchRequest,
+        sugar: bool,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let tool = if sugar { "search" } else { "search_query" };
+        let failure = |limits, error| {
+            let mut result = SearchEnvelope::failed(limits, None, error);
+            result.tool = tool.into();
+            wire(result)
+        };
+        let Ok(permit) = self.admission.clone().try_acquire_owned() else {
+            return failure(
+                request.limits,
+                DomainError::new(
+                    "BUSY",
+                    "another engine call is running; retry after it finishes",
+                ),
+            );
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let _guard = CancelOnDrop(flag.clone());
+        {
+            let mut active = self.active.lock().expect("active lock");
+            flag.store(active.cancelled, Ordering::Relaxed);
+            active.flags.retain(|weak| weak.strong_count() > 0);
+            active.flags.push(Arc::downgrade(&flag));
+        }
+        let request_id: String = format!("{:?}", context.id).chars().take(128).collect();
+        let span = tracing::info_span!("search_call", tool, request = %request_id, paths_count = request.paths.as_ref().map_or(0, Vec::len), globs_count = request.globs.as_ref().map_or(0, Vec::len));
+        let engine = self.engine.clone();
+        let limits = request.limits.clone();
+        let worker_flag = flag.clone();
+        let mut job = tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
+            let _permit = permit;
+            engine.search_interpreted(request, sugar, &worker_flag)
+        });
+        let result = tokio::select! {
+            result = &mut job => result,
+            _ = context.ct.cancelled() => { flag.store(true,Ordering::Relaxed); job.await }
+        };
+        match result {
+            Ok(result) => wire(result),
+            Err(_) => failure(
+                limits,
+                DomainError::new("INTERNAL", "blocking engine task failed"),
+            ),
+        }
+    }
     pub async fn shutdown(&self) {
         self.cancel_requests();
         // The owned permit lives until all blocking workers and Git children have joined.
@@ -77,46 +128,15 @@ impl Server {
         Parameters(request): Parameters<SearchRequest>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        let Ok(permit) = self.admission.clone().try_acquire_owned() else {
-            return wire(SearchEnvelope::failed(
-                request.limits,
-                None,
-                DomainError::new(
-                    "BUSY",
-                    "another engine call is running; retry after it finishes",
-                ),
-            ));
-        };
-        let flag = Arc::new(AtomicBool::new(false));
-        let _guard = CancelOnDrop(flag.clone());
-        {
-            let mut active = self.active.lock().expect("active lock");
-            flag.store(active.cancelled, Ordering::Relaxed);
-            active.flags.retain(|weak| weak.strong_count() > 0);
-            active.flags.push(Arc::downgrade(&flag));
-        }
-        let request_id: String = format!("{:?}", context.id).chars().take(128).collect();
-        let span = tracing::info_span!("search_call", tool = "search_query", request = %request_id, paths_count = request.paths.as_ref().map_or(0, Vec::len), globs_count = request.globs.as_ref().map_or(0, Vec::len));
-        let engine = self.engine.clone();
-        let limits = request.limits.clone();
-        let worker_flag = flag.clone();
-        let mut job = tokio::task::spawn_blocking(move || {
-            let _entered = span.enter();
-            let _permit = permit;
-            engine.search(request, &worker_flag)
-        });
-        let result = tokio::select! {
-            result = &mut job => result,
-            _ = context.ct.cancelled() => { flag.store(true,Ordering::Relaxed); job.await }
-        };
-        match result {
-            Ok(result) => wire(result),
-            Err(_) => wire(SearchEnvelope::failed(
-                limits,
-                None,
-                DomainError::new("INTERNAL", "blocking engine task failed"),
-            )),
-        }
+        self.run_search(request, false, context).await
+    }
+    #[tool(name = "search", description = "Primary read-only Rust expression search: $a.unwrap() matches exactly zero arguments, ignoring comment trivia. $name captures one expression node, never a sequence; repeated names require byte-identical source and distinct names are independent. Field/method names must be concrete. One expression without a trailing semicolon; no $$ escape or @capture annotation. Dollars inside literals/comments are literal. Original half-open byte ranges, 1-based lines and 0-based UTF-8 byte columns. Context/limits/cursors share search_query behavior; repeat identical arguments with next_cursor (15-minute process-local series). Written syntax only: no types, cfg evaluation or macro expansion; empty results do not prove absence in generated code.", output_schema = rmcp::handler::server::tool::schema_for_output::<SearchEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn search(
+        &self,
+        Parameters(request): Parameters<PatternRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        self.run_search(request.into(), true, context).await
     }
 }
 impl ServerHandler for Server {
@@ -142,7 +162,7 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        if request.name != "search_query" {
+        if request.name != "search_query" && request.name != "search" {
             return Err(rmcp::ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
             >());
@@ -151,15 +171,24 @@ impl ServerHandler for Server {
         let decoded = if serde_json::to_vec(&args).expect("JSON args").len() > 8 * 1024 * 1024 {
             Err("decoded arguments exceed 8 MiB".into())
         } else {
-            serde_json::from_value::<SearchRequest>(args).map_err(|e| e.to_string())
+            if request.name == "search" {
+                serde_json::from_value::<PatternRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else {
+                serde_json::from_value::<SearchRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            }
         };
         if let Err(message) = decoded {
-            return Ok(wire(SearchEnvelope::failed(
+            let mut failed = SearchEnvelope::failed(
                 Limits::default(),
                 None,
                 DomainError::new("INVALID_PARAMS", message),
-            ))
-            .into());
+            );
+            failed.tool = request.name.to_string();
+            return Ok(wire(failed).into());
         }
         self.router
             .call(ToolCallContext::new(self, request, context))

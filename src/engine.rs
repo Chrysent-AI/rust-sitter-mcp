@@ -1,4 +1,4 @@
-pub use crate::result::SearchRequest;
+pub use crate::result::{PatternRequest, SearchRequest};
 use crate::{
     cursor::Cursors,
     matching,
@@ -31,9 +31,25 @@ impl Engine {
         })
     }
     pub fn search(&self, request: SearchRequest, cancelled: &AtomicBool) -> SearchEnvelope {
+        self.search_interpreted(request, false, cancelled)
+    }
+    pub fn search_pattern(
+        &self,
+        request: PatternRequest,
+        cancelled: &AtomicBool,
+    ) -> SearchEnvelope {
+        self.search_interpreted(request.into(), true, cancelled)
+    }
+    pub(crate) fn search_interpreted(
+        &self,
+        request: SearchRequest,
+        sugar: bool,
+        cancelled: &AtomicBool,
+    ) -> SearchEnvelope {
         let mut result = SearchEnvelope::empty(request.limits.clone());
+        result.tool = if sugar { "search" } else { "search_query" }.into();
         let start = Instant::now();
-        let outcome = self.run(request, cancelled, &mut result);
+        let outcome = self.run(request, sugar, cancelled, &mut result);
         if let Err(error) = outcome {
             result.status = "failed".into();
             result.error = Some(error);
@@ -43,12 +59,13 @@ impl Engine {
             result.has_more = None;
             result.coverage.scope_exhaustive = false;
         }
-        tracing::info!(tool = "search_query", root = ?result.root, elapsed_ms = start.elapsed().as_millis(), status = %result.status, returned = result.counts.returned_matches, skipped = result.skipped.values().map(|r|r.count).sum::<u64>(), truncation = ?result.truncation_reasons, error = ?result.error.as_ref().map(|e| &e.code), "search finished");
+        tracing::info!(tool = %result.tool, root = ?result.root, elapsed_ms = start.elapsed().as_millis(), status = %result.status, returned = result.counts.returned_matches, skipped = result.skipped.values().map(|r|r.count).sum::<u64>(), truncation = ?result.truncation_reasons, error = ?result.error.as_ref().map(|e| &e.code), "search finished");
         result
     }
     fn run(
         &self,
         mut request: SearchRequest,
+        sugar: bool,
         cancelled: &AtomicBool,
         result: &mut SearchEnvelope,
     ) -> Result<(), DomainError> {
@@ -64,7 +81,11 @@ impl Engine {
                 "context is 0–20 lines and page_size is 1–1000",
             ));
         }
-        let compiled = CompiledQuery::new(&request.query)?;
+        let compiled = if sugar {
+            crate::pattern::Pattern::compile(&request.query)?
+        } else {
+            CompiledQuery::new(&request.query)?
+        };
         let root = scope::resolve(&request.repo_path, &self.launch)?;
         result.root = Some(root.to_str().expect("validated root").into());
         let scope = Scope::new(root, &request)?;
@@ -72,7 +93,7 @@ impl Engine {
         request.paths = scope.paths.clone();
         request.globs = scope.globs.clone();
         let token = request.cursor.take();
-        let normalized = serde_json::to_string(&request).expect("request JSON");
+        let normalized = serde_json::to_string(&(&result.tool, &request)).expect("request JSON");
         let resume = token
             .as_ref()
             .map(|token| {
