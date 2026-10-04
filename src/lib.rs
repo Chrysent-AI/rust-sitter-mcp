@@ -1,2 +1,3 @@
-//! Structural Rust search and refactoring proposals.
-//! This initial package contains only the build and CLI skeleton.
+//! Read-only structural search of written Rust syntax.
+pub mod engine;
+pub mod mcp;

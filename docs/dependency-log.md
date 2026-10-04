@@ -1,5 +1,40 @@
 # Dependency decisions
 
+The search dependencies below were verified before manifest edits with `cargo info` for each exact release on 2026-10-04. Maintenance, cadence, downloads and non-yanked status come from the same-day crates.io metadata research; a full dependency comparison is retained in the project planning store. All declared MSRVs fit Rust 1.97.1. Cargo.lock pins compatible-major/0.x resolutions; upgrades are deliberate reviews. `cargo tree -e no-dev` was inspected on introduction: rmcp brings its schema/macros/futures/Tokio/UUID graph, Tree-sitter brings regex and native cc builds, ignore brings walkdir/globset/crossbeam. No HTTP/download transport, additional grammar pack, schema dependency, or dev dependency is added. License/source/advisory verification is enforced by the introducing commit's cargo-deny gate.
+
+## 2026-10-04 — rmcp 3.5.0
+Official MCP stdio SDK, Apache-2.0, MSRV 1.88. `3.5` caret, defaults off, only server/macros/transport-io. Candidates: [rmcp](https://crates.io/crates/rmcp), [rust-mcp-sdk](https://crates.io/crates/rust-mcp-sdk) (community contract rather than official SDK), [mcp_rs](https://crates.io/crates/mcp_rs) (stale since 2024). Registry: Sep 28 update, three September releases, 31.8M total/17M recent downloads. API verified against installed 3.5.0 source; structured success/error constructors include JSON text fallback, schema via SDK re-export. No Schemars direct dependency.
+
+## 2026-10-04 — tree-sitter 0.27.0
+[Core parser/query engine](https://crates.io/crates/tree-sitter), MIT, MSRV 1.90, default std only. Exact pin and deliberate upgrades because 0.x minors change query/API/ABI behavior. Only genuine candidate for Tree-sitter queries; local unpublished 0.28 is not a registry alternative. Aug 30 release, active July–August cadence, 42.7M/16M downloads. ABI 13–15 accepts pinned Rust grammar's 15. Native C11 compiler required; no bindgen/wasm.
+
+## 2026-10-04 — tree-sitter-rust 0.24.2
+[Rust grammar](https://crates.io/crates/tree-sitter-rust), MIT, exact reviewed grammar pin; no features. March 27 update, two March releases, 20.7M/7.3M downloads. Candidates: direct grammar wins over [language-pack](https://crates.io/crates/tree-sitter-language-pack) (hundreds of unused grammars/download machinery); [tree-sitter-language](https://crates.io/crates/tree-sitter-language) is only an ABI interface, not a grammar. Declared MSRV unavailable; native combined build is verified at introduction. Generated upstream source is unchanged.
+
+## 2026-10-04 — ignore 0.4.33
+[Gitignore walker](https://crates.io/crates/ignore), MIT option, MSRV 1.88, `0.4` caret/locked patch with deliberate 0.x updates, no extra features. Aug 4 release, frequent July–August releases, 183.2M/40.7M downloads. Alternatives [walkdir](https://crates.io/crates/walkdir) plus custom ignore matching or std traversal lack integrated scoped Git ignore precedence/negation; ignore supplies it and exposes separate inclusion filtering. Scope policy remains ours.
+
+## 2026-10-04 — tokio 1.53.2
+[Async runtime](https://crates.io/crates/tokio), MIT, MSRV 1.71, caret 1 with macros/rt-multi-thread/sync only; rmcp enables stdio I/O. Oct 3 release, active May–October cadence, 1.026B/244M downloads. Alternatives [async-std](https://crates.io/crates/async-std) and [smol](https://crates.io/crates/smol) do not remove rmcp's Tokio prerequisite. Admission uses explicit sync; blocking engine work does not run on executor threads.
+
+## 2026-10-04 — serde 1.0.229
+[Typed serialization](https://crates.io/crates/serde), MIT/Apache-2.0, MSRV 1.56, caret 1 plus derive. July 18 update, 1.478B/339M downloads. Alternatives [miniserde](https://crates.io/crates/miniserde) and hand-written serialization lack rmcp/Schemars' native typed integration and unknown-field rejection. Reuses SDK graph.
+
+## 2026-10-04 — serde_json 1.0.151
+[JSON wire format](https://crates.io/crates/serde_json), MIT/Apache-2.0, MSRV 1.71, caret 1/default std. July 20 update, 1.380B/340M downloads. Alternatives [simd-json](https://crates.io/crates/simd-json) and [json](https://crates.io/crates/json) add a second representation without a demonstrated throughput need; rmcp already uses serde_json. No preserve_order/arbitrary_precision/unbounded_depth.
+
+## 2026-10-04 — thiserror 2.0.21
+[Typed domain errors](https://crates.io/crates/thiserror), MIT/Apache-2.0, MSRV 1.77, caret 2/default std. Sep 23 update, 1.559B/398M downloads. Alternatives manual std Error and [snafu](https://crates.io/crates/snafu): derive is conventional and avoids a context-framework abstraction; library retains stable domain codes.
+
+## 2026-10-04 — anyhow 1.0.104
+[Binary boundary context](https://crates.io/crates/anyhow), MIT/Apache-2.0, MSRV 1.68, caret 1/default std. July 18 update, 1.013B/229M downloads. Alternatives boxed std Error and [eyre](https://crates.io/crates/eyre): anyhow supplies small standard startup/service context without richer report machinery. Not used for core contracts.
+
+## 2026-10-04 — tracing 0.1.44
+[Structured local logs](https://crates.io/crates/tracing), MIT, MSRV 1.65, caret 0.1/locked reviewed release, default std/attributes. Dec 18 2025 update, 898M/207M downloads; under the 12-month maintenance threshold. Alternatives [log](https://crates.io/crates/log) and stderr text do not supply typed span fields; rmcp already uses tracing. No telemetry.
+
+## 2026-10-04 — tracing-subscriber 0.3.23
+[Stderr log subscriber](https://crates.io/crates/tracing-subscriber), MIT, MSRV 1.65, caret 0.3/locked reviewed updates; defaults off, fmt/std/env-filter only. March 13 update, 642M/152M downloads. Alternatives [env_logger](https://crates.io/crates/env_logger) and custom subscriber do not natively retain tracing span fields or save meaningful machinery. No ANSI, JSON telemetry or exporter. Source/capture contents are not logged.
+
 Dependency additions and re-pins are researched before changing the manifest and recorded in the same commit. See [AGENTS.md](../AGENTS.md) for the binding policy. Cargo.lock pins the binary's resolved graph; normal gates use `--locked`.
 
 ## 2026-10-04 — clap 4.6.7
