@@ -14,7 +14,7 @@ use std::{
 const UNWRAP_QUERY: &str = "((call_expression function: (field_expression value: (_expression) @a field: (field_identifier) @method) arguments: (arguments) @args) @match (#eq? @method \"unwrap\") (#rust-arity? @args \"0\"))";
 
 // Integration map (not acceptance evidence for unavailable tools):
-// TODO(pending integration): move_item single/batch to existing/new siblings; inventory every
+// Pending move integration (move_item tool): single/batch to existing/new siblings; inventory every
 // kind, full anchors; carried trivia/ordinary carry override/protected refusal;
 // parent synthesis + reused declaration (cases/layout/lib.rs), legacy mod.rs,
 // source also destination/retained empty source, quoted bytes; mixed patch/JSON modes.
@@ -22,13 +22,13 @@ const UNWRAP_QUERY: &str = "((call_expression function: (field_expression value:
 // bad-name.rs, fn.rs, mismatched parent=source.rs, ../escape.rs, ignored.rs,
 // filtered.rs (globs exclude it), nested/new.rs, linked_dir/new.rs, clash.rs vs Clash.rs.
 // Inject creation at final absence-recheck seam, NOT before request admission.
-// TODO(pending integration): src/rewrite.rs clean repairs/reuse/dedup/private descendant/batch;
+// Pending import/visibility rewrite integration: src/rewrite.rs clean repairs/reuse/dedup/private descendant/batch;
 // each isolated cases/ambiguity area; reject required rewrite, anchored alternative,
 // stale source/destination/override, duplicate/conflicting batch, no partial artifacts.
-// TODO(pending integration): rich/weak/single/empty/recovered/unsupported-layout advice;
+// Pending split advice integration: rich/weak/single/empty/recovered/unsupported-layout advice;
 // exact-once deterministic membership, same-response decision IDs, bounded no-drafts;
 // no patch/edits/creates, retained anonymous/context units, text/work/output caps.
-// TODO(pending integration): caller edits rich.rs membership AND filenames into two new siblings,
+// Pending edited-split batch integration: caller edits rich.rs membership AND filenames into two new siblings,
 // submits full explicit anchors through move_item, no execute-draft shortcut.
 // Join all above here using the same read-only snapshot and external applicator;
 // cancellation/deadline/work/output/failed scan/no-op/busy must withhold every artifact.
@@ -107,14 +107,20 @@ impl Drop for Client {
 // --offline and a std-only manifest mean no network/dependency resolution is needed.
 fn cargo_check(repo: &Fixture) {
     for tool in ["cargo", "rustc"] {
-        if !Command::new(tool)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-        {
-            eprintln!("SKIP fixture cargo check: {tool} toolchain unavailable");
-            return;
-        }
+        let output = match Command::new(tool).arg("--version").output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("SKIP fixture cargo check: {tool} executable absent");
+                return;
+            }
+            Err(error) => panic!("failed to probe {tool} --version: {error}"),
+        };
+        assert!(
+            output.status.success(),
+            "{tool} --version failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let output = Command::new("cargo")
         .args(["check", "--offline", "--quiet"])
