@@ -77,3 +77,7 @@ bash scripts/test-build-identity.sh
 ```
 
 It checks version bumps and stable lock resolutions, SHA refresh without cleaning, detached HEAD, linked worktrees and archive fallback. It is a focused acceptance test, separate from the fast pre-commit gate to avoid repeated fixture compilation.
+
+## Disposable repository smoke test
+
+Run `cargo test --locked --offline --test fixture_smoke -- --nocapture` to generate two deterministic, git-committed, std-only Rust crates outside the product checkout and exercise the available `search`, `search_query`, and `replace` tools over stdio. The harness checks read-only source/Git bytes, entries, modes and observable mtimes; applies patches only on disposable copies with `git apply --check`; independently reconstructs JSON edits and compares the complete resulting tree. It also cargo-checks baseline and designed-compilable patched copies with `--offline` (explicitly skipped only if the Cargo/Rust toolchain is unavailable; compilation failure otherwise fails the test). This is **test-only validation**, not a server compile/semantic claim. Isolated unlinked files provide move/split, ambiguity, path and limit scenarios; the integration map in `tests/fixture_smoke.rs` marks the C/D calls still to join when those tools land. The current smoke does not establish their acceptance or performance coverage.
