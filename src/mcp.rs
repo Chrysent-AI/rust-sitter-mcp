@@ -89,10 +89,13 @@ impl Server {
             active.retain(|weak| weak.strong_count() > 0);
             active.push(Arc::downgrade(&flag));
         }
+        let request_id: String = format!("{:?}", context.id).chars().take(128).collect();
+        let span = tracing::info_span!("search_call", tool = "search_query", request = %request_id, paths_count = request.paths.as_ref().map_or(0, Vec::len), globs_count = request.globs.as_ref().map_or(0, Vec::len));
         let engine = self.engine.clone();
         let limits = request.limits.clone();
         let worker_flag = flag.clone();
         let mut job = tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
             let _permit = permit;
             engine.search(request, &worker_flag)
         });
