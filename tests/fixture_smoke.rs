@@ -1,5 +1,7 @@
 #[path = "support/fixture_gen.rs"]
 mod fixture_gen;
+#[path = "support/move_artifacts.rs"]
+mod move_artifacts;
 use fixture_gen::{Fixture, observe, tree};
 use rust_sitter_mcp::{engine::Engine, plan::ReplaceRequest, result::SearchRequest};
 use serde_json::{Value, json};
@@ -14,14 +16,8 @@ use std::{
 const UNWRAP_QUERY: &str = "((call_expression function: (field_expression value: (_expression) @a field: (field_identifier) @method) arguments: (arguments) @args) @match (#eq? @method \"unwrap\") (#rust-arity? @args \"0\"))";
 
 // Integration map (not acceptance evidence for unavailable tools):
-// Pending move integration (move_item tool): single/batch to existing/new siblings; inventory every
-// kind, full anchors; carried trivia/ordinary carry override/protected refusal;
-// parent synthesis + reused declaration (cases/layout/lib.rs), legacy mod.rs,
-// source also destination/retained empty source, quoted bytes; mixed patch/JSON modes.
-// New paths: occupied.rs, occupied_dir.rs, link.rs, competing.rs vs competing/mod.rs,
-// bad-name.rs, fn.rs, mismatched parent=source.rs, ../escape.rs, ignored.rs,
-// filtered.rs (globs exclude it), nested/new.rs, linked_dir/new.rs, clash.rs vs Clash.rs.
-// Inject creation at final absence-recheck seam, NOT before request admission.
+// Move execution below joins real stdio planning to the same external applicator.
+// Focused move tests cover trivia, paths and injected final-recheck races.
 // Pending import/visibility rewrite integration: src/rewrite.rs clean repairs/reuse/dedup/private descendant/batch;
 // each isolated cases/ambiguity area; reject required rewrite, anchored alternative,
 // stale source/destination/override, duplicate/conflicting batch, no partial artifacts.
@@ -235,7 +231,7 @@ fn deterministic_generations_and_available_tool_flow() {
         cargo_check(&repo.copy());
         let mut client = Client::new();
         let tools = client.rpc("tools/list", json!({}));
-        for name in ["search", "search_query", "replace"] {
+        for name in ["search", "search_query", "replace", "move_item"] {
             let tool = tools["tools"]
                 .as_array()
                 .unwrap()
@@ -299,6 +295,133 @@ fn deterministic_generations_and_available_tool_flow() {
         assert_eq!(observe(&repo.0), before);
         eprintln!(
             "fresh fixture: search/raw/replace, Git apply + independent JSON, source/Git bytes/modes/mtimes passed"
+        );
+    }
+}
+
+#[test]
+fn stdio_move_existing_synthesis_reuse_and_batch() {
+    let repo = Fixture::generate();
+    let before = observe(&repo.0);
+    let mut client = Client::new();
+    let item = move_artifacts::anchor(&repo, "src/weak.rs", "fn apple() {}");
+    let make = |destination: Value| json!({"repo_path":repo.0,"crate_root":"src/lib.rs","paths":["src"],"moves":[{"item":item,"destination":destination}]});
+    for destination in [
+        json!({"kind":"existing","path":"src/empty.rs"}),
+        json!({"kind":"new_sibling","path":"src/moved.rs","parent_path":"src/lib.rs"}),
+    ] {
+        let args = make(destination);
+        let first = client.call("move_item", args.clone());
+        let again = client.call("move_item", args);
+        assert_eq!(first["plan"], again["plan"]);
+        cargo_check(&move_artifacts::apply(&repo, &first));
+        assert_eq!(observe(&repo.0), before);
+    }
+    let reuse = client.call("move_item", json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":move_artifacts::anchor(&repo,"cases/layout/source.rs","fn clean() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/reused.rs","parent_path":"cases/layout/lib.rs"}}]}));
+    assert_eq!(
+        reuse["plan"]["created_files"][0]["declaration_link"]["kind"],
+        "reused"
+    );
+    assert!(
+        !reuse["plan"]["base_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["path"] == "cases/layout/lib.rs")
+    );
+    move_artifacts::apply(&repo, &reuse);
+    let batch = client.call("move_item", json!({"repo_path":repo.0,"crate_root":"src/lib.rs","paths":["src"],"moves":[{"item":move_artifacts::anchor(&repo,"src/weak.rs","fn zebra() {}"),"destination":{"kind":"new_sibling","path":"src/first.rs","parent_path":"src/lib.rs"}},{"item":move_artifacts::anchor(&repo,"src/weak.rs","fn mountain() {}"),"destination":{"kind":"new_sibling","path":"src/second.rs","parent_path":"src/lib.rs"}}]}));
+    assert_eq!(batch["plan"]["created_files"].as_array().unwrap().len(), 2);
+    cargo_check(&move_artifacts::apply(&repo, &batch));
+    assert_eq!(observe(&repo.0), before);
+    eprintln!(
+        "stdio move: existing + synthesis + reuse + batch; external Git/JSON/modes and unchanged caller passed"
+    );
+}
+
+#[test]
+#[ignore = "release-build ten-run move workload; not part of the routine gate"]
+#[allow(clippy::assertions_on_constants)] // Refuse debug-build timing evidence at runtime.
+fn release_move_workload_ten_runs() {
+    assert!(!cfg!(debug_assertions), "run with --release");
+    let repo = Fixture::generate();
+    let large = format!(
+        "fn large() {{ let _payload = \"{}\"; }}",
+        "x".repeat(48 * 1024)
+    );
+    let small: Vec<_> = (0..100)
+        .map(|i| {
+            format!(
+                "fn item_{i:03}() {{ let _payload = \"{}\"; }}",
+                "x".repeat(128)
+            )
+        })
+        .collect();
+    let mut corpus = Vec::new();
+    corpus.push((
+        "corpus/lib.rs".to_owned(),
+        (0..99)
+            .map(|i| format!("mod file_{i:03};\n"))
+            .collect::<String>(),
+    ));
+    for i in 0..99 {
+        corpus.push((
+            format!("corpus/file_{i:03}.rs"),
+            if i == 0 {
+                format!("{large}\n{}\n", small.join("\n"))
+            } else {
+                String::new()
+            },
+        ));
+    }
+    let mut remaining = 10 * 1024 * 1024;
+    for (i, (path, source)) in corpus.iter().enumerate() {
+        let length = if i == 99 {
+            remaining
+        } else {
+            (100 * 1024).max(source.len() + 16)
+        };
+        remaining -= length;
+        let padded = format!(
+            "{source}\n\n/*{}*/\n",
+            "p".repeat(length - source.len() - 7)
+        );
+        assert_eq!(padded.len(), length);
+        repo.write(path, &padded);
+    }
+    assert_eq!(remaining, 0);
+    let before = observe(&repo.0);
+    let destination =
+        |path: &str| json!({"kind":"new_sibling","path":path,"parent_path":"corpus/lib.rs"});
+    let single = json!([{"item":move_artifacts::anchor(&repo,"corpus/file_000.rs",&large),"destination":destination("corpus/single_move.rs")}]);
+    let batch = json!(small.iter().enumerate().map(|(i,text)| json!({"item":move_artifacts::anchor(&repo,"corpus/file_000.rs",text),"destination":destination(if i < 50 {"corpus/batch_a.rs"} else {"corpus/batch_b.rs"})})).collect::<Vec<_>>());
+    for (name, moves, selected_bytes, target) in [
+        ("single", single, large.len(), 5000u128),
+        ("batch", batch, small.iter().map(String::len).sum(), 10000),
+    ] {
+        let mut successes = 0;
+        for repetition in 0..10 {
+            for (path, _) in &corpus {
+                fs::read(repo.0.join(path)).unwrap();
+            }
+            let mut client = Client::new(); // fresh process: no retained parse state
+            let started = std::time::Instant::now();
+            let result = client.call("move_item",json!({"repo_path":repo.0,"crate_root":"corpus/lib.rs","paths":["corpus"],"moves":moves,"limits":{"text_bytes":0}}));
+            let elapsed = started.elapsed().as_millis();
+            assert_eq!(observe(&repo.0), before);
+            assert_eq!(result["plan"]["applicable"], true, "{result}");
+            assert_eq!(result["counts"]["eligible_files"], 100);
+            if elapsed <= target {
+                successes += 1;
+            }
+            eprintln!("move workload {name} run={} ms={elapsed} selected_bytes={selected_bytes} candidates={} rewrites={} structured_bytes={} duplicated_wire_bytes={}",repetition+1,result["counts"]["reference_candidates"],result["counts"]["rewrites"],result.to_string().len(),json!({"content":[{"type":"text","text":result.to_string()}],"structuredContent":result,"isError":false}).to_string().len()+4096);
+            if repetition == 0 {
+                move_artifacts::apply(&repo, &result);
+            }
+        }
+        assert!(
+            successes >= 9,
+            "{name}: only {successes}/10 within {target} ms"
         );
     }
 }

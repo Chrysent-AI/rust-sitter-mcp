@@ -302,6 +302,13 @@ impl Engine {
     ) -> crate::plan::PlanEnvelope {
         crate::plan::run(&self.launch, request, cancelled)
     }
+    pub fn move_item(
+        &self,
+        request: crate::move_plan::MoveRequest,
+        cancelled: &AtomicBool,
+    ) -> crate::move_plan::MoveEnvelope {
+        crate::move_plan::run(&self.launch, request, cancelled)
+    }
     pub fn launch_directory(&self) -> &Path {
         &self.launch
     }

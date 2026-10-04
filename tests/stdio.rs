@@ -50,12 +50,34 @@ fn real_stdio_query() {
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
     let advertised = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(advertised.len(), 3);
-    for name in ["search", "search_query", "replace"] {
+    assert_eq!(advertised.len(), 4);
+    for name in ["search", "search_query", "replace", "move_item"] {
         let tool = advertised.iter().find(|t| t["name"] == name).unwrap();
         assert!(tool["outputSchema"].is_object());
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
     }
+    let move_tool = advertised
+        .iter()
+        .find(|t| t["name"] == "move_item")
+        .unwrap();
+    assert!(
+        move_tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("moves"))
+    );
+    let invalid_move = exchange(
+        json!({"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"move_item","arguments":{"repo_path":root,"crate_root":"sample.rs","moves":[],"apply":true}}}),
+    );
+    assert_eq!(invalid_move["result"]["isError"], true);
+    assert_eq!(
+        invalid_move["result"]["structuredContent"]["error"]["code"],
+        "INVALID_PARAMS"
+    );
+    assert_eq!(
+        invalid_move["result"]["structuredContent"]["plan"]["integrity"]["semantic"],
+        "not_performed"
+    );
     let sugar = exchange(
         json!({"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search","arguments":{"repo_path":root,"pattern":"$a.unwrap()"}}}),
     );

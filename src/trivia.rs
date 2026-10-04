@@ -14,6 +14,7 @@ use std::{
 };
 use tree_sitter::{Node, ParseOptions, Parser, Tree};
 
+#[derive(serde::Serialize)]
 pub struct Trivia {
     pub range: Range<usize>,
     kind: String,
@@ -22,10 +23,29 @@ pub struct Trivia {
     pub reason: String,
     owner: Option<Owner>,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 struct Owner {
     kind: String,
     marker: Range<usize>,
+}
+impl Trivia {
+    pub fn owned_by(&self, item: Range<usize>) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|o| item.contains(&o.marker.start))
+    }
+    pub fn is_attribute(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "attribute_item" | "inner_attribute_item"
+        )
+    }
+    pub fn protected(&self) -> bool {
+        self.protected
+    }
+    pub fn owner_range(&self) -> Option<Range<usize>> {
+        self.owner.as_ref().map(|o| o.marker.clone())
+    }
 }
 pub struct Primary {
     pub candidate: usize,
@@ -150,9 +170,19 @@ fn blank(gap: &str) -> bool {
         .any(|line| line.trim().is_empty())
 }
 pub fn inventory(tree: &Tree, source: &str) -> Vec<Trivia> {
+    inventory_checked(tree, source, None).expect("unbounded replacement inventory")
+}
+fn inventory_checked(
+    tree: &Tree,
+    source: &str,
+    controls: Option<(Instant, &AtomicBool)>,
+) -> Result<Vec<Trivia>, DomainError> {
     let mut out = Vec::new();
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
+        if let Some((deadline, cancelled)) = controls {
+            crate::items::check(deadline, cancelled)?;
+        }
         if !trivia_node(node) {
             for i in (0..node.child_count()).rev() {
                 stack.push(node.child(i).expect("child"));
@@ -224,7 +254,180 @@ pub fn inventory(tree: &Tree, source: &str) -> Vec<Trivia> {
         });
     }
     out.sort_by_key(|t| (t.range.start, t.range.end));
-    out
+    Ok(out)
+}
+/// Move-only inventory uses declaration identity rather than a visibility token.
+/// Replacement's original first-token proof deliberately remains unchanged.
+pub fn move_inventory(
+    tree: &Tree,
+    source: &str,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Vec<Trivia>, DomainError> {
+    let mut values = inventory_checked(tree, source, Some((deadline, cancelled)))?;
+    for trivia in &mut values {
+        crate::items::check(deadline, cancelled)?;
+        let Some(owner) = &mut trivia.owner else {
+            continue;
+        };
+        if owner.kind == "source_file" {
+            continue;
+        }
+        let mut node = tree
+            .root_node()
+            .descendant_for_byte_range(owner.marker.start, owner.marker.end);
+        while let Some(current) = node {
+            crate::items::check(deadline, cancelled)?;
+            if current.kind() == owner.kind {
+                let mut stack = vec![current];
+                while let Some(candidate) = stack.pop() {
+                    crate::items::check(deadline, cancelled)?;
+                    if trivia_node(candidate) || candidate.kind() == "visibility_modifier" {
+                        continue;
+                    }
+                    if candidate.child_count() == 0 && candidate.end_byte() > candidate.start_byte()
+                    {
+                        owner.marker = candidate.byte_range();
+                        break;
+                    }
+                    for i in (0..candidate.child_count()).rev() {
+                        stack.push(candidate.child(i).expect("child"));
+                    }
+                }
+                break;
+            }
+            node = current.parent();
+        }
+    }
+    Ok(values)
+}
+/// Inspect anonymous missing tokens as well as named ERROR nodes.
+pub fn move_clean(
+    tree: &Tree,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<bool, DomainError> {
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        crate::items::check(deadline, cancelled)?;
+        if node.is_error() || node.is_missing() {
+            return Ok(false);
+        }
+        for i in (0..node.child_count()).rev() {
+            stack.push(node.child(i).expect("child"));
+        }
+    }
+    Ok(true)
+}
+#[derive(Debug, Clone, serde::Serialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct MoveOrigin {
+    pub id: String,
+    pub source_path: String,
+    pub source_range: ByteRange,
+    pub output_path: String,
+    pub output_range: ByteRange,
+    pub role: String,
+}
+impl MoveOrigin {
+    pub fn mapped(&self, path: &str, range: &Range<usize>) -> Option<(String, Range<usize>)> {
+        (self.source_path == path
+            && self.source_range.start_byte <= range.start
+            && self.source_range.end_byte >= range.end)
+            .then(|| {
+                (
+                    self.output_path.clone(),
+                    self.output_range.start_byte + range.start - self.source_range.start_byte
+                        ..self.output_range.start_byte + range.end - self.source_range.start_byte,
+                )
+            })
+    }
+}
+/// Every original occurrence is path-qualified, exact-once and byte-backed, including
+/// retained neighboring owners. Equal-looking synthesized text cannot supply an origin.
+pub fn verify_move(
+    original: &std::collections::BTreeMap<String, (String, Vec<Trivia>)>,
+    proposed: &std::collections::BTreeMap<String, (String, Vec<Trivia>)>,
+    origins: &[MoveOrigin],
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> bool {
+    for origin in origins {
+        if crate::items::check(deadline, cancelled).is_err() {
+            return false;
+        }
+        let Some(old) = original.get(&origin.source_path) else {
+            return false;
+        };
+        let Some(new) = proposed.get(&origin.output_path) else {
+            return false;
+        };
+        let a = old
+            .0
+            .get(origin.source_range.start_byte..origin.source_range.end_byte);
+        let b = new
+            .0
+            .get(origin.output_range.start_byte..origin.output_range.end_byte);
+        if a.is_none() || a != b {
+            return false;
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for (path, (_, inventory)) in original {
+        for t in inventory {
+            if crate::items::check(deadline, cancelled).is_err() {
+                return false;
+            }
+            let mapped: Vec<_> = origins
+                .iter()
+                .filter_map(|o| o.mapped(path, &t.range))
+                .collect();
+            if mapped.len() != 1 {
+                return false;
+            }
+            let (destination, range) = &mapped[0];
+            let Some((_, values)) = proposed.get(destination) else {
+                return false;
+            };
+            let Some(new) = values
+                .iter()
+                .find(|n| n.range == *range && n.kind == t.kind)
+            else {
+                return false;
+            };
+            if !seen.insert((destination.clone(), range.start, range.end)) {
+                return false;
+            }
+            if t.protected {
+                match (&t.owner, &new.owner) {
+                    (Some(old_owner), Some(new_owner)) if old_owner.kind == new_owner.kind => {
+                        if old_owner.kind == "source_file" {
+                            if destination != path || new_owner.marker != (0..0) {
+                                return false;
+                            }
+                        } else {
+                            let markers: Vec<_> = origins
+                                .iter()
+                                .filter_map(|o| o.mapped(path, &old_owner.marker))
+                                .collect();
+                            if markers.len() != 1
+                                || markers[0] != (destination.clone(), new_owner.marker.clone())
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+        }
+    }
+    proposed.iter().all(|(path, (_, values))| {
+        values.iter().all(|t| {
+            crate::items::check(deadline, cancelled).is_ok()
+                && seen.contains(&(path.clone(), t.range.start, t.range.end))
+        })
+    })
 }
 fn internal(t: &Trivia, c: &Candidate) -> bool {
     t.range.start >= c.start && t.range.end <= c.end

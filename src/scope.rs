@@ -226,6 +226,160 @@ impl Scope {
             includes,
         })
     }
+    /// Evaluate an absent regular-file candidate with the same in-root ignore policy.
+    /// Ancestors are evaluated before descendants: a leaf negation cannot reopen a pruned dir.
+    pub fn admit_new_path(
+        &self,
+        path: &str,
+        deadline: Instant,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), DomainError> {
+        normalized_path(path)?;
+        let relative = Path::new(path);
+        if !self.admits(relative) {
+            return Err(DomainError::new(
+                "INVALID_DESTINATION",
+                "new path excluded by paths/globs",
+            ));
+        }
+        let parts: Vec<_> = relative.components().collect();
+        let mut current = self.root.clone();
+        let mut ignores = Vec::new();
+        for (index, component) in parts.iter().enumerate() {
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(DomainError::new("CANCELLED", "request cancelled"));
+            }
+            if Instant::now() >= deadline {
+                return Err(DomainError::new(
+                    "planning_deadline",
+                    "new-path observation deadline",
+                ));
+            }
+            let ignore_path = current.join(".gitignore");
+            match fs::symlink_metadata(&ignore_path) {
+                Ok(meta) => {
+                    if !meta.is_file() || meta.file_type().is_symlink() {
+                        return Err(DomainError::new(
+                            "scan_incomplete",
+                            "ignore file cannot be safely read",
+                        ));
+                    }
+                    let mut builder = ignore::gitignore::GitignoreBuilder::new(&current);
+                    if builder.add(&ignore_path).is_some() {
+                        return Err(DomainError::new(
+                            "scan_incomplete",
+                            "ignore read/parse failed",
+                        ));
+                    }
+                    ignores.push(builder.build().map_err(|_| {
+                        DomainError::new("scan_incomplete", "ignore matcher failed")
+                    })?);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return Err(DomainError::new(
+                        "scan_incomplete",
+                        "cannot inspect ignore file",
+                    ));
+                }
+            }
+            if component.as_os_str() == ".git" || component.as_os_str() == "target" {
+                return Err(DomainError::new(
+                    "INVALID_DESTINATION",
+                    "hard-excluded component",
+                ));
+            }
+            // Conservatively reject differently cased spellings, even on case-sensitive hosts.
+            let entries = fs::read_dir(&current)
+                .map_err(|_| DomainError::new("scan_incomplete", "cannot inspect path aliases"))?;
+            for entry in entries {
+                crate::items::check(deadline, cancelled)?;
+                let entry = entry.map_err(|_| {
+                    DomainError::new("scan_incomplete", "directory observation failed")
+                })?;
+                if let (Some(found), Some(wanted)) =
+                    (entry.file_name().to_str(), component.as_os_str().to_str())
+                    && found != wanted
+                    && found.to_lowercase() == wanted.to_lowercase()
+                {
+                    return Err(DomainError::new(
+                        "DESTINATION_ALREADY_EXISTS",
+                        "case-folded path alias",
+                    ));
+                }
+            }
+            current.push(component);
+            let is_dir = index + 1 < parts.len();
+            let mut ignored = false;
+            for matcher in &ignores {
+                crate::items::check(deadline, cancelled)?;
+                match matcher.matched(&current, is_dir) {
+                    ignore::Match::Ignore(_) => ignored = true,
+                    ignore::Match::Whitelist(_) => ignored = false,
+                    ignore::Match::None => {}
+                }
+            }
+            if ignored {
+                return Err(DomainError::new(
+                    "INVALID_DESTINATION",
+                    "new path or ancestor is ignored",
+                ));
+            }
+            match fs::symlink_metadata(&current) {
+                Ok(meta) if !is_dir => {
+                    let _ = meta;
+                    return Err(DomainError::new(
+                        "DESTINATION_ALREADY_EXISTS",
+                        "destination is already present",
+                    ));
+                }
+                Ok(meta) => {
+                    if !meta.is_dir()
+                        || meta.file_type().is_symlink()
+                        || !fs::canonicalize(&current)
+                            .map_err(|_| {
+                                DomainError::new("scan_incomplete", "cannot resolve ancestor")
+                            })?
+                            .starts_with(&self.root)
+                    {
+                        return Err(DomainError::new(
+                            "INVALID_DESTINATION",
+                            "unsafe/non-directory ancestor",
+                        ));
+                    }
+                    match fs::symlink_metadata(current.join(".git")) {
+                        Ok(_) => {
+                            return Err(DomainError::new(
+                                "INVALID_DESTINATION",
+                                "nested repository ancestor",
+                            ));
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(_) => {
+                            return Err(DomainError::new(
+                                "scan_incomplete",
+                                "cannot inspect repository boundary",
+                            ));
+                        }
+                    }
+                }
+                Err(e) if !is_dir && e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(DomainError::new(
+                        "INVALID_DESTINATION",
+                        "no directory creation is supported",
+                    ));
+                }
+                Err(_) => {
+                    return Err(DomainError::new(
+                        "scan_incomplete",
+                        "cannot inspect destination",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
     fn admits(&self, path: &Path) -> bool {
         self.paths
             .as_ref()
@@ -235,6 +389,20 @@ impl Scope {
                 .as_ref()
                 .is_none_or(|globs| globs.matched(path, false).is_whitelist())
     }
+}
+pub fn normalized_path(path: &str) -> Result<(), DomainError> {
+    if path.is_empty()
+        || Path::new(path).is_absolute()
+        || path.contains('\0')
+        || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+        || Path::new(path).extension().is_none_or(|ext| ext != "rs")
+    {
+        return Err(DomainError::new(
+            "INVALID_DESTINATION",
+            "require normalized root-relative .rs path",
+        ));
+    }
+    Ok(())
 }
 fn same(a: &Metadata, b: &Metadata) -> bool {
     a.dev() == b.dev()

@@ -12,6 +12,10 @@ pub struct Edit {
     pub replacement_text: String,
     pub match_ids: Vec<String>,
     pub trivia_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub item_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rewrite_ids: Vec<String>,
 }
 impl Edit {
     pub fn new(
@@ -32,6 +36,8 @@ impl Edit {
             replacement_text: replacement,
             match_ids: vec![match_id.into()],
             trivia_ids: Vec::new(),
+            item_ids: Vec::new(),
+            rewrite_ids: Vec::new(),
         }
     }
 }

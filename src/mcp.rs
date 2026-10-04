@@ -1,5 +1,6 @@
 use crate::{
     engine::Engine,
+    move_plan::{MoveEnvelope, MoveRequest},
     plan::{PlanEnvelope, ReplaceRequest},
     result::{DomainError, Limits, PatternRequest, SearchEnvelope, SearchRequest},
 };
@@ -160,6 +161,48 @@ impl Server {
             ),
         }
     }
+    async fn run_move(
+        &self,
+        request: MoveRequest,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let failure = |limits, error| move_wire(MoveEnvelope::failed(limits, error));
+        let Ok(permit) = self.admission.clone().try_acquire_owned() else {
+            return failure(
+                request.limits,
+                DomainError::new(
+                    "BUSY",
+                    "another engine call is running; retry after it finishes",
+                ),
+            );
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let _guard = CancelOnDrop(flag.clone());
+        {
+            let mut active = self.active.lock().expect("active lock");
+            flag.store(active.cancelled, Ordering::Relaxed);
+            active.flags.retain(|weak| weak.strong_count() > 0);
+            active.flags.push(Arc::downgrade(&flag));
+        }
+        let engine = self.engine.clone();
+        let limits = request.limits.clone();
+        let worker_flag = flag.clone();
+        let mut job = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            engine.move_item(request, &worker_flag)
+        });
+        let result = tokio::select! {
+            result = &mut job => result,
+            _ = context.ct.cancelled() => { flag.store(true, Ordering::Relaxed); job.await }
+        };
+        match result {
+            Ok(result) => move_wire(result),
+            Err(_) => failure(
+                limits,
+                DomainError::new("INTERNAL", "blocking engine task failed"),
+            ),
+        }
+    }
     pub async fn shutdown(&self) {
         self.cancel_requests();
         // The owned permit lives until all blocking workers and Git children have joined.
@@ -175,8 +218,25 @@ fn plan_wire(result: PlanEnvelope) -> CallToolResult {
         CallToolResult::structured(value)
     }
 }
+fn move_wire(result: MoveEnvelope) -> CallToolResult {
+    let failed = result.error.is_some();
+    let value = serde_json::to_value(result).expect("serializable move");
+    if failed {
+        CallToolResult::structured_error(value)
+    } else {
+        CallToolResult::structured(value)
+    }
+}
 #[tool_router]
 impl Server {
+    #[tool(name = "move_item", description = "Read-only simultaneous move plan for explicitly anchored dependency-free whole top-level Rust items. Required crate_root supplies ordinary written module context, not Cargo/semantic resolution. Existing EOF/before-item and absent new sibling destinations only; parent declarations are synthesized privately or reused. Carries owned trivia; ambiguous prologues stay. All edits, creations, synthesis audits and Git patch fit together or are withheld. Dependency/import/path/visibility repair needs are blockers, never guessed. semantic checking is not_performed. Server never writes sources or applies patches; review and externally check/apply against unchanged bases.", output_schema = rmcp::handler::server::tool::schema_for_output::<MoveEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn move_item(
+        &self,
+        Parameters(request): Parameters<MoveRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        self.run_move(request, context).await
+    }
     #[tool(name = "replace", description = "Read-only dry-run Rust expression replacement. Same sugar grammar as search. Bound $name copies exact capture bytes; no automatic parentheses, dedent or formatting. Original-coordinate anchors with expected_text select exact matches; omitted selection means all, [] means none. max_matches counts scope matches before selection. Keep trivia in place by default; unretained trivia, conflicts, syntax recovery, source changes and limits withhold ALL artifacts. Applicable plans include complete Git patch (three context lines) and original-byte JSON edits; server never applies them. Integrity is tree-sitter syntax only, semantic checking is not performed. Review artifacts and verify unchanged base bytes before external application.", output_schema = rmcp::handler::server::tool::schema_for_output::<PlanEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
     async fn replace(
         &self,
@@ -225,7 +285,11 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        if request.name != "search_query" && request.name != "search" && request.name != "replace" {
+        if request.name != "search_query"
+            && request.name != "search"
+            && request.name != "replace"
+            && request.name != "move_item"
+        {
             return Err(rmcp::ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
             >());
@@ -234,7 +298,11 @@ impl ServerHandler for Server {
         let decoded = if serde_json::to_vec(&args).expect("JSON args").len() > 8 * 1024 * 1024 {
             Err("decoded arguments exceed 8 MiB".into())
         } else {
-            if request.name == "replace" {
+            if request.name == "move_item" {
+                serde_json::from_value::<MoveRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else if request.name == "replace" {
                 serde_json::from_value::<ReplaceRequest>(args)
                     .map(|_| ())
                     .map_err(|e| e.to_string())
@@ -249,6 +317,13 @@ impl ServerHandler for Server {
             }
         };
         if let Err(message) = decoded {
+            if request.name == "move_item" {
+                return Ok(move_wire(MoveEnvelope::failed(
+                    Limits::default(),
+                    DomainError::new("INVALID_PARAMS", message),
+                ))
+                .into());
+            }
             if request.name == "replace" {
                 return Ok(plan_wire(PlanEnvelope::failed(
                     Limits::default(),

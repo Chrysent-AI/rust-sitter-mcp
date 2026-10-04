@@ -69,13 +69,21 @@ fn process_exists(pid: u32) -> bool {
 
 #[test]
 fn eof_cancels_active_work_and_reaps_owned_git_child() {
+    eof_flow("search_query");
+}
+#[test]
+fn move_shares_admission_and_eof_reaps_owned_git_child() {
+    eof_flow("move_item");
+}
+fn eof_flow(tool: &str) {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let fixture = Fixture(
-        std::env::temp_dir().join(format!("rust-sitter-eof-{}-{unique}", std::process::id())),
-    );
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "rust-sitter-eof-{}-{tool}-{unique}",
+        std::process::id()
+    )));
     std::fs::create_dir(&fixture.0).unwrap();
     assert!(
         Command::new("git")
@@ -128,7 +136,12 @@ fn eof_cancels_active_work_and_reaps_owned_git_child() {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"})
     )
     .unwrap();
-    writeln!(input, "{}", json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_query","arguments":{"repo_path":fixture.0,"query":"(call_expression) @match","page_size":1,"limits":{"time_budget_ms":300000}}}})).unwrap();
+    let args = if tool == "move_item" {
+        json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","moves":[],"limits":{"time_budget_ms":300000}})
+    } else {
+        json!({"repo_path":fixture.0,"query":"(call_expression) @match","page_size":1,"limits":{"time_budget_ms":300000}})
+    };
+    writeln!(input, "{}", json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":tool,"arguments":args}})).unwrap();
     input.flush().unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -143,6 +156,28 @@ fn eof_cancels_active_work_and_reaps_owned_git_child() {
         assert!(Instant::now() < deadline, "did not observe an owned hasher");
         thread::sleep(Duration::from_millis(10));
     };
+    if tool == "move_item" {
+        // Freeze only this test's hasher so the competing request observes a held permit.
+        assert!(
+            Command::new("kill")
+                .args(["-STOP", &git_pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        writeln!(input, "{}", json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"replace","arguments":{"repo_path":fixture.0,"pattern":"foo()","replacement":"foo()"}}})).unwrap();
+        input.flush().unwrap();
+        let busy = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(busy["id"], 3);
+        assert_eq!(busy["result"]["structuredContent"]["error"]["code"], "BUSY");
+        assert!(
+            Command::new("kill")
+                .args(["-CONT", &git_pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
     let eof = Instant::now();
     drop(input);
     let status = loop {
@@ -164,11 +199,24 @@ fn eof_cancels_active_work_and_reaps_owned_git_child() {
         "server process still exists"
     );
     assert!(
-        log.contains("search finished") && log.contains("CANCELLED"),
+        log.contains(if tool == "move_item" {
+            "move plan finished"
+        } else {
+            "search finished"
+        }) && log.contains("CANCELLED"),
         "EOF did not cancel active engine work: {log}"
     );
     for response in responses {
         if response["id"] == 2 {
+            if tool == "move_item" {
+                let plan = &response["result"]["structuredContent"]["plan"];
+                assert_eq!(plan["integrity"]["semantic"], "not_performed");
+                assert!(
+                    plan["edits"].is_null()
+                        && plan["created_files"].is_null()
+                        && plan["patch"].is_null()
+                );
+            }
             assert_eq!(
                 response["result"]["structuredContent"]["error"]["code"],
                 "CANCELLED"

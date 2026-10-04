@@ -17,7 +17,7 @@ fn label(prefix: &str, path: &str) -> String {
     out.push('"');
     out
 }
-pub fn section(path: &str, original: &str, proposed: &str) -> Result<String, DomainError> {
+fn validate_path(path: &str) -> Result<(), DomainError> {
     if path.is_empty()
         || path.starts_with('/')
         || path.contains('\0')
@@ -28,6 +28,10 @@ pub fn section(path: &str, original: &str, proposed: &str) -> Result<String, Dom
             "patch path must be normalized and root-relative",
         ));
     }
+    Ok(())
+}
+pub fn section(path: &str, original: &str, proposed: &str) -> Result<String, DomainError> {
+    validate_path(path)?;
     if original == proposed {
         return Ok(String::new());
     }
@@ -47,4 +51,21 @@ pub fn section(path: &str, original: &str, proposed: &str) -> Result<String, Dom
         ));
     }
     Ok(format!("diff --git {old} {new}\n{hunks}"))
+}
+/// New files are distinct artifacts, never modifications of fictional empty bases.
+pub fn creation_section(path: &str, content: &str) -> Result<String, DomainError> {
+    validate_path(path)?;
+    if content.is_empty() {
+        return Err(DomainError::new("PATCH_ENCODING_FAILED", "empty creation"));
+    }
+    let old = label("a/", path);
+    let new = label("b/", path);
+    let hunks = similar::TextDiff::from_lines("", content)
+        .unified_diff()
+        .missing_newline_hint(true)
+        .header("/dev/null", &new)
+        .to_string();
+    Ok(format!(
+        "diff --git {old} {new}\nnew file mode 100644\n{hunks}"
+    ))
 }
