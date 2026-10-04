@@ -15,10 +15,14 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
-    let service = rust_sitter_mcp::mcp::Server::default()
+    let server = rust_sitter_mcp::mcp::Server::new().context("set up Rust query engine")?;
+    let service = server
+        .clone()
         .serve(rmcp::transport::stdio())
         .await
         .context("initialize stdio MCP service")?;
-    service.waiting().await.context("run stdio MCP service")?;
+    let outcome = service.waiting().await;
+    server.shutdown().await;
+    outcome.context("run stdio MCP service")?;
     Ok(())
 }

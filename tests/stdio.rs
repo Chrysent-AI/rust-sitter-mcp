@@ -46,12 +46,21 @@ fn real_stdio_query() {
         json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_query","arguments":{"repo_path":root,"query":"(call_expression) @match"}}}),
     );
     assert_eq!(
-        result["result"]["structuredContent"]["matches"][0]["text"],
+        result["result"]["structuredContent"]["matches"][0]["span"]["text"],
         "thing.unwrap()"
     );
     let fallback: Value =
         serde_json::from_str(result["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(fallback, result["result"]["structuredContent"]);
+    let invalid = exchange(
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_query","arguments":{"repo_path":root,"query":"(identifier) @match","unknown":true}}}),
+    );
+    assert_eq!(invalid["result"]["isError"], true);
+    assert_eq!(
+        invalid["result"]["structuredContent"]["error"]["code"],
+        "INVALID_PARAMS"
+    );
+    assert_eq!(invalid["result"]["structuredContent"]["status"], "failed");
     drop(input);
     assert!(child.wait().unwrap().success());
     std::fs::remove_dir_all(root).unwrap();
