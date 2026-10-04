@@ -295,6 +295,8 @@ fn recovery_missing_tokens_and_diagnostic_omissions_remain_searchable() {
     assert!(result.matches[0].syntax.enclosing_has_recovery);
     assert!(result.diagnostics.is_empty());
     assert!(result.diagnostics_omitted > 0);
+    assert!(!result.coverage.scope_exhaustive);
+    assert_eq!(result.status, "partial");
     let result = run(&repo.engine(), repo.request("(MISSING) @match"));
     ok(&result);
     assert!(!result.matches.is_empty());
@@ -497,6 +499,29 @@ fn successful_empty_failed_and_incomplete_calls_do_not_mutate_source_or_git() {
         "CANCELLED",
     );
 }
+#[test]
+fn execution_guard_discards_unfinished_file_but_keeps_observed_count() {
+    let repo = Repo::new();
+    repo.write(
+        "many.rs",
+        format!("fn f() {{ {} }}", "x();".repeat(100_001)),
+    );
+    let result = run(&repo.engine(), repo.request("(call_expression) @match"));
+    ok(&result);
+    assert_eq!(result.status, "partial");
+    assert!(result.matches.is_empty());
+    assert_eq!(result.counts.observed_matches, 100_000);
+    assert_eq!(result.counts.total_matches, None);
+    assert!(result.next_cursor.is_some());
+    assert_eq!(result.has_more, None);
+    assert!(
+        result
+            .truncation_reasons
+            .iter()
+            .any(|r| r == "candidate_match_limit")
+    );
+}
+
 #[test]
 fn unreadable_and_aggregate_source_bounds_are_not_empty_successes() {
     let repo = Repo::new();

@@ -24,6 +24,7 @@ pub struct Candidate {
 }
 pub struct FileMatches {
     pub matches: Vec<Candidate>,
+    pub observed_count: usize,
     pub diagnostics: Vec<Diagnostic>,
     pub diagnostics_count: usize,
     pub recovery: bool,
@@ -42,6 +43,7 @@ pub fn execute(
 ) -> Result<FileMatches, DomainError> {
     let mut result = FileMatches {
         matches: Vec::new(),
+        observed_count: 0,
         diagnostics: Vec::new(),
         diagnostics_count: 0,
         recovery: false,
@@ -245,6 +247,7 @@ pub fn execute(
                 }
                 leading = previous;
             }
+            result.observed_count += 1;
             result.matches.push(Candidate {
                 start: node.start_byte(),
                 end: node.end_byte(),

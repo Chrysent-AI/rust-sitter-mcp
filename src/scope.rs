@@ -403,8 +403,14 @@ pub fn discover(
         }
         result.counts.scanned_files += 1;
         let path = scope.root.join(&relative);
+        let mut mode = 0;
         let read = (|| -> Result<(Vec<u8>, Metadata), &'static str> {
             let before = fs::symlink_metadata(&path).map_err(|_| "unreadable")?;
+            mode = if before.mode() & 0o111 != 0 {
+                0o100755
+            } else {
+                0o100644
+            };
             if before.file_type().is_symlink() {
                 return Err("symlink");
             }
@@ -441,14 +447,8 @@ pub fn discover(
             Ok((buffer, opened))
         })();
         let name = relative.to_str().expect("UTF-8 admitted").to_owned();
-        let mut mode = 0;
         let eligible = match read {
-            Ok((buffer, metadata)) => {
-                mode = if metadata.mode() & 0o111 != 0 {
-                    0o100755
-                } else {
-                    0o100644
-                };
+            Ok((buffer, _)) => {
                 if buffer.iter().take(8192).any(|b| *b == 0) {
                     Err("binary")
                 } else {

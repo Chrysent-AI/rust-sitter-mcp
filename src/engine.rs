@@ -159,6 +159,7 @@ impl Engine {
                     .extend(data.diagnostics[..emitted].iter().cloned());
                 result.diagnostics_omitted += data.diagnostics_count - emitted;
                 if let Some(reason) = &data.stopped {
+                    result.counts.observed_matches += data.observed_count;
                     next = Some((ordinal, 0));
                     work_stopped = true;
                     result.truncation_reasons.push(reason.clone());
@@ -258,6 +259,11 @@ impl Engine {
         }
         result.counts.returned_matches = result.matches.len();
         trim_metadata(result);
+        if result.diagnostics_omitted > 0 {
+            result.coverage.scope_exhaustive = false;
+            result.status = "partial".into();
+            result.truncation_reasons.push("diagnostics_omitted".into());
+        }
         Ok(())
     }
     pub fn launch_directory(&self) -> &Path {
