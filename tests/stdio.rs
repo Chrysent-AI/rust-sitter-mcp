@@ -27,6 +27,9 @@ fn real_stdio_query() {
     let mut exchange = |request: Value| -> Value {
         writeln!(input, "{request}").unwrap();
         input.flush().unwrap();
+        if request.get("id").is_none() {
+            return Value::Null;
+        }
         let mut line = String::new();
         output.read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
@@ -40,6 +43,7 @@ fn real_stdio_query() {
             .unwrap()
             .contains("0.1.0 (")
     );
+    exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
     assert_eq!(tools["result"]["tools"][0]["name"], "search_query");
     assert!(tools["result"]["tools"][0]["outputSchema"].is_object());
