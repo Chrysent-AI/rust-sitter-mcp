@@ -819,7 +819,8 @@ pub fn dependencies(
                 .map(String::as_str);
             let mut module_spellings = std::collections::BTreeSet::new();
             module_spellings.insert(segment.unwrap_or("crate"));
-            // Alias spellings only establish conservative glob relevance, never rewrite authority.
+            // Alias declarations alone are not affected consumers. Retain their spellings
+            // for conservative glob relevance; written uses of the moved name are checked below.
             for (path, data) in parsed {
                 for item in &data.items {
                     check(deadline, cancelled)?;
@@ -835,15 +836,6 @@ pub fn dependencies(
                             && let Some(alias) = words.get(i + 1)
                         {
                             module_spellings.insert(*alias);
-                            let node = data
-                                .tree
-                                .root_node()
-                                .named_descendant_for_byte_range(
-                                    item.span.range.start_byte,
-                                    item.span.range.end_byte,
-                                )
-                                .expect("use");
-                            needs.push(need("unsupported_dependency_form", path, node, "alias of the changed module scope needs explicit consumer evidence; chained aliases are not resolved"));
                         }
                     }
                 }

@@ -522,6 +522,95 @@ fn visibility_guards_use_syntax_not_whitespace_spelling() {
 }
 
 #[test]
+fn unrelated_module_aliases_do_not_block_moves() {
+    for import in [
+        "use crate::source as source_alias;\n",
+        "use crate::{source as source_alias};\n",
+    ] {
+        for consumer in ["", "fn caller() { source_alias::retained(); }\n"] {
+            let selected = "pub(crate) fn selected() {}";
+            let repo = fixture(&format!("{selected}\npub(crate) fn retained() {{}}\n"));
+            let root = format!("mod source;\nmod destination;\n{import}{consumer}");
+            repo.write("cases/layout/lib.rs", &root);
+            for destination in [
+                new("cases/layout/target.rs"),
+                json!({"kind":"existing","path":"cases/layout/destination.rs"}),
+            ] {
+                let target = destination["path"].as_str().unwrap().to_owned();
+                let result = run(
+                    &repo,
+                    request(&repo, json!([entry(&repo, selected, destination)])),
+                );
+                assert!(result["plan"]["blockers"].as_array().unwrap().is_empty());
+                let copy = apply(&repo, &result);
+                let applied_root = fs::read_to_string(copy.0.join("cases/layout/lib.rs")).unwrap();
+                assert!(applied_root.starts_with(&root));
+                assert!(
+                    fs::read_to_string(copy.0.join(target))
+                        .unwrap()
+                        .contains(selected)
+                );
+                assert_eq!(
+                    fs::read_to_string(copy.0.join("cases/layout/source.rs")).unwrap(),
+                    "\npub(crate) fn retained() {}\n"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn relevant_module_alias_consumers_still_block_moves() {
+    for import in [
+        "use crate::source as source_alias;\n",
+        "use crate::{source as source_alias};\n",
+    ] {
+        for (consumer, category, evidence) in [
+            (
+                "fn caller() { source_alias::selected(); }\n",
+                "UNSUPPORTED_DEPENDENCY_FORM",
+                "selected",
+            ),
+            (
+                "use source_alias::*;\n",
+                "GLOB_DEPENDENCY",
+                "use source_alias::*;",
+            ),
+        ] {
+            let selected = "pub(crate) fn selected() {}";
+            let repo = fixture(selected);
+            repo.write(
+                "cases/layout/lib.rs",
+                &format!("mod source;\nmod destination;\n{import}{consumer}"),
+            );
+            let result = run(
+                &repo,
+                request(
+                    &repo,
+                    json!([entry(&repo, selected, new("cases/layout/target.rs"))]),
+                ),
+            );
+            code(&result, category);
+            let item_id = &result["plan"]["moves"][0]["item"]["id"];
+            assert!(
+                result["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| {
+                        d["blocks_applicability"] == true
+                            && d["item_ids"].as_array().unwrap().contains(item_id)
+                            && d["anchors"].as_array().unwrap().iter().any(|a| {
+                                a["path"] == "cases/layout/lib.rs" && a["expected_text"] == evidence
+                            })
+                    }),
+                "{result}"
+            );
+        }
+    }
+}
+
+#[test]
 fn collision_arrivals_parent_context_and_dependency_taxonomy() {
     let repo = fixture("fn selected() {}\n");
     repo.write(
