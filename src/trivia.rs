@@ -31,6 +31,7 @@ pub struct Primary {
     pub candidate: usize,
     pub id: String,
     pub expansion: Expansion,
+    trivia_ids: Vec<String>,
     before: Vec<(Range<usize>, String, String)>,
     after: Vec<(Range<usize>, String, String)>,
 }
@@ -40,6 +41,7 @@ impl Primary {
             candidate,
             id,
             expansion,
+            trivia_ids: Vec::new(),
             before: Vec::new(),
             after: Vec::new(),
         }
@@ -287,6 +289,9 @@ pub fn account(
             continue;
         }
         let id = format!("t/{ordinal}/{}/{}", t.range.start, t.range.end);
+        for index in &affected {
+            primaries[*index].trivia_ids.push(id.clone());
+        }
         let trivia_anchor = anchor(path, source, t.range.clone());
         let override_value = overrides.iter().find(|o| o.trivia == trivia_anchor);
         if override_value.is_some() {
@@ -400,7 +405,7 @@ pub fn account(
         let mut prefix = String::new();
         let mut suffix = String::new();
         let mut moves = Vec::new();
-        let mut ids = Vec::new();
+        let mut ids = p.trivia_ids.clone();
         for (range, text, id) in &p.before {
             let start = prefix.len();
             prefix.push_str(text);
@@ -448,6 +453,8 @@ pub fn account(
             p.expansion.text.clone(),
             &p.id,
         );
+        ids.sort();
+        ids.dedup();
         edit.trivia_ids = ids;
         edits.push(edit);
     }
