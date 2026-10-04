@@ -544,6 +544,22 @@ fn execution_guard_discards_unfinished_file_but_keeps_observed_count() {
 }
 
 #[test]
+fn arity_includes_literal_expression_subtypes() {
+    let repo = Repo::new();
+    repo.write("x.rs", "fn f(){ f(1); f(\"reason\"); f(true); f(1,2); }");
+    let query =
+        "((call_expression arguments: (arguments) @args) @match (#rust-arity? @args \"1\"))";
+    let result = run(&repo.engine(), repo.request(query));
+    ok(&result);
+    let text: Vec<_> = result
+        .matches
+        .iter()
+        .map(|m| m.span.text.as_deref().unwrap())
+        .collect();
+    assert_eq!(text, ["f(1)", "f(\"reason\")", "f(true)"]);
+}
+
+#[test]
 fn unreadable_and_aggregate_source_bounds_are_not_empty_successes() {
     let repo = Repo::new();
     repo.write("x.rs", "fn f(){x();}");

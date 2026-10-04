@@ -90,13 +90,20 @@ impl CompiledQuery {
     }
 }
 
+pub fn is_expression(node: tree_sitter::Node<'_>) -> bool {
+    let language = node.language();
+    // The pinned Rust grammar nests _literal under _expression; subtype lists are direct, not transitive.
+    ["_expression", "_literal"].iter().any(|kind| {
+        language
+            .subtypes_for_supertype(language.id_for_node_kind(kind, true))
+            .contains(&node.kind_id())
+    })
+}
+
 pub fn rust_arity(node: tree_sitter::Node<'_>, expected: u32) -> bool {
     if node.kind() != "arguments" || node.has_error() {
         return false;
     }
-    let language = node.language();
-    let expressions = language.id_for_node_kind("_expression", true);
-    let subtypes = language.subtypes_for_supertype(expressions);
     let mut cursor = node.walk();
     let children: Vec<_> = node
         .children(&mut cursor)
@@ -115,10 +122,7 @@ pub fn rust_arity(node: tree_sitter::Node<'_>, expected: u32) -> bool {
         .take(children.len().saturating_sub(2))
     {
         if wants_expression {
-            if !child.is_named()
-                || !subtypes.contains(&child.kind_id())
-                || child.is_error()
-                || child.is_missing()
+            if !child.is_named() || !is_expression(*child) || child.is_error() || child.is_missing()
             {
                 return false;
             }

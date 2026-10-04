@@ -16,7 +16,7 @@ fn real_stdio_query() {
     );
     std::fs::write(
         root.join("sample.rs"),
-        "fn f() { thing.unwrap(); wrong.unwrap(x); }\n",
+        "fn f() { thing.unwrap(); wrong.unwrap(x); thing.expect(\"why\"); pair(x,x); pair(x,y); }\n",
     )
     .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rust-sitter-mcp"))
@@ -69,8 +69,49 @@ fn real_stdio_query() {
         envelope["matches"][0]["span"]["range"],
         json!({"start_byte":9,"end_byte":23})
     );
+    std::fs::write(root.join("other.rs"), "fn g(){ pair(1,1); pair(1,2); }\n").unwrap();
+    for (id, pattern, count) in [
+        (21, "$a.expect($b)", 1),
+        (22, "pair($a,$a)", 2),
+        (23, "pair($a,$b)", 4),
+    ] {
+        let result = exchange(
+            json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"search","arguments":{"repo_path":root,"pattern":pattern}}}),
+        );
+        let envelope = &result["result"]["structuredContent"];
+        assert_eq!(envelope["tool"], "search");
+        assert_eq!(envelope["status"], "complete");
+        assert_eq!(envelope["matches"].as_array().unwrap().len(), count);
+        if pattern == "pair($a,$a)" {
+            assert_eq!(envelope["matches"][0]["path"], "other.rs");
+            assert_eq!(envelope["matches"][0]["captures"]["a"][0]["text"], "1");
+            assert_eq!(envelope["matches"][0]["captures"]["a"][1]["text"], "1");
+        }
+    }
+    let malformed = exchange(
+        json!({"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"search","arguments":{"repo_path":root,"pattern":"$a.$b"}}}),
+    );
+    assert_eq!(malformed["result"]["isError"], true);
+    assert_eq!(malformed["result"]["structuredContent"]["tool"], "search");
+    assert_eq!(
+        malformed["result"]["structuredContent"]["error"]["code"],
+        "UNSUPPORTED_PLACEHOLDER_POSITION"
+    );
+    assert_eq!(
+        malformed["result"]["structuredContent"]["error"]["byte_offset"],
+        3
+    );
+    let unknown = exchange(
+        json!({"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"search","arguments":{"repo_path":root,"pattern":"$a","query":"ignored"}}}),
+    );
+    assert_eq!(unknown["result"]["isError"], true);
+    assert_eq!(unknown["result"]["structuredContent"]["tool"], "search");
+    assert_eq!(
+        unknown["result"]["structuredContent"]["error"]["code"],
+        "INVALID_PARAMS"
+    );
     let result = exchange(
-        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_query","arguments":{"repo_path":root,"query":"(call_expression) @match"}}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_query","arguments":{"repo_path":root,"query":"(call_expression) @match","paths":["sample.rs"]}}}),
     );
     assert_eq!(
         result["result"]["structuredContent"]["matches"][0]["span"]["text"],
