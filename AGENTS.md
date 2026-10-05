@@ -2,6 +2,10 @@
 
 Guidance for all agents (and humans) working in this repository.
 
+## Git hooks: always install them
+
+After cloning (or if hooks ever seem missing), run `make install-hooks` before your first commit. The tracked hooks in `.githooks/` enforce the project's quality gates on every commit — staged secret scanning, formatting, clippy, tests, dependency policy, and tooling regressions. Commits that bypass or skip the gates (`--no-verify` without maintainer instruction) are not acceptable contributions; CI runs the same checks and will fail the PR.
+
 ## Dependency policy (binding for all work in this repo)
 
 Every change that adds or re-pins a dependency requires a short research step BEFORE the Cargo.toml change lands. No exceptions for "small" or "obvious" deps — the note can be one line, but it must exist.
@@ -17,3 +21,14 @@ Every change that adds or re-pins a dependency requires a short research step BE
 - Well-known, actively maintained crates; official/organization-backed where a genuine choice exists (e.g. `rmcp` as the official MCP SDK).
 - Prefer std or zero-dependency solutions where genuinely sufficient — every dependency is paid for again in review, build time, and supply-chain risk.
 - 0.x dependencies only when they are the ecosystem standard for the slot (tree-sitter qualifies); pin and upgrade deliberately with a recorded reason.
+
+## Product invariants (do not weaken)
+
+- The server is **read-only** on caller repositories: tools return patches/plans; nothing applies changes in place.
+- Results are **honest**: completeness, coverage, skips, and `semantic: "not_performed"` labeling must reflect reality; no tool may claim compilation or semantic verification.
+- Edits are **lossless**: byte-exact splices in original coordinates; never regenerate or reformat source.
+- Anything the engine cannot prove (trivia ownership, binding identity, module context) becomes an explicit, overridable decision or a typed blocker — never a silent guess.
+
+## CI and platforms
+
+CI runs on Linux amd64 and arm64 only (macOS cloud builds are intentionally excluded for cost — macOS is validated by the local gated workflow). Do not add macOS runners to workflows.
