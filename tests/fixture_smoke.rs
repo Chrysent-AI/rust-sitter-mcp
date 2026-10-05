@@ -316,8 +316,92 @@ fn stdio_advice_and_caller_edited_split() {
     assert!(!advice["drafts"].as_array().unwrap().is_empty(), "{advice}");
     assert_eq!(advice, client.call("suggest_split", make("src/rich.rs")));
     let batch = advice_flow::edited_batch(&repo, &advice);
-    let moved = client.call("move_item", batch);
-    assert_eq!(moved["plan"]["created_files"].as_array().unwrap().len(), 2);
+    let moved = client.call("move_item", batch.clone());
+    let plan = &moved["plan"];
+    let files = plan["created_files"].as_array().unwrap();
+    let edits = plan["edits"].as_array().unwrap();
+    let rewrites = plan["rewrites"].as_array().unwrap();
+    assert_eq!(plan["selected_count"], 4);
+    assert_eq!(files.len(), 2);
+    // Both absent siblings require synthesized declarations in the same parent.
+    for (path, declaration) in [
+        ("src/edited_a.rs", "mod edited_a;"),
+        ("src/edited_b.rs", "mod edited_b;"),
+    ] {
+        let file = files.iter().find(|f| f["path"] == path).unwrap();
+        assert_eq!(file["parent_path"], "src/lib.rs");
+        assert_eq!(file["declaration_link"]["kind"], "synthesized");
+        let rewrite = rewrites
+            .iter()
+            .find(|r| r["id"] == file["declaration_link"]["rewrite_id"])
+            .unwrap();
+        assert_eq!(rewrite["kind"], "module_declaration");
+        assert_eq!(rewrite["after_text"], declaration);
+        assert_eq!(rewrite["artifact_links"].as_array().unwrap().len(), 1);
+        let link = &rewrite["artifact_links"][0];
+        assert_eq!(link["kind"], "edit");
+        let edit = &edits[link["index"].as_u64().unwrap() as usize];
+        assert_eq!(edit["path"], "src/lib.rs");
+        assert!(
+            edit["rewrite_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&rewrite["id"])
+        );
+    }
+    // The edited crossing beta_write -> beta_flush, the retained const, and the
+    // imported helper require these repairs, not merely any rewrites that exist.
+    for (kind, text, output_path) in [
+        (
+            "import_insert",
+            "use crate::rewrite::helper;",
+            "src/edited_a.rs",
+        ),
+        (
+            "import_insert",
+            "use crate::edited_b::beta_flush;",
+            "src/edited_a.rs",
+        ),
+        (
+            "import_insert",
+            "use crate::rich::RETAIN;",
+            "src/edited_b.rs",
+        ),
+        ("visibility", "pub(crate) ", "src/edited_b.rs"),
+        ("visibility", "pub(crate) ", "src/rich.rs"),
+    ] {
+        let rewrite = rewrites
+            .iter()
+            .find(|r| {
+                if r["kind"] != kind || r["after_text"] != text {
+                    return false;
+                }
+                let link = &r["artifact_links"][0];
+                if link["kind"] == "edit" {
+                    edits[link["index"].as_u64().unwrap() as usize]["path"] == output_path
+                } else {
+                    files
+                        .iter()
+                        .any(|f| f["id"] == link["id"] && f["path"] == output_path)
+                }
+            })
+            .unwrap_or_else(|| panic!("missing {kind} {text:?} in {output_path}: {plan}"));
+        assert_eq!(rewrite["artifact_links"].as_array().unwrap().len(), 1);
+        let link = &rewrite["artifact_links"][0];
+        let artifact = if link["kind"] == "edit" {
+            &edits[link["index"].as_u64().unwrap() as usize]
+        } else {
+            assert_eq!(link["kind"], "created_file");
+            files.iter().find(|f| f["id"] == link["id"]).unwrap()
+        };
+        assert!(
+            artifact["rewrite_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&rewrite["id"])
+        );
+    }
+    // The existing applicator also verifies every linked range against its bytes.
     let copy = move_artifacts::apply(&repo, &moved);
     cargo_check(&copy);
     assert!(
@@ -330,6 +414,31 @@ fn stdio_advice_and_caller_edited_split() {
             .unwrap()
             .contains("fn beta_write")
     );
+    assert_eq!(observe(&repo.0), before);
+    // Only the final member (the second sibling) is stale; earlier valid members
+    // must not leak a partial first sibling, parent edits, or a patch.
+    let mut stale = batch;
+    stale["moves"][3]["item"]["expected_text"] = json!("fn beta_flush() -> u8 { 0 }");
+    let failed = client.rpc("tools/call", json!({"name":"move_item","arguments":stale}));
+    assert_eq!(failed["isError"], true, "{failed}");
+    let blocked = &failed["structuredContent"];
+    let fallback: Value =
+        serde_json::from_str(failed["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(&fallback, blocked);
+    assert_eq!(blocked["status"], "failed");
+    assert_eq!(blocked["error"]["code"], "STALE_SELECTION");
+    assert_eq!(blocked["error"]["field"], "moves[3].item");
+    assert_eq!(blocked["plan"]["state"], "blocked");
+    assert_eq!(blocked["plan"]["applicable"], false);
+    assert_eq!(blocked["plan"]["integrity"]["semantic"], "not_performed");
+    for field in ["edits", "created_files", "patch"] {
+        assert_eq!(
+            blocked["plan"].get(field),
+            Some(&Value::Null),
+            "partial or missing {field}: {blocked}"
+        );
+    }
+    assert_eq!(observe(&repo.0), before);
     for path in [
         "src/inventory.rs",
         "src/weak.rs",
@@ -361,7 +470,7 @@ fn stdio_advice_and_caller_edited_split() {
     }
     assert_eq!(observe(&repo.0), before);
     eprintln!(
-        "stdio advice + edited batch: every unit accounted once, complete decision closure, no execution artifact; caller-edited membership/filenames; Git/JSON/modes, compile-on-copy and read-only observations passed"
+        "stdio advice + edited batch: every unit accounted once, complete decision closure, no execution artifact; caller-edited membership/filenames; both declaration links and required import/visibility audit links; stale final member withholds ALL artifacts; Git/JSON/modes, compile-on-copy and read-only observations passed"
     );
 }
 
