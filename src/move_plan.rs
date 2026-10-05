@@ -517,6 +517,64 @@ impl MoveEnvelope {
         self.plan.decisions.push(decision);
         Ok(())
     }
+    fn finish_decision_groups(&mut self, groups: Result<Vec<DecisionGroup>, DomainError>) {
+        match groups {
+            Ok(groups) => self.plan.decision_groups = groups,
+            Err(error) => {
+                // Grouping stopped: publish neither ungrouped decisions nor dangling audit links.
+                for (name, count) in [
+                    ("decisions", self.plan.decisions.len()),
+                    ("decision_groups", self.plan.decision_groups.len()),
+                    (
+                        "decision_group_references",
+                        self.plan
+                            .decision_groups
+                            .iter()
+                            .map(|g| g.decision_ids.len())
+                            .sum(),
+                    ),
+                    (
+                        "chain_diagnostic_references",
+                        self.plan
+                            .decisions
+                            .iter()
+                            .map(|d| d.chain_diagnostic_ids.len())
+                            .sum(),
+                    ),
+                    (
+                        "move_decision_references",
+                        self.plan.moves.iter().map(|m| m.decision_ids.len()).sum(),
+                    ),
+                    (
+                        "rewrite_decision_references",
+                        self.plan
+                            .rewrites
+                            .iter()
+                            .map(|r| r.decision_ids.len())
+                            .sum(),
+                    ),
+                ] {
+                    *self.counts.omissions.entry(name.into()).or_default() += count;
+                }
+                self.plan.decisions.clear();
+                self.plan.decision_groups.clear();
+                for record in &mut self.plan.moves {
+                    record.decision_ids.clear();
+                }
+                for rewrite in &mut self.plan.rewrites {
+                    rewrite.decision_ids.clear();
+                }
+                if error.code == "CANCELLED" {
+                    self.status = "failed".into();
+                    self.error = Some(error);
+                    self.plan.state = "blocked".into();
+                    self.withhold();
+                } else {
+                    self.incomplete(&error.code);
+                }
+            }
+        }
+    }
     fn withhold(&mut self) {
         self.plan.applicable = false;
         self.plan.edits = None;
@@ -700,7 +758,7 @@ fn run_with_recheck(
             *id = links[id].clone();
         }
     }
-    match decision_groups(
+    let groups = decision_groups(
         result.plan.decisions.iter().map(|d| {
             (
                 d.category.as_str(),
@@ -715,18 +773,8 @@ fn run_with_recheck(
             started + Duration::from_millis(request.limits.time_budget_ms.min(300_000)),
             cancelled,
         ),
-    ) {
-        Ok(groups) => result.plan.decision_groups = groups,
-        Err(error) if error.code == "CANCELLED" => {
-            result.status = "failed".into();
-            result.error = Some(error);
-            result.plan.state = "blocked".into();
-            result.withhold();
-        }
-        Err(error) => {
-            result.incomplete(&error.code);
-        }
-    }
+    );
+    result.finish_decision_groups(groups);
     result.fit();
     if result.plan.applicable
         && let Err(error) = items::check(

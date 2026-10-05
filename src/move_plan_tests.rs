@@ -5,7 +5,7 @@ mod fixture_gen;
 mod move_artifacts;
 use fixture_gen::{Fixture, observe};
 use serde_json::json;
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{fs, os::unix::fs::PermissionsExt, sync::atomic::Ordering};
 
 #[test]
 fn final_recheck_detects_creation_layout_source_ignore_and_mode_races() {
@@ -45,6 +45,131 @@ fn final_recheck_detects_creation_layout_source_ignore_and_mode_races() {
                 && result.plan.patch.is_none()
         );
     }
+}
+
+#[test]
+fn stopped_decision_grouping_clears_decisions_and_links_with_accounted_omissions() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\nmod destination;\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "fn keep() {}\n// --- first banner ---\n\nfn first() {}\n// --- second banner ---\n\nfn second() {}\n",
+    );
+    repo.write("cases/layout/destination.rs", "");
+    let mut request: MoveRequest = serde_json::from_value(json!({
+        "repo_path": repo.0,
+        "crate_root": "cases/layout/lib.rs",
+        "paths": ["cases/layout"],
+        "moves": (["fn first() {}", "fn second() {}"].map(|text| json!({
+            "item": move_artifacts::anchor(&repo, "cases/layout/source.rs", text),
+            "destination": {"kind": "existing", "path": "cases/layout/destination.rs"}
+        })))
+    }))
+    .unwrap();
+    let before = observe(&repo.0);
+    let baseline = run(&repo.0, request.clone(), &AtomicBool::new(false));
+    assert_eq!(baseline.plan.decisions.len(), 2);
+    request.trivia_overrides = Some(
+        baseline
+            .plan
+            .decisions
+            .iter()
+            .enumerate()
+            .map(|(index, d)| MoveTriviaOverride {
+                trivia: d.anchors[0].clone(),
+                disposition: MoveDisposition::CarryWithItem,
+                target_item: Some(request.moves[index].item.clone()),
+            })
+            .collect(),
+    );
+    for code in [
+        "CANCELLED",
+        "planning_deadline",
+        "analysis_descriptor_bytes",
+    ] {
+        let cancelled = AtomicBool::new(false);
+        let mut result = MoveEnvelope::empty(request.limits.clone());
+        build(&repo.0, &request, &cancelled, || {}, &mut result).unwrap();
+        assert!(result.plan.applicable, "{result:?}");
+        assert!(result.plan.edits.is_some() && result.plan.patch.is_some());
+        let decision_count = result.plan.decisions.len();
+        assert_eq!(decision_count, 2, "{result:?}");
+        let move_links: usize = result.plan.moves.iter().map(|m| m.decision_ids.len()).sum();
+        assert!(move_links > 0);
+        let deadline = if code == "planning_deadline" {
+            Instant::now()
+        } else {
+            Instant::now() + Duration::from_secs(30)
+        };
+        if code == "analysis_descriptor_bytes" {
+            result.counts.analysis_descriptor_bytes = 128 * 1024 * 1024;
+        }
+        let bytes_before_grouping = result.counts.analysis_descriptor_bytes;
+        let mut visited = 0;
+        let groups = decision_groups(
+            result.plan.decisions.iter().enumerate().map(|(index, d)| {
+                visited += 1;
+                // Cancel only after one group record has been assembled.
+                if code == "CANCELLED" && index == 1 {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+                (
+                    d.category.as_str(),
+                    d.reason,
+                    &d.action,
+                    d.blocks_applicability,
+                    d.id.as_str(),
+                )
+            }),
+            &mut result.counts.analysis_descriptor_bytes,
+            (deadline, &cancelled),
+        );
+        assert_eq!(groups.as_ref().unwrap_err().code, code);
+        if code == "CANCELLED" {
+            assert_eq!(visited, 2);
+            assert!(result.counts.analysis_descriptor_bytes > bytes_before_grouping);
+        }
+        result.finish_decision_groups(groups);
+        result.fit();
+        if code == "CANCELLED" {
+            assert_eq!(result.status, "failed");
+            assert_eq!(result.error.as_ref().unwrap().code, code);
+            assert_eq!(result.plan.state, "blocked");
+        } else {
+            assert_eq!(result.status, "partial");
+            assert_eq!(result.plan.state, "incomplete");
+            assert!(result.truncation_reasons.iter().any(|r| r == code));
+        }
+        assert!(!result.plan.applicable);
+        assert!(result.plan.decisions.is_empty() && result.plan.decision_groups.is_empty());
+        assert_eq!(result.counts.omissions["decisions"], decision_count);
+        assert_eq!(result.counts.omissions["decision_groups"], 0);
+        assert_eq!(result.counts.omissions["decision_group_references"], 0);
+        assert_eq!(
+            result.counts.omissions["move_decision_references"],
+            move_links
+        );
+        assert!(result.plan.moves.iter().all(|m| m.decision_ids.is_empty()));
+        assert!(
+            result
+                .plan
+                .rewrites
+                .iter()
+                .all(|r| r.decision_ids.is_empty())
+        );
+        assert!(
+            result.plan.edits.is_none()
+                && result.plan.created_files.is_none()
+                && result.plan.patch.is_none()
+        );
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(wire["plan"]["decisions"], json!([]));
+        assert_eq!(wire["plan"]["decision_groups"], json!([]));
+        assert_eq!(wire["plan"]["edits"], json!(null));
+        assert_eq!(wire["plan"]["created_files"], json!(null));
+        assert_eq!(wire["plan"]["patch"], json!(null));
+    }
+    assert_eq!(observe(&repo.0), before);
 }
 
 #[test]
