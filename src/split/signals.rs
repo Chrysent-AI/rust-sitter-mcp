@@ -725,6 +725,8 @@ pub(super) fn risks(
         controls.check()?;
         let node = item_node(data, &item);
         let mut risks: BTreeMap<(&str, DecisionReason), Vec<ByteRange>> = BTreeMap::new();
+        // Reserve transient typed risk records before accumulating their ranges.
+        result.account((item.attributes.len() + 3).saturating_mul(128))?;
         if let Some(category) = items::category(&item.kind) {
             risks.insert(
                 (category, DecisionReason::UnsupportedUnitKind),
@@ -769,6 +771,7 @@ pub(super) fn risks(
         let mut stack = vec![node];
         while let Some(node) = stack.pop() {
             controls.check()?;
+            result.account(128)?;
             match node.kind() {
                 "line_comment"
                 | "block_comment"
