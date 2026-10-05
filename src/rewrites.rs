@@ -150,6 +150,17 @@ struct Analyzer<'a> {
     controls: (Instant, &'a AtomicBool),
 }
 impl Analyzer<'_> {
+    fn account_lexical(&mut self, witness: &Option<items::LexicalUncertainty>) {
+        if let Some(witness) = witness {
+            self.descriptor_bytes += serde_json::to_vec(witness)
+                .expect("lexical evidence JSON")
+                .len()
+                + 32;
+            if self.descriptor_bytes > 128 * 1024 * 1024 {
+                self.exceeded = true;
+            }
+        }
+    }
     fn add(&mut self, repair: Repair) {
         self.descriptor_bytes += repair.path.len()
             + repair.after.len()
@@ -889,6 +900,24 @@ impl Analyzer<'_> {
         let mut mappings = Vec::new();
         for leaf in &leaves {
             let Some(old) = self.resolve_use(&need.path, &module, node, &leaf.path) else {
+                let first = leaf.path.split("::").next().unwrap_or("");
+                if !matches!(first, "crate" | "self" | "super")
+                    && let Ok(assessment) = items::lexical_assessment(
+                        &need.path,
+                        node,
+                        source,
+                        first,
+                        self.controls,
+                        true,
+                    )
+                    && assessment.binding == items::LexicalBinding::Uncertain
+                {
+                    need.reason = DecisionReason::LexicalContextUnproved;
+                    need.category = "binding_collision";
+                    need.lexical(assessment);
+                    need.message =
+                        "import prefix has an unproved containing lexical context".into();
+                }
                 return false;
             };
             let new = self.mapped(&old);
@@ -1610,6 +1639,13 @@ impl Analyzer<'_> {
                                     false,
                                 )?;
                                 if assessment.binding != items::LexicalBinding::Absent {
+                                    self.account_lexical(&assessment.uncertainty);
+                                    if self.exceeded {
+                                        return Err(DomainError::new(
+                                            "analysis_descriptor_bytes",
+                                            "lexical alias evidence guard reached",
+                                        ));
+                                    }
                                     failures.push(Need {reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),lexical_uncertainty:assessment.uncertainty,category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or unproved at an anchored access".into(),item_ids:repair.item_ids.clone()});
                                 }
                             }
@@ -2064,7 +2100,10 @@ pub(crate) fn analyze(
     for mut need in needs {
         items::check(controls.0, controls.1)?;
         if !analyzer.repair(&mut need) {
-            remaining.push(need);
+            analyzer.account_lexical(&need.lexical_uncertainty);
+            if !analyzer.exceeded {
+                remaining.push(need);
+            }
         }
         if analyzer.exceeded {
             return Err(DomainError::new(

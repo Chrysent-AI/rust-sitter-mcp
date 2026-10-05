@@ -717,7 +717,13 @@ pub(crate) fn reference_role(node: Node<'_>) -> bool {
     }
     let mut child = node;
     while let Some(parent) = child.parent() {
-        if parent.child_by_field_name("pattern") == Some(child)
+        // The grammar wraps a match guard inside match_pattern, but its
+        // condition is an expression reference, not a binding position.
+        let in_match_guard = child.kind() == "match_pattern"
+            && child.child_by_field_name("condition").is_some_and(|guard| {
+                guard.start_byte() <= node.start_byte() && guard.end_byte() >= node.end_byte()
+            });
+        if (parent.child_by_field_name("pattern") == Some(child) && !in_match_guard)
             || matches!(parent.kind(), "lifetime" | "loop_label")
             || (parent.kind() == "field_expression"
                 && parent.child_by_field_name("field") == Some(child))

@@ -6,9 +6,9 @@ mod move_artifacts;
 mod spawner_precision;
 use fixture_gen::{Fixture, observe};
 use move_artifacts::anchor;
-use rust_sitter_mcp::{engine::Engine, move_plan::MoveRequest};
+use rust_sitter_mcp::{engine::Engine, move_plan::MoveRequest, split::SuggestSplitRequest};
 use serde_json::{Value, json};
-use std::sync::atomic::AtomicBool;
+use std::{collections::BTreeMap, fs, process::Command, sync::atomic::AtomicBool};
 
 const SOURCE: &str = "cases/precision/subagent/spawner.rs";
 fn run(repo: &Fixture, args: Value) -> Value {
@@ -49,4 +49,428 @@ fn raw_line_replica_applies_losslessly() {
             )
         )
     );
+    let mut wrong_root = request(
+        &repo,
+        "const TRANSCRIPT_MAX_RAW_LINE: usize = 16 * 1024 * 1024;",
+    );
+    wrong_root["crate_root"] = json!("cases/precision/main.rs");
+    withheld(&run(&repo, wrong_root));
+}
+
+fn advice(repo: &Fixture) -> Value {
+    let before = observe(&repo.0);
+    let request: SuggestSplitRequest = serde_json::from_value(json!({"repo_path":repo.0,"crate_root":"cases/precision/lib.rs","source_path":SOURCE,"paths":["cases/precision"],"limits":{"text_bytes":0}})).unwrap();
+    let result = Engine::new(repo.0.clone())
+        .unwrap()
+        .suggest_split(request, &AtomicBool::new(false));
+    assert_eq!(observe(&repo.0), before);
+    serde_json::to_value(result).unwrap()
+}
+fn withheld(result: &Value) {
+    assert_eq!(result["plan"]["applicable"], false, "{result}");
+    for field in ["edits", "created_files", "patch"] {
+        assert!(result["plan"][field].is_null(), "{result}");
+    }
+}
+fn compile(repo: &Fixture) {
+    // Never compile or create build artifacts in the caller repository.
+    let copy = repo.copy();
+    copy.write("Cargo.toml", "[package]\nname = \"fixture-corpus\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"cases/precision/lib.rs\"\n");
+    let result = Command::new("cargo")
+        .current_dir(&copy.0)
+        .args(["check", "--locked", "--offline", "--quiet"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+#[test]
+fn sanitizer_replica_exposes_candidate_and_retains_true_blockers() {
+    let source = include_str!("fixtures/spawner_precision/sanitizers.rs");
+    let repo = spawner_precision::load(source);
+    let mut args = request(&repo, "fn sanitized_transcript_stop_reason");
+    // Use the complete original written functions, not reconstructed source.
+    args["moves"] = json!(["sanitized_transcript_stop_reason", "sanitized_transcript_error", "sanitized_transcript_terminal_value"].map(|name| {
+        let start = source.find(&format!("fn {name}(")).unwrap();
+        let rest = &source[start..];
+        let end = rest.find("\n\nfn ").unwrap_or(rest.len());
+        json!({"item":anchor(&repo, SOURCE, rest[..end].trim_end()),"destination":{"kind":"new_sibling","path":"cases/precision/subagent/sanitized_transcript.rs","parent_path":"cases/precision/subagent/mod.rs"}})
+    }));
+    let result = run(&repo, args);
+    withheld(&result);
+    let mut reasons = BTreeMap::<String, usize>::new();
+    let mut categories = BTreeMap::<String, usize>::new();
+    for decision in result["plan"]["decisions"].as_array().unwrap() {
+        if decision["blocks_applicability"] == true {
+            assert_ne!(decision["reason"], "lexical_context_unproved", "{decision}");
+            assert!(!decision["anchors"].as_array().unwrap().is_empty());
+            *reasons
+                .entry(decision["reason"].as_str().unwrap().into())
+                .or_default() += 1;
+            *categories
+                .entry(decision["category"].as_str().unwrap().into())
+                .or_default() += 1;
+        }
+    }
+    for category in [
+        "unsupported_dependency_form",
+        "scope_dependency",
+        "visibility_context",
+    ] {
+        assert!(categories.contains_key(category), "{result}");
+    }
+    for reason in [
+        "external_or_missing_binding",
+        "conditional_or_inherited_context",
+        "member_or_constructor_unproved",
+    ] {
+        assert!(reasons.contains_key(reason), "{result}");
+    }
+    println!("sanitizer replica remaining typed blockers: {reasons:?}; categories: {categories:?}");
+    let advice = advice(&repo);
+    let at = source
+        .find("sanitized_transcript_stop_reason(value)")
+        .unwrap();
+    assert!(
+        !advice["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "lexical_context_unproved"
+                && d["anchors"][0]["span"]["range"]["start_byte"] == at)
+    );
+    assert!(
+        advice["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["kind"] == "reference_candidate"
+                && s["evidence"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e["range"]["start_byte"] == at)),
+        "{advice}"
+    );
+}
+#[test]
+fn admitted_patterns_repair_only_free_accesses_and_compile_after_application() {
+    for local in [
+        "let (other, mut another) = (1, 2); selected();",
+        "for other in [1] { selected(); }",
+        "if let Some(other) = Some(1) { selected(); }",
+        "while let Some(other) = None::<u8> { selected(); }",
+        "match Some(1) { Some(other) => selected(), _ => {} }",
+        "{ let (mut selected,) = (|| {},); selected(); }",
+        "{ let (ref selected,) = (|| {},); selected(); }",
+        "for mut selected in [|| {}] { selected(); }",
+        "if let Some(ref selected) = Some(|| {}) { selected(); }",
+        "match Some(|| {}) { Some(ref selected) => selected(), _ => {} }",
+        "let closure = move |selected: fn()| selected();",
+        "let (r#other,) = (1,); selected();",
+    ] {
+        let source =
+            format!("fn selected() {{}}\nfn caller() {{ {local} }}\nfn free() {{ selected(); }}\n");
+        let repo = spawner_precision::load(&source);
+        let mut args = request(&repo, "fn selected() {}");
+        let result = run(&repo, args.clone());
+        assert_eq!(result["plan"]["applicable"], true, "{local}: {result}");
+        let import = result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "import_insert")
+            .unwrap();
+        args["rewrite_overrides"] = json!([{"target":import["target"],"action":"replace","replacement_text":"use crate::subagent::probe_constants::selected as relocated;"}]);
+        let aliased = run(&repo, args);
+        let copy = move_artifacts::apply(&repo, &aliased);
+        compile(&copy);
+        let after = fs::read_to_string(copy.0.join(SOURCE)).unwrap();
+        assert!(after.contains("fn free() { relocated(); }"), "{after}");
+        if local.contains("mut selected")
+            || local.contains("ref selected")
+            || local.contains("selected: fn()")
+        {
+            assert!(after.contains(local), "{after}");
+        } else {
+            assert!(
+                after.contains(
+                    &local
+                        .replace("selected();", "relocated();")
+                        .replace("=> selected()", "=> relocated()")
+                ),
+                "{after}"
+            );
+        }
+    }
+}
+#[test]
+fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
+    for (caller, reason) in [
+        (
+            "fn caller(pair: (fn(),)) { let (selected,) = pair; selected(); }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller(selected: fn()) { for selected in values { selected(); } }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller() { if let Some(selected) = value { selected(); } }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller() { while let Some(selected) = value { selected(); } }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller() { match value { Some(selected) => selected(), _ => {} } }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller() { let (mut selected, p!()) = value; selected(); }",
+            "unsupported_pattern",
+        ),
+        (
+            "fn caller() { if let Some(other) = value && other { selected(); } }",
+            "unsupported_pattern",
+        ),
+        ("fn caller() { m!(); selected(); }", "unsupported_pattern"),
+        ("fn caller() { selected(); m!(); }", "unsupported_pattern"),
+        (
+            "fn caller() { #[cfg(any())] let other = value; selected(); }",
+            "conditional_local_context",
+        ),
+        (
+            "fn caller() { use crate::other::*; selected(); }",
+            "relevant_local_import",
+        ),
+    ] {
+        let source = format!("fn selected() {{}}\n{caller}\n");
+        let repo = spawner_precision::load(&source);
+        let result = run(&repo, request(&repo, "fn selected() {}"));
+        withheld(&result);
+        let decision = result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["reason"] == "lexical_context_unproved")
+            .unwrap();
+        let witness = &decision["lexical_uncertainty"];
+        assert_eq!(witness["reason"], reason, "{result}");
+        assert_eq!(witness["spelling"], "selected");
+        assert_eq!(witness["scope"]["path"], SOURCE);
+        assert_eq!(decision["anchors"][0]["expected_text"], "selected");
+        let range = &witness["pattern"]["range"];
+        assert!(
+            !source[range["start_byte"].as_u64().unwrap() as usize
+                ..range["end_byte"].as_u64().unwrap() as usize]
+                .is_empty()
+        );
+        let advice = advice(&repo);
+        let advice_decision = advice["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["reason"] == "lexical_context_unproved")
+            .unwrap();
+        assert_eq!(advice_decision["lexical_uncertainty"], *witness);
+        assert!(advice_decision["evidence"][0]["text"].is_null());
+        assert_eq!(
+            advice_decision["anchors"][0]["span"]["range"],
+            decision["anchors"][0]["range"]
+        );
+        assert_eq!(result, run(&repo, request(&repo, "fn selected() {}")));
+    }
+}
+#[test]
+fn binding_scope_boundaries_keep_real_file_consumers_repairable() {
+    for caller in [
+        "let selected = selected;",
+        "for selected in [selected] {}",
+        "if let Some(selected) = Some(selected()) {} else { selected(); }",
+        "while let Some(selected) = Some(selected()) { break; }",
+        "match Some(1) { Some(selected) => {}, _ => selected() }",
+    ] {
+        let repo =
+            spawner_precision::load(&format!("fn selected() {{}}\nfn caller() {{ {caller} }}\n"));
+        let result = run(&repo, request(&repo, "fn selected() {}"));
+        let copy = move_artifacts::apply(&repo, &result);
+        compile(&copy);
+        assert!(
+            fs::read_to_string(copy.0.join(SOURCE))
+                .unwrap()
+                .contains(caller)
+        );
+        assert!(
+            result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "import_insert"),
+            "{result}"
+        );
+    }
+}
+#[test]
+fn match_guard_references_are_repaired_and_ambiguous_guard_bindings_still_block() {
+    for (pattern, applicable) in [("Some(other)", true), ("Some(selected)", false)] {
+        let source = format!(
+            "fn selected() -> bool {{ true }}\nfn caller() {{ match Some(1) {{ {pattern} if selected() => {{}}, _ => {{}} }} }}\n"
+        );
+        let repo = spawner_precision::load(&source);
+        let mut args = request(&repo, "fn selected() -> bool { true }");
+        let result = run(&repo, args.clone());
+        assert_eq!(result["plan"]["applicable"], applicable, "{result}");
+        if applicable {
+            let import = result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["kind"] == "import_insert")
+                .unwrap();
+            args["rewrite_overrides"] = json!([{"target":import["target"],"action":"replace","replacement_text":"use crate::subagent::probe_constants::selected as relocated;"}]);
+            let copy = move_artifacts::apply(&repo, &run(&repo, args));
+            compile(&copy);
+            assert!(
+                fs::read_to_string(copy.0.join(SOURCE))
+                    .unwrap()
+                    .contains("if relocated() =>")
+            );
+            let result = advice(&repo);
+            let at = source.find("selected() =>").unwrap();
+            assert!(
+                result["signals"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s["kind"] == "reference_candidate"
+                        && s["evidence"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|e| e["range"]["start_byte"] == at)),
+                "{result}"
+            );
+        } else {
+            withheld(&result);
+            assert!(
+                result["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["lexical_uncertainty"]["reason"]
+                        == "identifier_pattern_binding_or_constant"),
+                "{result}"
+            );
+        }
+    }
+}
+#[test]
+fn moved_forced_composite_locals_pass_the_dependency_prefilter() {
+    for text in [
+        "fn moved() { let (mut selected,) = (|| {},); selected(); }",
+        "fn moved() { let (ref selected,) = (|| {},); selected(); }",
+        "fn moved<T>(selected: T) -> T { selected }",
+    ] {
+        let repo = spawner_precision::load(text);
+        let result = run(&repo, request(&repo, text));
+        let copy = move_artifacts::apply(&repo, &result);
+        compile(&copy);
+        assert!(
+            !result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "import_insert")
+        );
+    }
+}
+#[test]
+fn local_import_proof_does_not_bypass_a_nearer_ambiguous_pattern() {
+    let source = "fn selected() {}\nfn caller(pair: (fn(),)) { use crate::subagent::spawner::selected; { let (selected,) = pair; selected(); } }\n";
+    let repo = spawner_precision::load(source);
+    let result = run(&repo, request(&repo, "fn selected() {}"));
+    withheld(&result);
+    assert!(result["plan"]["decisions"].as_array().unwrap().iter().any(|d| d["lexical_uncertainty"]["reason"] == "identifier_pattern_binding_or_constant"), "{result}");
+}
+#[test]
+fn path_prefix_and_caller_selected_alias_fail_with_specific_witnesses() {
+    let repo = spawner_precision::load(
+        "fn selected() {}\nuse crate::subagent::spawner as prefix;\nfn caller(pair: (fn(),)) { let (prefix,) = pair; prefix::selected(); }\n",
+    );
+    let result = run(&repo, request(&repo, "fn selected() {}"));
+    withheld(&result);
+    let decision = result["plan"]["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["lexical_uncertainty"]["spelling"] == "prefix")
+        .unwrap();
+    assert_eq!(
+        decision["lexical_uncertainty"]["reason"],
+        "identifier_pattern_binding_or_constant"
+    );
+    assert_eq!(decision["anchors"][0]["expected_text"], "selected");
+
+    let repo = spawner_precision::load(
+        "fn selected() {}\nfn caller(pair: (fn(),)) { let (shadowed,) = pair; selected(); }\n",
+    );
+    let mut args = request(&repo, "fn selected() {}");
+    let result = run(&repo, args.clone());
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    let import = result["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "import_insert")
+        .unwrap();
+    args["rewrite_overrides"] = json!([{"target":import["target"],"action":"replace","replacement_text":"use crate::subagent::probe_constants::selected as shadowed;"}]);
+    let result = run(&repo, args);
+    withheld(&result);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "final_alias_conflict"
+                && d["lexical_uncertainty"]["spelling"] == "shadowed"
+                && d["lexical_uncertainty"]["reason"] == "identifier_pattern_binding_or_constant"),
+        "{result}"
+    );
+}
+#[test]
+fn mandatory_lexical_witnesses_survive_display_caps_or_are_explicitly_omitted() {
+    let source = format!(
+        "fn selected() {{}}\nfn caller(pair: (fn(),)) {{ let (selected,) = pair; {} }}\n",
+        "selected();".repeat(200)
+    );
+    let repo = spawner_precision::load(&source);
+    let mut args = request(&repo, "fn selected() {}");
+    args["limits"]["diagnostic_count"] = json!(0);
+    let result = run(&repo, args.clone());
+    withheld(&result);
+    assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 200);
+    assert!(result["plan"]["decisions"].as_array().unwrap().iter().all(|d| d["lexical_uncertainty"]["reason"] == "identifier_pattern_binding_or_constant"));
+    args["limits"]["response_bytes"] = json!(65536);
+    let result = run(&repo, args);
+    withheld(&result);
+    assert_eq!(result["status"], "partial");
+    assert!(result["plan"]["decisions"].as_array().unwrap().is_empty());
+    assert_eq!(result["counts"]["omissions"]["decisions"], 200);
+
+    let request: SuggestSplitRequest = serde_json::from_value(json!({"repo_path":repo.0,"crate_root":"cases/precision/lib.rs","source_path":SOURCE,"paths":["cases/precision"],"limits":{"text_bytes":0,"diagnostic_count":0,"response_bytes":65536}})).unwrap();
+    let before = observe(&repo.0);
+    let result = Engine::new(repo.0.clone())
+        .unwrap()
+        .suggest_split(request, &AtomicBool::new(false));
+    assert_eq!(observe(&repo.0), before);
+    let result = serde_json::to_value(result).unwrap();
+    assert_eq!(result["status"], "partial", "{result}");
+    assert!(result["drafts"].as_array().unwrap().is_empty());
+    assert!(result["decisions"].as_array().unwrap().is_empty());
+    assert!(result["counts"]["omissions"]["decisions"].as_u64().unwrap() >= 200);
 }
