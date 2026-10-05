@@ -241,6 +241,14 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
         ("fn caller() { m!(); selected(); }", "unsupported_pattern"),
         ("fn caller() { selected(); m!(); }", "unsupported_pattern"),
         (
+            "fn caller() { m!(); let selected = value; selected(); }",
+            "unsupported_pattern",
+        ),
+        (
+            "fn caller() { let selected = value; selected(); m!(); }",
+            "unsupported_pattern",
+        ),
+        (
             "fn caller() { #[cfg(any())] let other = value; selected(); }",
             "conditional_local_context",
         ),
