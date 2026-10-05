@@ -443,7 +443,7 @@ fn references(
                         let id = result.inventory[owner].id.clone();
                         add_decision(
                             result,
-                            "binding_collision",
+                            ("binding_collision", DecisionReason::LexicalContextUnproved),
                             &source.path,
                             lines.slice(
                                 node.start_byte(),
@@ -607,21 +607,29 @@ pub(super) fn collect(
 }
 pub(super) fn add_decision(
     result: &mut SuggestSplitEnvelope,
-    category: &str,
+    cause: (&str, DecisionReason),
     path: &str,
     span: SourceSlice,
     item_ids: Vec<String>,
     explanation: (&str, &str),
     banner: bool,
 ) -> Result<(), DomainError> {
-    let (consequence, next_action) = explanation;
-    if result.decisions.iter().any(|d| {
-        d.category == category
+    let (category, reason) = cause;
+    let (consequence, _) = explanation;
+    if let Some(prior) = result.decisions.iter().position(|d| {
+        d.reason == reason
+            && d.category == category
             && d.anchors
                 .first()
                 .is_some_and(|a| a.path == path && a.span.range == span.range)
             && d.unresolved_consequence == consequence
     }) {
+        for id in item_ids {
+            if !result.decisions[prior].item_ids.contains(&id) {
+                result.account(descriptor_bytes(&id)?)?;
+                result.decisions[prior].item_ids.push(id);
+            }
+        }
         return Ok(());
     }
     if result.decisions.len() >= 100_000 {
@@ -630,7 +638,11 @@ pub(super) fn add_decision(
             "advice decision guard reached",
         ));
     }
+    let action = DecisionAction::cause(reason);
     let value = AdviceDecision {
+        reason,
+        next_action: action.next_action(),
+        action,
         id: String::new(),
         category: category.into(),
         anchors: vec![AdviceAnchor {
@@ -640,7 +652,6 @@ pub(super) fn add_decision(
         item_ids,
         evidence: vec![span],
         unresolved_consequence: consequence.into(),
-        next_action: next_action.into(),
         resolution: if banner {
             "choice_available"
         } else {
@@ -676,7 +687,7 @@ pub(super) fn risks(
         if record.classification == "ambiguous" {
             add_decision(
                 result,
-                "trivia_ownership",
+                ("trivia_ownership", DecisionReason::OrdinaryTriviaChoice),
                 &source.path,
                 record.span,
                 record.adjacent_item_ids,
@@ -695,7 +706,10 @@ pub(super) fn risks(
         {
             add_decision(
                 result,
-                "scope_dependency",
+                (
+                    "scope_dependency",
+                    DecisionReason::ConditionalOrInheritedContext,
+                ),
                 &source.path,
                 record.span,
                 Vec::new(),
@@ -710,15 +724,27 @@ pub(super) fn risks(
     for item in result.inventory.clone() {
         controls.check()?;
         let node = item_node(data, &item);
-        let mut risks: BTreeMap<&str, ByteRange> = BTreeMap::new();
+        let mut risks: BTreeMap<(&str, DecisionReason), Vec<ByteRange>> = BTreeMap::new();
         if let Some(category) = items::category(&item.kind) {
-            risks.insert(category, item.span.range.clone());
+            risks.insert(
+                (category, DecisionReason::UnsupportedUnitKind),
+                vec![item.span.range.clone()],
+            );
         }
         if item.visibility_key == "restricted" {
-            risks.insert("visibility_context", item.span.range.clone());
+            risks.insert(
+                (
+                    "visibility_context",
+                    DecisionReason::VisibilityScopeUnproved,
+                ),
+                vec![item.span.range.clone()],
+            );
         }
         if item.visibility_key == "pub" {
-            risks.insert("reexport_dependency", item.span.range.clone());
+            risks.insert(
+                ("reexport_dependency", DecisionReason::PublicPathChange),
+                vec![item.span.range.clone()],
+            );
         }
         for attribute in &item.attributes {
             controls.check()?;
@@ -731,7 +757,13 @@ pub(super) fn risks(
                     && !text.starts_with("#[allow")
                     && !text.starts_with("#[derive")
             {
-                risks.insert("scope_dependency", attribute.range.clone());
+                risks
+                    .entry((
+                        "scope_dependency",
+                        DecisionReason::ConditionalOrInheritedContext,
+                    ))
+                    .or_default()
+                    .push(attribute.range.clone());
             }
         }
         let mut stack = vec![node];
@@ -744,18 +776,39 @@ pub(super) fn risks(
                 | "inner_attribute_item"
                 | "token_tree" => continue,
                 "macro_invocation" | "macro_definition" => {
-                    risks.entry("macro_dependency").or_insert(range(node));
+                    risks
+                        .entry(("macro_dependency", DecisionReason::MacroContextUnexamined))
+                        .or_default()
+                        .push(range(node));
                     continue;
                 }
                 "mod_item" => {
-                    risks.entry("module_context").or_insert(range(node));
+                    risks
+                        .entry(("module_context", DecisionReason::UnsupportedConstruct))
+                        .or_default()
+                        .push(range(node));
                     continue;
                 }
                 "use_wildcard" => {
-                    risks.entry("glob_dependency").or_insert(range(node));
+                    risks
+                        .entry(("glob_dependency", DecisionReason::GlobBindingUnproved))
+                        .or_default()
+                        .push(range(node));
                 }
-                "field_expression" | "qualified_type" | "scoped_type_identifier" => {
-                    risks.entry("visibility_context").or_insert(range(node));
+                "field_expression" => {
+                    risks
+                        .entry((
+                            "visibility_context",
+                            DecisionReason::MemberOrConstructorUnproved,
+                        ))
+                        .or_default()
+                        .push(range(node));
+                }
+                "qualified_type" | "scoped_type_identifier" => {
+                    risks
+                        .entry(("visibility_context", DecisionReason::UnsupportedConstruct))
+                        .or_default()
+                        .push(range(node));
                 }
                 _ => {}
             }
@@ -764,41 +817,43 @@ pub(super) fn risks(
                 stack.push(node.named_child(i as u32).expect("child"));
             }
         }
-        for (category, range) in risks {
-            controls.check()?;
-            let consequence = match category {
-                "module_context" => {
-                    "module relocation/context is not established by partition membership"
-                }
-                "scope_dependency" => {
-                    "written scope/import/attribute context may affect unselected code; partitioning does not preserve or evaluate it"
-                }
-                "macro_dependency" => {
-                    "macro expansion and path-sensitive token context are unexamined; no token-tree cohesion/rewrites were inferred"
-                }
-                "glob_dependency" => {
-                    "wildcard binding provenance is unknown; no wildcard imports will be synthesized"
-                }
-                "reexport_dependency" => {
-                    "public/reexport paths may change; no API compatibility guarantee or automatic reexport is supplied"
-                }
-                "visibility_context" => {
-                    "restricted/member/associated/type-directed access is not resolved by advisory grouping"
-                }
-                _ => "the written construct is outside mechanically supported move evidence",
-            };
-            add_decision(
-                result,
-                category,
-                &source.path,
-                lines.slice(range.start_byte, range.end_byte, result.limits.text_bytes),
-                vec![item.id.clone()],
-                (
-                    consequence,
-                    "inspect the anchored context and submit explicit supported moves/choices or change/narrow the request; acknowledgment alone is not execution proof",
-                ),
-                false,
-            )?;
+        for ((category, reason), ranges) in risks {
+            for range in ranges {
+                controls.check()?;
+                let consequence = match category {
+                    "module_context" => {
+                        "module relocation/context is not established by partition membership"
+                    }
+                    "scope_dependency" => {
+                        "written scope/import/attribute context may affect unselected code; partitioning does not preserve or evaluate it"
+                    }
+                    "macro_dependency" => {
+                        "macro expansion and path-sensitive token context are unexamined; no token-tree cohesion/rewrites were inferred"
+                    }
+                    "glob_dependency" => {
+                        "wildcard binding provenance is unknown; no wildcard imports will be synthesized"
+                    }
+                    "reexport_dependency" => {
+                        "public/reexport paths may change; no API compatibility guarantee or automatic reexport is supplied"
+                    }
+                    "visibility_context" => {
+                        "restricted/member/associated/type-directed access is not resolved by advisory grouping"
+                    }
+                    _ => "the written construct is outside mechanically supported move evidence",
+                };
+                add_decision(
+                    result,
+                    (category, reason),
+                    &source.path,
+                    lines.slice(range.start_byte, range.end_byte, result.limits.text_bytes),
+                    vec![item.id.clone()],
+                    (
+                        consequence,
+                        "inspect the anchored context and submit explicit supported moves/choices or change/narrow the request; acknowledgment alone is not execution proof",
+                    ),
+                    false,
+                )?;
+            }
         }
     }
     controls.check()?;

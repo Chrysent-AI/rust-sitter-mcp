@@ -248,7 +248,7 @@ Place that object in `rewrite_overrides:[…]`, not in a separate apply call. Th
 
 For decision field meanings and display-only labels, see [Consuming decisions and member labels](#consuming-decisions-and-member-labels).
 
-`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
+`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `decision_groups`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
 
 Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. `declaration_visibility_rewrite_id`, when present, resolves to the separately audited required visibility repair on either a synthesized or reused declaration. Root-private modules ordinarily already admit descendant consumers and are not blanket-widened. Source files remain present even when emptied.
 
@@ -292,8 +292,26 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
 
 - `unresolved_consequence` describes the consequence of leaving the concern
   unresolved. This is the actual wire field; there is no `consequence` alias.
-- `next_action` gives caller guidance, not an executable request or proof that a
-  repair is supported. Review the related anchors and supported choices.
+- `reason` is a typed snake_case cause, independent of the legacy `category`.
+  Category alone is not evidence of repairability.
+- `action.route` provides one of three additive routes:
+  - `request_field` names `tool`, the actual `field`, supported `choices`, and
+    `purpose` (`resolve_decision`, `review_default` or `submit_for_analysis`).
+    Rewrite choices carry the full replay `target`; trivia choices can carry
+    original `trivia` and selected `target_item` anchors. Repeat the original
+    batch with the named override; never use a display `r/N` ID as a target.
+    Advice has display descriptors only: obtain full current anchors before
+    submission. An analysis field such as `crate_root`, `paths` or `moves`
+    requests reanalysis, not a promise of an applicable result.
+  - `selection_change_required` names `fields` to change and an `instruction`,
+    for example a colliding `moves[index].destination` or unsupported selection.
+  - `unsupported_in_engine` names the anchored `construct` and an `instruction`.
+    No supported override proves that concern. In particular there is no
+    binding-evidence, cfg, public-API or semantic override, and accepting unrelated
+    default rewrites does not clear such blockers.
+- `next_action` renders the same typed route as concise caller guidance, not an
+  executable request or proof that the whole batch is repairable. Review the
+  related anchors and supported choices.
 - `resolution:"choice_available"` means a supported review/anchored choice is
   available; `resolution:"request_change_required"` cannot be cleared by acknowledgment.
 - `selected_choice` is the current choice, or `null` when none is selected. A
@@ -302,6 +320,16 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   prospective execution concern in advice). Neither a choice nor a complete
   advice envelope implies an applicable move. Require `plan.applicable:true` and
   non-null `edits`, `created_files` and `patch` before treating a move as applicable.
+
+Both tools also publish `decision_groups[]` (inside `plan` for moves). Each group
+contains `category`, `reason`, `route`, `blocks_applicability`, `decision_ids` and
+`count`. These sorted cause summaries count decision records, not guessed
+references. Follow every linked decision for its complete anchors, evidence,
+item links and chain diagnostics; no evidence is replaced by the summary. Groups
+are finalized even when advice has no drafts, and are independent of the displayed
+`diagnostic_count` cap. Mandatory-evidence overflow clears groups and decisions
+together, reports group/reference omissions and marks the result incomplete.
+Schema version 1 and all legacy decision fields remain unchanged.
 
 Draft groups carry `item_ids`, not member-name strings. Join every ID to
 `inventory[].id`, including the retain group and context-sensitive units. Count

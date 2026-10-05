@@ -681,11 +681,32 @@ fn make_draft(
             .iter()
             .any(|d| d.unresolved_consequence == consequence && d.item_ids == signal.item_ids)
         {
+            let action = DecisionAction::cause(DecisionReason::CrossGroupReferenceReview);
             let decision = AdviceDecision {
-                id: String::new(), category: "scope_dependency".into(), anchors: signal.evidence.iter().map(|span| AdviceAnchor { path: request.source_path.clone(), span: span.clone() }).collect(),
-                item_ids: signal.item_ids, evidence: signal.evidence,
-                unresolved_consequence: consequence.into(), next_action: "submit the edited explicit batch to move_item and inspect its defaults/anchored supported alternatives; unsupported needs still require changing the request".into(),
-                resolution: "choice_available".into(), supported_choices: vec!["review_move_item_defaults".into(), "submit_supported_anchored_rewrite_alternative".into()], selected_choice: None, blocks_applicability: true, chain_diagnostic_ids: Vec::new(),
+                reason: DecisionReason::CrossGroupReferenceReview,
+                next_action: action.next_action(),
+                action,
+                id: String::new(),
+                category: "scope_dependency".into(),
+                anchors: signal
+                    .evidence
+                    .iter()
+                    .map(|span| AdviceAnchor {
+                        path: request.source_path.clone(),
+                        span: span.clone(),
+                    })
+                    .collect(),
+                item_ids: signal.item_ids,
+                evidence: signal.evidence,
+                unresolved_consequence: consequence.into(),
+                resolution: "choice_available".into(),
+                supported_choices: vec![
+                    "review_move_item_defaults".into(),
+                    "submit_supported_anchored_rewrite_alternative".into(),
+                ],
+                selected_choice: None,
+                blocks_applicability: true,
+                chain_diagnostic_ids: Vec::new(),
             };
             result.account(descriptor_bytes(&decision)?)?;
             result.decisions.push(decision);
@@ -739,11 +760,24 @@ pub(super) fn build(
                         path: request.source_path.clone(),
                         span: result.inventory[0].span.clone(),
                     });
+                let action = DecisionAction::chain(&diagnostic, "suggest_split");
                 let decision = AdviceDecision {
-                    id: String::new(), category: "module_context".into(), anchors: vec![anchor], item_ids: Vec::new(), evidence: Vec::new(),
-                    unresolved_consequence: format!("ordinary chain from supplied root {} cannot prove {}: {:?}", diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason),
-                    next_action: "admit the evidenced ordinary chain or supply a provable root/parent; no Cargo target or cfg resolution is inferred".into(),
-                    resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true,
+                    reason: DecisionReason::ModuleChainFailure,
+                    next_action: action.next_action(),
+                    action,
+                    id: String::new(),
+                    category: "module_context".into(),
+                    anchors: vec![anchor],
+                    item_ids: Vec::new(),
+                    evidence: Vec::new(),
+                    unresolved_consequence: format!(
+                        "ordinary chain from supplied root {} cannot prove {}: {:?}",
+                        diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason
+                    ),
+                    resolution: "request_change_required".into(),
+                    supported_choices: Vec::new(),
+                    selected_choice: None,
+                    blocks_applicability: true,
                     chain_diagnostic_ids: vec![diagnostic.id.clone()],
                 };
                 result.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
@@ -803,6 +837,19 @@ pub(super) fn finalize(
         controls.check()?;
         decision.id = format!("d/{index}");
     }
+    result.decision_groups = decision_groups(
+        result.decisions.iter().map(|d| {
+            (
+                d.category.as_str(),
+                d.reason,
+                &d.action,
+                d.blocks_applicability,
+                d.id.as_str(),
+            )
+        }),
+        &mut result.counts.analysis_descriptor_bytes,
+        (controls.deadline, controls.cancelled),
+    )?;
     for (index, draft) in result.drafts.iter_mut().enumerate() {
         controls.check()?;
         draft.id = format!("draft/{index}");

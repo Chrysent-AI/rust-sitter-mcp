@@ -1,6 +1,6 @@
 //! Bounded written-binding repairs. Evidence is syntactic, never symbol resolution.
 use crate::{
-    items::{self, Item, ModuleEvidence, Need, ParsedFile},
+    items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile},
     move_plan::{MoveRequest, RewriteTarget},
     plan::SourceAnchor,
     result::{ByteRange, DomainError},
@@ -311,6 +311,7 @@ impl Analyzer<'_> {
         self.resolve_use(&binding.path, &binding.module, node, &binding.leaf.path)
     }
     fn missing_target(&self, need: &mut Need, target: &str) -> bool {
+        need.reason = DecisionReason::ExternalOrMissingBinding;
         if let Some(binding) = self.imports.iter().find(|b| {
             b.leaf.public
                 && b.scope_range.is_none()
@@ -319,6 +320,11 @@ impl Analyzer<'_> {
                     .get(&b.path)
                     .is_some_and(|c| canonical(c, &b.leaf.binding) == target)
         }) {
+            need.reason = if binding.conditioned {
+                DecisionReason::ConditionalOrInheritedContext
+            } else {
+                DecisionReason::PublicPathChange
+            };
             need.category = if binding.conditioned {
                 "scope_dependency"
             } else {
@@ -425,6 +431,7 @@ impl Analyzer<'_> {
                 || text.starts_with("#[repr(")
                 || matches!(text, "#[inline]" | "#[inline(always)]" | "#[inline(never)]"))
             {
+                need.reason = DecisionReason::ConditionalOrInheritedContext;
                 need.category = "scope_dependency";
                 need.path = path.into();
                 need.range = attribute.range.clone();
@@ -436,6 +443,7 @@ impl Analyzer<'_> {
         if self.visibility(path, item, using, &need.item_ids) {
             return true;
         }
+        need.reason = DecisionReason::VisibilityScopeUnproved;
         need.category = "visibility_context";
         need.message =
             "final access includes an uncertain or insufficient restricted declaration scope"
@@ -858,11 +866,13 @@ impl Analyzer<'_> {
             .prev_named_sibling()
             .is_some_and(|n| n.kind() == "attribute_item")
         {
+            need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "scope_dependency";
             need.message = "affected import has unexamined attribute/conditional context".into();
             return false;
         }
         let Some(module) = self.lexical_module(&need.path, node, false) else {
+            need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "module_context";
             need.message = "affected import has uncertain inline/conditional module context".into();
             return false;
@@ -904,6 +914,7 @@ impl Analyzer<'_> {
                                 .is_some_and(|n| source[n.byte_range()] == leaf.binding)
                         })
                 {
+                    need.reason = DecisionReason::LexicalContextUnproved;
                     need.category = "binding_collision";
                     need.message =
                         "affected import alias has competing written bindings in its lexical scope"
@@ -933,6 +944,7 @@ impl Analyzer<'_> {
                             )
                             .unwrap_or(true)
                         {
+                            need.reason = DecisionReason::MacroContextUnexamined;
                             need.category = "macro_dependency";
                             need.range = span(candidate.start_byte(), candidate.end_byte());
                             need.message =
@@ -1043,6 +1055,7 @@ impl Analyzer<'_> {
                     }
                     let bytes = &source[removal.start_byte..removal.end_byte];
                     if bytes.contains("//") || bytes.contains("/*") {
+                        need.reason = DecisionReason::TriviaPreservationUnproved;
                         need.category = "trivia_ownership";
                         need.message =
                             "leaf/delimiter trivia cannot be consumed during extraction".into();
@@ -1057,6 +1070,7 @@ impl Analyzer<'_> {
                         let scope = node.parent().expect("use scope");
                         let repair = Repair { path:need.path.clone(),range:span(node.end_byte(), node.end_byte()),after:import_text(&new, &leaf.binding),kind:"import_insert",target:RewriteTarget::Synthesis {path:consumer.clone(),slot:"import".into(),items:self.contributors(&need.item_ids),boundary_role:None,parent_path:None,binding:Some(format!("{}@{}", leaf.binding, node.start_byte()))},item_ids:need.item_ids.clone(),anchors:vec![anchor(self.files, &need.path, &leaf.leaf_range)],rationale:"extract only the changed leaf into an explicit binding in its original lexical scope".into(),declaration_for:None,references,caller_override:false,import_module:Some(using.clone()),import_scope:Some(span(scope.start_byte(),scope.end_byte())) };
                         if self.binding_collision(&repair, &leaf.binding, &using) {
+                            need.reason = DecisionReason::LexicalContextUnproved;
                             need.category = "binding_collision";
                             need.message =
                                 "extracted leaf conflicts with a surviving lexical binding".into();
@@ -1125,6 +1139,7 @@ impl Analyzer<'_> {
         }
         let text = &self.files[&need.path].source[node.byte_range()];
         let Some(old_module) = self.lexical_module(&need.path, node, false) else {
+            need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "module_context";
             need.message =
                 "containing inline/conditional lexical module is not uniquely evidenced".into();
@@ -1148,6 +1163,7 @@ impl Analyzer<'_> {
             };
             match lexical {
                 items::LexicalBinding::Independent | items::LexicalBinding::Uncertain => {
+                    need.reason = DecisionReason::LexicalContextUnproved;
                     need.category = "binding_collision";
                     need.message =
                         "path prefix has a local/uncertain competing namespace binding".into();
@@ -1173,6 +1189,7 @@ impl Analyzer<'_> {
             None
         };
         let Some(old) = old else {
+            need.reason = DecisionReason::ExternalOrMissingBinding;
             return false;
         };
         let Some((path, binding)) = self.declaration(&old) else {
@@ -1183,6 +1200,7 @@ impl Analyzer<'_> {
             return true;
         }
         if self.constructor_unknown(&binding, node) {
+            need.reason = DecisionReason::MemberOrConstructorUnproved;
             need.category = "visibility_context";
             need.message =
                 "constructor/field access is not established by top-level visibility evidence"
@@ -1402,7 +1420,26 @@ impl Analyzer<'_> {
             .cloned()
             .or_else(|| self.contributors(&repair.item_ids).into_iter().next())
             .expect("repair has original evidence");
+        let choice_target = self
+            .request
+            .rewrite_overrides
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|c| {
+                c.target == repair.target
+                    && matches!(c.action, crate::move_plan::RewriteAction::Replace)
+            })
+            .then(|| repair.target.clone());
         Need {
+            reason: if category == "visibility_context" {
+                DecisionReason::VisibilityScopeUnproved
+            } else if choice_target.is_some() {
+                DecisionReason::FinalAliasConflict
+            } else {
+                DecisionReason::DestinationBindingConflict
+            },
+            choice_target,
             category,
             path: a.path,
             range: a.range,
@@ -1565,9 +1602,11 @@ impl Analyzer<'_> {
                                     self.controls,
                                 ) != items::LexicalBinding::Absent
                             {
-                                failures.push(Need {category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or uncertain at an anchored access".into(),item_ids:repair.item_ids.clone()});
+                                failures.push(Need {reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or uncertain at an anchored access".into(),item_ids:repair.item_ids.clone()});
                             }
                             let need = Need {
+                                reason: DecisionReason::UnsupportedConstruct,
+                                choice_target: None,
                                 category: "unsupported_dependency_form",
                                 path: reference.path.clone(),
                                 range: reference.range.clone(),
@@ -1712,7 +1751,7 @@ impl Analyzer<'_> {
                 });
         }
         if need.category != "unsupported_dependency_form"
-            && !(need.category == "binding_collision" && need.message.contains("lexical"))
+            && need.reason != DecisionReason::LexicalContextUnproved
         {
             return false;
         }
@@ -1750,6 +1789,7 @@ impl Analyzer<'_> {
         let name = &source[node.byte_range()];
         let consumer = self.consumer(&need.path, node);
         let Some(module) = self.lexical_module(&need.path, node, false) else {
+            need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "module_context";
             need.message = "written consumer has uncertain lexical module context".into();
             return false;
@@ -1788,6 +1828,7 @@ impl Analyzer<'_> {
                 })
                 .collect();
             if nearest.len() != 1 || nearest[0].conditioned || nearest[0].leaf.public {
+                need.reason = DecisionReason::LexicalContextUnproved;
                 need.category = "binding_collision";
                 return false;
             }
@@ -1805,6 +1846,7 @@ impl Analyzer<'_> {
         match items::lexical_binding(node, source, name, self.controls) {
             items::LexicalBinding::Independent => return true,
             items::LexicalBinding::Uncertain => {
+                need.reason = DecisionReason::LexicalContextUnproved;
                 need.category = "binding_collision";
                 need.message = "containing lexical binding context is uncertain".into();
                 return false;
@@ -1816,11 +1858,17 @@ impl Analyzer<'_> {
             .binding(&need.path, name)
             .filter(|_| self.contexts[&need.path].module_segments == module);
         if imports.len() > 1 || (direct.is_some() && !imports.is_empty()) {
+            need.reason = DecisionReason::LexicalContextUnproved;
             need.category = "binding_collision";
             need.message = "several written declarations/imports compete for this binding".into();
             return false;
         }
         if imports.len() == 1 && (imports[0].conditioned || imports[0].leaf.public) {
+            need.reason = if imports[0].conditioned {
+                DecisionReason::ConditionalOrInheritedContext
+            } else {
+                DecisionReason::PublicPathChange
+            };
             need.category = if imports[0].conditioned {
                 "scope_dependency"
             } else {
@@ -1849,6 +1897,7 @@ impl Analyzer<'_> {
         if let Some((_, binding)) = self.declaration(&old)
             && self.constructor_unknown(&binding, node)
         {
+            need.reason = DecisionReason::MemberOrConstructorUnproved;
             need.category = "visibility_context";
             need.message =
                 "constructor/field access is not established by top-level visibility evidence"
@@ -1881,6 +1930,7 @@ impl Analyzer<'_> {
                     &span(node.start_byte(), node.end_byte()),
                 )],
             ) {
+                need.reason = DecisionReason::DestinationBindingConflict;
                 need.category = "binding_collision";
                 need.message =
                     "required destination import conflicts with a final declaration/import/alias"
