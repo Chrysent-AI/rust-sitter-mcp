@@ -10,7 +10,7 @@ cd rust-sitter-mcp
 make install    # gate tools + git hooks + verification + build + install
 ```
 
-**Always install the Git hooks** (`make install-hooks`, included in `make install`) **before your first commit.** They enforce the project's quality gates locally: staged secret scanning (gitleaks), formatting, clippy with warnings denied, the full test suite, `cargo-deny` (advisories/licenses), `cargo-machete` (unused dependencies), tooling regressions, and the dependency-log rule. CI runs the same core checks on Linux (amd64 + arm64) for every PR; a PR whose commits skipped the local gates will fail review and CI.
+**Always install the Git hooks** (`make install-hooks`, included in `make install`) **before your first commit.** They enforce the project's quality gates locally: staged secret scanning (gitleaks), formatting, clippy with warnings denied, the full test suite, `cargo-deny` (advisories/licenses), `cargo-machete` (unused dependencies), tooling regressions, and the dependency-log rule. CI runs the core gates (fmt, clippy, tests, deny, machete, tooling fixtures, secret scanning) on Linux (amd64 + arm64) for every PR. Two checks are inherently local — the staged-content secret scan and the dependency-log rule — which is one more reason the hooks matter; a PR whose commits skipped the local gates will fail review.
 
 Do not use `--no-verify` unless a maintainer explicitly asks for it in a specific situation (e.g. a release chore). If a gate fails, fix the cause — the gates are the product's safety story.
 

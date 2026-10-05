@@ -4,7 +4,7 @@ Guidance for all agents (and humans) working in this repository.
 
 ## Git hooks: always install them
 
-After cloning (or if hooks ever seem missing), run `make install-hooks` before your first commit. The tracked hooks in `.githooks/` enforce the project's quality gates on every commit — staged secret scanning, formatting, clippy, tests, dependency policy, and tooling regressions. Commits that bypass or skip the gates (`--no-verify` without maintainer instruction) are not acceptable contributions; CI runs the same checks and will fail the PR.
+After cloning (or if hooks ever seem missing), run `make install-hooks` before your first commit. The tracked hooks in `.githooks/` enforce the project's quality gates on every commit — staged secret scanning, formatting, clippy, tests, dependency policy, and tooling regressions. Commits that bypass or skip the gates (`--no-verify` without maintainer instruction) are not acceptable contributions; CI runs the same core build/test gates (plus secret scanning) and will fail the PR; the staged-content secret scan and the dependency-log rule additionally run in the local hooks.
 
 ## Dependency policy (binding for all work in this repo)
 
