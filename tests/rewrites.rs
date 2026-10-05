@@ -785,6 +785,36 @@ fn category_summaries_coalesce_without_hiding_rejected_needs() {
     );
 }
 #[test]
+fn recovered_consumer_context_cannot_supply_rewrite_proof() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod a;\nmod b;\n");
+    repo.write("cases/layout/a.rs", "pub(crate) fn selected() {}\n");
+    repo.write(
+        "cases/layout/b.rs",
+        "use crate::a::selected\nfn caller() { selected(); }\n",
+    );
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/a.rs","pub(crate) fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+    );
+    withheld(&result);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["category"] == "module_context"
+                && d["anchors"][0]["path"] == "cases/layout/b.rs")
+    );
+    assert!(
+        !result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["target"]["anchor"]["path"] == "cases/layout/b.rs")
+    );
+}
+#[test]
 fn private_remaining_caller_vertical_slice() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\n");

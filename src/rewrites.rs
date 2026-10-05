@@ -232,6 +232,9 @@ impl Analyzer<'_> {
         } else {
             self.contexts.get(path)?
         };
+        if !context.unresolved.is_empty() {
+            return None;
+        }
         let mut module = context.module_segments.clone();
         let mut inline = Vec::new();
         let mut parent = node.parent();
