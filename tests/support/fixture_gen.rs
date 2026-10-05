@@ -62,6 +62,10 @@ impl Fixture {
         )
         .unwrap();
         repo.git(&["init", "--quiet", "--template=", "--initial-branch=main"]);
+        // Keep background maintenance out of read-only observations: transient git
+        // locks (objects/maintenance.lock) would otherwise appear as writes.
+        repo.git(&["config", "gc.auto", "0"]);
+        repo.git(&["config", "maintenance.auto", "false"]);
         git(
             &repo.0.join("cases/paths/nested"),
             &["init", "--quiet", "--template=", "--initial-branch=main"],
