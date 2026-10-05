@@ -117,7 +117,7 @@ Overlapping/nested edits, pre-existing ERROR/MISSING anywhere in a selected file
 
 ## Whole-item relocation (`move_item`)
 
-`move_item` is a read-only, simultaneous plan for **dependency-free whole written top-level items**. It does not repair imports, paths, visibility or public API exposure. A needed repair or uncertain affected context blocks the entire batch; a successful syntax check is not compilation or semantic equivalence.
+`move_item` is a read-only, simultaneous plan for whole written top-level items, with **itemized import, path and visibility repairs** when ordinary module and written-binding evidence is unique. It does not infer types, expand macros, repair public API exposure or apply its plan. A required unsupported/uncertain dependency blocks the entire batch; a successful syntax check is not compilation or semantic equivalence.
 
 For these exact initial files:
 
@@ -156,7 +156,7 @@ Functions, structs, enums, unions, traits, whole impls (including anonymous impl
 
 A new destination must be an absent literal `.rs` sibling of every assigned source, in an existing directory. Its basename is an ASCII identifier, not `_`, `mod`, a raw identifier, or any Rust strict/reserved/contextual keyword (including `gen`, `raw`, `safe`, `union` and `macro_rules`). No directory creation or same-file reordering is supported. Symlinks, hard exclusions, nested repositories, ignores, caller filters, existing entries, case-folded aliases, competing `name/mod.rs` layouts and declaration conflicts fail closed. Use an admitted existing directory in `paths`, not an absent path.
 
-Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching unconditioned declaration is reused without a parent edit; reused restricted visibility or a public exposure requiring a decision blocks rather than being repaired. Incompatible layouts cannot be acknowledged away.
+Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching unconditioned declaration is reused without a parent edit unless a necessary visibility repair is separately linked. Relative/re-scoped restrictions, unverified access and public exposure requiring an API decision remain blockers. Incompatible layouts cannot be acknowledged away.
 
 ### Trivia, synthesis and replay
 
@@ -164,13 +164,44 @@ Moves carry internal bytes, associated outer attributes/docs, contiguous owned l
 
 `trivia_overrides` use `{trivia:SourceAnchor,disposition:"keep_in_place"|"carry_with_item",target_item?:SourceAnchor}`. Carry requires a fully anchored selected target and ordinary ambiguous trivia relevant to a selected source item; a different selected file may supply that target. Keep forbids a target. Unknown/stale/unrelated/duplicate anchors fail. Protected/owned/internal trivia cannot be independently detached, retargeted or discarded; unsafe choices withhold all artifacts.
 
-Every synthesized module declaration and separator is an itemized `rewrites[]` record with exact before/after bytes, syntactic confidence, contributing items and precise edit/create-content linkage. Boundary separators use nearest LF/CRLF without changing copied bytes. Separator targets expose `boundary_role:"before_payload"|"after_payload"`; their optional `binding` is an opaque original-run/declaration/insertion boundary identity, not a Rust binding. Fragmented runs have distinct identities. Replay the **entire published `target`**, not the display rewrite ID. Entries in `rewrite_overrides` are `{target:<published object>,action:"accept_default"|"retain"|"replace",replacement_text?:string}`. Only replace accepts text (≤64 KiB). Supported alternatives at this stage are whitespace separators containing a safe newline, or the same private ordinary declaration; no code/header/API injection is accepted. Retaining required synthesis leaves its unresolved need visible and blocks. Every choice is reparsed and attachment/byte safety is rechecked. Unknown, stale, duplicate or conflicting targets fail; no server-side plan handle is required.
+Every path/use change, import insertion or leaf extraction, visibility repair, synthesized module declaration and separator is an itemized `rewrites[]` record with exact before/after bytes, syntactic confidence, contributing items and precise edit/create-content linkage. Boundary separators use nearest LF/CRLF without changing copied bytes. Separator targets expose `boundary_role:"before_payload"|"after_payload"`; their optional `binding` is an opaque original-run/declaration/insertion boundary identity, not a Rust binding. Fragmented runs have distinct identities. Replay the **entire published `target`**, not the display rewrite ID. Entries in `rewrite_overrides` are `{target:<published object>,action:"accept_default"|"retain"|"replace",replacement_text?:string}`. Only replace accepts text (≤64 KiB). Supported alternatives are complete simple paths to the same evidenced final target, explicit private non-glob imports (including evidenced alias/reference repairs), private/`pub(crate)` visibility with access rechecked, safe newline separators, or the unchanged ordinary module declaration. A synthesized binding can also be replaced by a supported explicit path at its anchored written references. No arbitrary code, comments, header, wildcard, public API shim or new `pub` exposure may be injected. Source `retain` preserves the exact original span; synthesis `retain` emits no bytes. Rejecting a required repair leaves a linked unresolved binding/access/declaration decision and blocks every artifact. Every choice is reparsed and attachment/byte safety is rechecked. Unknown, stale, duplicate or conflicting targets fail; no server-side plan handle is required.
+
+### Written-binding repairs: repaired versus blocked
+
+Defaults use complete CST paths and use leaves, not equal-looking text in comments, strings or token trees. Explicit aliases survive; grouped imports use an unchanged prefix, a shared prefix edit, or comment-free leaf extraction with unrelated leaves/trivia preserved. Local and inline-module import extraction keeps the original binding scope. Only necessary imports are synthesized; equivalent destination bindings are reused and shared needs are deduplicated. Items moving together do not create artificial cross-module imports or visibility changes.
+
+Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Relevant unsupported patterns or competing namespace bindings remain anchored uncertainty. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports.
+
+Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged absolute ancestor restrictions survive. Only a proven insufficient access receives `pub(crate)`. Relative restrictions whose scope changes, private fields/tuple constructors, members, associated/type-directed references, chained re-exports, relevant globs/macros, conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro is not by itself a veto.
+
+Each alternative is checked against the same target and final binding/access constraints before assembly; newly colliding aliases block. Caller-authored bytes and associated reference repairs remain `origin:"caller_override"`, never compiler-verified. Always echo a complete published target: synthesized import `binding` identities can include a scope anchor, and separator identities include their boundary role. Neither display IDs nor a cached server plan authorize a choice.
+
+For an independent example with exactly `mod source;\n` in `src/lib.rs` and these source bytes:
+
+```rust
+fn private() {}
+fn caller() { private(); }
+```
+
+Request the move against that unchanged fixture:
+
+```json
+{"repo_path":"/absolute/project","crate_root":"src/lib.rs","paths":["src"],"moves":[{"item":{"path":"src/source.rs","range":{"start_byte":0,"end_byte":15},"expected_text":"fn private() {}"},"destination":{"kind":"new_sibling","path":"src/moved.rs","parent_path":"src/lib.rs"}}]}
+```
+
+The default plan carries the function, widens it only for the remaining cross-module caller, adds `use crate::moved::private;` in the source and links a private root `mod moved;`. Review each repair and its artifact link. To choose an alias, repeat the **same move request** and add an override whose target is the source import record's published target, for example:
+
+```json
+{"target":{"kind":"synthesis","path":"src/source.rs","slot":"import","items":[{"path":"src/source.rs","range":{"start_byte":0,"end_byte":15},"expected_text":"fn private() {}"}],"boundary_role":null,"parent_path":null,"binding":"private"},"action":"replace","replacement_text":"use super::moved::private as retained;"}
+```
+
+Place that object in `rewrite_overrides:[…]`, not in a separate apply call. The plan rewrites the necessary anchored bare caller to `retained()` and labels the authored import/reference bytes. Alternatively, choose `action:"retain"` (with no replacement text) on a required repair to inspect its unresolved need: `applicable:false`, with edits, creations and patch all null. Do not apply a preview or an older applicable batch to stand in for that rejected choice.
 
 ### Complete artifacts and typed failures
 
 `plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
 
-Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. The optional declaration-visibility rewrite link is absent in dependency-free plans. Source files remain present even when emptied.
+Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. `declaration_visibility_rewrite_id`, when present, resolves to the separately audited required visibility repair on either a synthesized or reused declaration. Root-private modules ordinarily already admit descendant consumers and are not blanket-widened. Source files remain present even when emptied.
 
 Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
 

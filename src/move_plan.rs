@@ -988,6 +988,7 @@ fn build(
         &new_contexts,
         needs,
         (deadline, cancelled),
+        &mut result.counts.reference_candidates,
     )?;
     result.account(analysis.descriptor_bytes)?;
     for need in analysis.needs {
@@ -1704,7 +1705,16 @@ fn assemble(
     }
     let mut imports: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
     for (index, (repair, _, _)) in authored.iter().enumerate() {
-        if repair.kind == "import_insert" {
+        if repair.kind == "import_insert"
+            && !(repair.import_scope.is_some()
+                && selected.iter().any(|s| {
+                    s.runs.iter().any(|run| {
+                        run.path == repair.path
+                            && run.range.start_byte <= repair.range.start_byte
+                            && run.range.end_byte >= repair.range.end_byte
+                    })
+                }))
+        {
             imports
                 .entry((repair.path.clone(), repair.range.start_byte))
                 .or_default()
@@ -1767,8 +1777,9 @@ fn assemble(
                 .filter(|(_, s)| repair.item_ids.contains(&s.item.id))
                 .map(|(i, _)| i)
                 .collect();
-            if (!insertion.text.is_empty() && !insertion.text.ends_with('\n'))
-                || (insertion.text.is_empty() && at > 0 && !original[..at].ends_with('\n'))
+            if !text.is_empty()
+                && ((!insertion.text.is_empty() && !insertion.text.ends_with('\n'))
+                    || (insertion.text.is_empty() && at > 0 && !original[..at].ends_with('\n')))
             {
                 add_separator(
                     request,
@@ -1891,7 +1902,7 @@ fn assemble(
                 let mut internal: Vec<_> = authored
                     .iter()
                     .filter(|(r, _, _)| {
-                        r.kind != "import_insert"
+                        (r.kind != "import_insert" || r.import_scope.is_some())
                             && r.path == run.path
                             && r.range.start_byte >= run.range.start_byte
                             && r.range.end_byte <= run.range.end_byte
@@ -1899,6 +1910,7 @@ fn assemble(
                     .collect();
                 internal.sort_by_key(|(r, _, _)| r.range.clone());
                 for (repair, id, text) in internal {
+                    items::check(deadline, cancelled)?;
                     copy_run(
                         &mut insertion,
                         files,
@@ -1906,17 +1918,56 @@ fn assemble(
                         cursor,
                         repair.range.start_byte,
                     );
+                    let local_eol =
+                        if repair.kind == "import_insert" && insertion.text.contains('\n') {
+                            ending(&insertion.text, insertion.text.len())
+                        } else {
+                            eol
+                        };
+                    if repair.kind == "import_insert"
+                        && !text.is_empty()
+                        && !insertion.text.ends_with('\n')
+                    {
+                        add_separator(
+                            request,
+                            &mut used,
+                            result,
+                            &mut insertion,
+                            &[index],
+                            selected,
+                            (
+                                local_eol,
+                                "before_payload",
+                                format!("local-import:{}:{}", repair.path, repair.range.start_byte),
+                            ),
+                        )?;
+                    }
                     let start = insertion.text.len();
                     insertion.text.push_str(text);
                     insertion
                         .rewrites
                         .push((id.clone(), range(start, insertion.text.len())));
+                    if repair.kind == "import_insert" && !text.is_empty() {
+                        add_separator(
+                            request,
+                            &mut used,
+                            result,
+                            &mut insertion,
+                            &[index],
+                            selected,
+                            (
+                                local_eol,
+                                "after_payload",
+                                format!("local-import:{}:{}", repair.path, repair.range.start_byte),
+                            ),
+                        )?;
+                    }
                     cursor = repair.range.end_byte;
                 }
                 copy_run(&mut insertion, files, &run.path, cursor, run.range.end_byte);
             }
         }
-        if at < original.len() && !insertion.text.ends_with('\n') {
+        if at < original.len() && !insertion.text.is_empty() && !insertion.text.ends_with('\n') {
             add_separator(
                 request,
                 &mut used,

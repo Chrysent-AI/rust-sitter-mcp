@@ -340,6 +340,85 @@ fn stdio_move_existing_synthesis_reuse_and_batch() {
 }
 
 #[test]
+fn stdio_rewrite_smoke_with_choices_and_grouped_imports() {
+    let repo = Fixture::generate();
+    let before = observe(&repo.0);
+    let mut client = Client::new();
+    let private = "fn private() -> u8 { helper() }";
+    let args = json!({"repo_path":repo.0,"crate_root":"src/lib.rs","paths":["src"],"moves":[{"item":move_artifacts::anchor(&repo,"src/rewrite.rs",private),"destination":{"kind":"new_sibling","path":"src/moved_private.rs","parent_path":"src/lib.rs"}}]});
+    let default = client.call("move_item", args.clone());
+    let copy = move_artifacts::apply(&repo, &default);
+    cargo_check(&copy);
+    assert!(
+        fs::read_to_string(copy.0.join("src/moved_private.rs"))
+            .unwrap()
+            .contains("pub(crate) fn private")
+    );
+    for kind in ["import_insert", "path", "visibility"] {
+        assert!(
+            default["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == kind)
+        );
+    }
+    let repair = default["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "path")
+        .unwrap();
+    let mut rejected = args.clone();
+    rejected["rewrite_overrides"] = json!([{"target":repair["target"],"action":"retain"}]);
+    let blocked = client.call("move_item", rejected);
+    assert_eq!(blocked["plan"]["applicable"], false);
+    for field in ["edits", "created_files", "patch"] {
+        assert!(blocked["plan"][field].is_null());
+    }
+    assert!(
+        blocked["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["selected_choice"] == "retain" && d["blocks_applicability"] == true)
+    );
+    let import = default["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "import_insert" && r["target"]["path"] == "src/moved_private.rs")
+        .unwrap();
+    let mut alternative = args;
+    alternative["rewrite_overrides"] = json!([{"target":import["target"],"action":"replace","replacement_text":"use super::rewrite::helper as dependency;"}]);
+    let chosen = client.call("move_item", alternative.clone());
+    cargo_check(&move_artifacts::apply(&repo, &chosen));
+    assert_eq!(
+        chosen["plan"],
+        client.call("move_item", alternative)["plan"]
+    );
+    assert!(
+        chosen["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["after_text"] == "dependency" && r["origin"] == "caller_override")
+    );
+    let grouped = client.call("move_item", json!({"repo_path":repo.0,"crate_root":"src/lib.rs","paths":["src"],"moves":[{"item":move_artifacts::anchor(&repo,"src/inventory.rs","pub const DEFAULT: u8 = 1;"),"destination":{"kind":"new_sibling","path":"src/moved_constant.rs","parent_path":"src/lib.rs"}}]}));
+    cargo_check(&move_artifacts::apply(&repo, &grouped));
+    assert!(
+        grouped["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "import_leaf_extract")
+    );
+    assert_eq!(observe(&repo.0), before);
+    eprintln!(
+        "rewrite smoke: private remaining caller, inline consumer, needed import/visibility, alias alternative, grouped extraction, reject-all, Git/JSON/modes, test-only cargo checks and read-only observations passed"
+    );
+}
+#[test]
 #[ignore = "release-build ten-run move workload; not part of the routine gate"]
 #[allow(clippy::assertions_on_constants)] // Refuse debug-build timing evidence at runtime.
 fn release_move_workload_ten_runs() {

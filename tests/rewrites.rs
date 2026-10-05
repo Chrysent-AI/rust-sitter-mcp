@@ -314,7 +314,7 @@ fn supported_choices_preserve_targets_provenance_and_recheck_aliases() {
     repo.write("cases/layout/lib.rs", "mod source;\n");
     repo.write(
         "cases/layout/source.rs",
-        "fn selected() {}\nfn caller() { selected(); self::selected(); }\nfn collision() {}\n",
+        "fn selected() {}\nfn caller() { self::selected(); selected(); }\nfn collision() {}\n",
     );
     let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]});
     let default = run(&repo, args.clone());
@@ -344,6 +344,20 @@ fn supported_choices_preserve_targets_provenance_and_recheck_aliases() {
         assert_eq!(result["plan"], run(&repo, choice)["plan"]);
     }
     let path = rewrites.iter().find(|r| r["kind"] == "path").unwrap();
+    let mut aliases = args.clone();
+    aliases["rewrite_overrides"] = json!([{"target":path["target"],"action":"replace","replacement_text":"chosen"},{"target":import["target"],"action":"replace","replacement_text":"use crate::target::selected as chosen;"}]);
+    let chosen = run(&repo, aliases.clone());
+    compile_layout(&apply(&repo, &chosen));
+    let generated = chosen["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "path" && r["before_text"] == "selected")
+        .unwrap();
+    aliases["rewrite_overrides"].as_array_mut().unwrap().push(json!({"target":generated["target"],"action":"replace","replacement_text":"unrelated::injected"}));
+    let invalid = run(&repo, aliases);
+    withheld(&invalid);
+    assert_eq!(invalid["error"]["code"], "INVALID_REWRITE_OVERRIDE");
     let mut choice = args.clone();
     choice["rewrite_overrides"] = json!([{"target":path["target"],"action":"replace","replacement_text":"super::target::selected"}]);
     let result = run(&repo, choice);
@@ -558,6 +572,174 @@ fn stable_closure_locals_and_needed_free_bindings_are_distinguished() {
             .filter(|r| r["kind"] == "import_insert")
             .count(),
         1
+    );
+}
+#[test]
+fn grouped_local_imports_keep_their_binding_scope_after_context_changes() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\n");
+    let selected =
+        "fn selected() {\r\n use self::{helper, companion};\r\n helper(); companion();\r\n}";
+    repo.write(
+        "cases/layout/source.rs",
+        &format!("fn helper() {{}}\nfn companion() {{}}\n{selected}\n"),
+    );
+    let destination = json!({"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"});
+    for together in [false, true] {
+        let mut moves = vec![
+            json!({"item":anchor(&repo,"cases/layout/source.rs",selected),"destination":destination}),
+        ];
+        if together {
+            moves.push(json!({"item":anchor(&repo,"cases/layout/source.rs","fn helper() {}"),"destination":destination}));
+        }
+        let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":moves});
+        let result = run(&repo, args.clone());
+        compile_layout(&apply(&repo, &result));
+        if together {
+            assert!(
+                result["plan"]["rewrites"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| r["kind"] == "separator"
+                        && r["target"]["binding"]
+                            .as_str()
+                            .is_some_and(|b| b.starts_with("local-import:")))
+                    .all(|r| r["after_text"] == "\r\n")
+            );
+            let import = result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["kind"] == "import_insert")
+                .unwrap();
+            let mut choice = args;
+            choice["rewrite_overrides"] = json!([{"target":import["target"],"action":"replace","replacement_text":"use crate::source::companion as preserved;"}]);
+            compile_layout(&apply(&repo, &run(&repo, choice)));
+        }
+    }
+    repo.write("cases/layout/lib.rs", "mod source;\nmod other;\nuse crate::other::selected;\nfn caller() { use crate::source::{selected, retained}; selected(); retained(); }\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "pub(crate) fn selected() {}\npub(crate) fn retained() {}\n",
+    );
+    repo.write("cases/layout/other.rs", "pub(crate) fn selected() {}\n");
+    compile_layout(&repo);
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","pub(crate) fn selected() {}"),"destination":destination}]}),
+    );
+    compile_layout(&apply(&repo, &result));
+}
+#[test]
+fn imported_module_prefixes_and_external_aliases_are_evidenced() {
+    for (source, destination) in [
+        (
+            "use crate::bindings as namespace;\nuse namespace::helper as imported;\nfn selected() { imported(); }\n",
+            "use crate::bindings as existing;\nuse existing::helper as imported;\n",
+        ),
+        (
+            "use core::mem::size_of as imported;\nfn selected() { let _ = imported::<u8>(); }\n",
+            "use core::mem::size_of as imported;\n",
+        ),
+    ] {
+        let repo = Fixture::generate();
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source;\nmod bindings;\nmod destination;\n",
+        );
+        repo.write("cases/layout/bindings.rs", "pub(crate) fn helper() {}\n");
+        repo.write("cases/layout/source.rs", source);
+        repo.write("cases/layout/destination.rs", destination);
+        compile_layout(&repo);
+        let selected = source.lines().last().unwrap();
+        for dest in [
+            json!({"kind":"existing","path":"cases/layout/destination.rs"}),
+            json!({"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}),
+        ] {
+            let result = run(
+                &repo,
+                json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs",selected),"destination":dest}]}),
+            );
+            compile_layout(&apply(&repo, &result));
+        }
+    }
+}
+#[test]
+fn needed_chained_reexports_have_the_exposure_decision() {
+    let repo = Fixture::generate();
+    repo.write(
+        "cases/layout/lib.rs",
+        "mod source;\nmod bindings;\nmod bridge;\n",
+    );
+    repo.write("cases/layout/bindings.rs", "pub(crate) fn helper() {}\n");
+    repo.write(
+        "cases/layout/bridge.rs",
+        "pub(crate) use crate::bindings::helper;\n",
+    );
+    for source in [
+        "use crate::bridge::helper;\nfn selected() { helper(); }\n",
+        "fn selected() { crate::bridge::helper(); }\n",
+    ] {
+        repo.write("cases/layout/source.rs", source);
+        compile_layout(&repo);
+        let result = run(
+            &repo,
+            json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs",source.lines().last().unwrap()),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+        );
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["category"] == "reexport_dependency"
+                    && d["anchors"][0]["path"] == "cases/layout/bridge.rs"),
+            "{result}"
+        );
+    }
+}
+#[test]
+fn conditional_dependencies_and_external_prefix_collisions_are_not_guessed() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "#[cfg(all())] fn helper() {}\nfn selected() { helper(); }\n",
+    );
+    compile_layout(&repo);
+    let destination = json!({"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"});
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn selected() { helper(); }"),"destination":destination}]}),
+    );
+    withheld(&result);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["category"] == "scope_dependency"
+                && d["anchors"][0]["expected_text"] == "#[cfg(all())]")
+    );
+    repo.write("cases/layout/lib.rs", "mod source;\nmod second;\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "use core::mem::size_of;\nfn selected() { let _ = size_of::<u8>(); }\n",
+    );
+    repo.write("cases/layout/second.rs", "struct core;\n");
+    compile_layout(&repo);
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/second.rs","struct core;"),"destination":destination},{"item":anchor(&repo,"cases/layout/source.rs","fn selected() { let _ = size_of::<u8>(); }"),"destination":destination}]}),
+    );
+    withheld(&result);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["category"] == "binding_collision")
     );
 }
 #[test]

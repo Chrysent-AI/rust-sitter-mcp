@@ -23,6 +23,8 @@ pub(crate) struct Repair {
     pub declaration_for: Option<String>,
     pub references: Vec<SourceAnchor>,
     pub caller_override: bool,
+    pub import_module: Option<Vec<String>>,
+    pub import_scope: Option<ByteRange>,
 }
 pub(crate) struct Analysis {
     pub repairs: Vec<Repair>,
@@ -143,6 +145,7 @@ struct Analyzer<'a> {
     repairs: Vec<Repair>,
     imports: Vec<ImportBinding>,
     descriptor_bytes: usize,
+    reference_candidates: &'a mut usize,
     exceeded: bool,
     controls: (Instant, &'a AtomicBool),
 }
@@ -294,6 +297,36 @@ impl Analyzer<'_> {
             .cloned()
             .collect()
     }
+    fn imported_target(&self, binding: &ImportBinding) -> Option<String> {
+        let node = self.parsed[&binding.path]
+            .tree
+            .root_node()
+            .named_descendant_for_byte_range(
+                binding.leaf.declaration.start_byte,
+                binding.leaf.declaration.end_byte,
+            )?;
+        self.resolve_use(&binding.path, &binding.module, node, &binding.leaf.path)
+    }
+    fn missing_target(&self, need: &mut Need, target: &str) -> bool {
+        if let Some(binding) = self.imports.iter().find(|b| {
+            b.leaf.public
+                && b.scope_range.is_none()
+                && self
+                    .contexts
+                    .get(&b.path)
+                    .is_some_and(|c| canonical(c, &b.leaf.binding) == target)
+        }) {
+            need.category = if binding.conditioned {
+                "scope_dependency"
+            } else {
+                "reexport_dependency"
+            };
+            need.path = binding.path.clone();
+            need.range = binding.leaf.declaration.clone();
+            need.message = "needed target is a written re-export/conditional exposure, not a directly evidenced declaration; explicit API/binding decision required".into();
+        }
+        false
+    }
     fn binding(&self, path: &str, name: &str) -> Option<Item> {
         let matching: Vec<_> = self
             .parsed
@@ -375,6 +408,37 @@ impl Analyzer<'_> {
             None,
         )
     }
+    fn visibility_need(
+        &mut self,
+        need: &mut Need,
+        path: &str,
+        item: &Item,
+        using: &[String],
+    ) -> bool {
+        for attribute in &item.attributes {
+            let text =
+                &self.files[path].source[attribute.range.start_byte..attribute.range.end_byte];
+            if !(text.starts_with("#[allow(")
+                || text.starts_with("#[repr(")
+                || matches!(text, "#[inline]" | "#[inline(always)]" | "#[inline(never)]"))
+            {
+                need.category = "scope_dependency";
+                need.path = path.into();
+                need.range = attribute.range.clone();
+                need.message =
+                    "required written binding has conditional/unexamined attribute context".into();
+                return false;
+            }
+        }
+        if self.visibility(path, item, using, &need.item_ids) {
+            return true;
+        }
+        need.category = "visibility_context";
+        need.message =
+            "final access includes an uncertain or insufficient restricted declaration scope"
+                .into();
+        false
+    }
     fn widen(
         &mut self,
         path: &str,
@@ -434,6 +498,8 @@ impl Analyzer<'_> {
                 declaration_for,
                 references: Vec::new(),
                 caller_override: false,
+                import_module: None,
+                import_scope: None,
             });
             return true;
         }
@@ -456,7 +522,7 @@ impl Analyzer<'_> {
             item_ids: ids.to_vec(), anchors: item.map(|i| vec![anchor(self.files, path, &i.span.range)]).unwrap_or_default(),
             rationale: "a proven written access is outside the declaration's parent lexical scope and descendants".into(),
             declaration_for,
-            references: Vec::new(), caller_override: false,
+            references: Vec::new(), caller_override: false, import_module: None, import_scope: None,
         });
         true
     }
@@ -485,6 +551,23 @@ impl Analyzer<'_> {
             return false;
         }
         let module = &self.final_contexts[path].module_segments;
+        let prefix = target.split("::").next().unwrap_or("");
+        if !matches!(prefix, "crate" | "self" | "super")
+            && (self.binding(path, prefix).is_some()
+                || !self.imported(path, module, prefix).is_empty()
+                || self
+                    .selected
+                    .iter()
+                    .any(|(_, i, d)| d == path && i.name.as_deref() == Some(prefix))
+                || self.repairs.iter().any(|r| {
+                    r.kind == "import_insert"
+                        && r.path == path
+                        && parsed_import(&r.after, self.controls)
+                            .is_ok_and(|(_, binding)| binding == prefix)
+                }))
+        {
+            return false;
+        }
         let existing: Vec<_> = self
             .imported(path, module, binding)
             .into_iter()
@@ -502,7 +585,7 @@ impl Analyzer<'_> {
                 && !existing[0].conditioned
                 && !existing[0].leaf.public
                 && self
-                    .resolve_in(path, module, &existing[0].leaf.path, false)
+                    .imported_target(&existing[0])
                     .is_some_and(|old| self.mapped(&old) == target);
         }
         if self.repairs.iter().any(|r| r.kind == "import_insert" && r.path == path && matches!(&r.target, RewriteTarget::Synthesis { binding:Some(name), .. } if name == binding) && r.after != import_text(target, binding)) { return false; }
@@ -537,7 +620,7 @@ impl Analyzer<'_> {
         self.add(Repair {
             path: path.into(), range: span(at, at), after: text, kind: "import_insert",
             target: RewriteTarget::Synthesis { path: path.into(), slot: "import".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(binding.into()) },
-            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false,
+            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false, import_module: None, import_scope: None,
         });
         true
     }
@@ -601,7 +684,11 @@ impl Analyzer<'_> {
                     return Some(candidate);
                 }
                 // External imports preserve written spelling; never follow another use binding.
-                if !aliases && imports.is_empty() && !matches!(first.as_str(), "Self") {
+                if !aliases
+                    && imports.is_empty()
+                    && self.binding(path, &first).is_none()
+                    && !matches!(first.as_str(), "Self")
+                {
                     return Some(text.into());
                 }
                 return None;
@@ -638,15 +725,19 @@ impl Analyzer<'_> {
             declaration_for: None,
             references: Vec::new(),
             caller_override: false,
+            import_module: None,
+            import_scope: None,
         });
     }
     fn import_references(
-        &self,
+        &mut self,
         path: &str,
         module: &[String],
         binding: &str,
+        owner: Node<'_>,
     ) -> Option<Vec<SourceAnchor>> {
         let mut references = Vec::new();
+        let mut reference_bytes = 0;
         let source = &self.files[path].source;
         let mut stack = vec![self.parsed[path].tree.root_node()];
         while let Some(node) = stack.pop() {
@@ -671,15 +762,27 @@ impl Analyzer<'_> {
             if matches!(node.kind(), "identifier" | "type_identifier")
                 && source[node.byte_range()] == *binding
                 && items::reference_role(node)
-                && self.consumer(path, node) == path
+                && self.consumer(path, node) == self.consumer(path, owner)
+                && (owner.parent().is_some_and(|p| p.kind() == "source_file")
+                    || owner.parent().is_some_and(|p| {
+                        p.start_byte() <= node.start_byte() && p.end_byte() >= node.end_byte()
+                    }))
                 && self.lexical_module(path, node, false).as_deref() == Some(module)
             {
+                *self.reference_candidates += 1;
+                reference_bytes += path.len() + node.end_byte() - node.start_byte() + 128;
+                if *self.reference_candidates > 100_000
+                    || self.descriptor_bytes + reference_bytes > 128 * 1024 * 1024
+                {
+                    self.exceeded = true;
+                    return None;
+                }
                 if node.parent().is_some_and(|p| {
                     matches!(p.kind(), "scoped_identifier" | "scoped_type_identifier")
                 }) {
                     return None;
                 }
-                match items::lexical_binding(node, source, binding, self.controls) {
+                match items::lexical_with_import_proof(node, source, binding, self.controls) {
                     items::LexicalBinding::Independent => {}
                     items::LexicalBinding::Uncertain => return None,
                     items::LexicalBinding::Absent => references.push(anchor(
@@ -697,6 +800,54 @@ impl Analyzer<'_> {
             }
         }
         Some(references)
+    }
+    fn resolve_use(
+        &self,
+        path: &str,
+        module: &[String],
+        node: Node<'_>,
+        text: &str,
+    ) -> Option<String> {
+        if !simple_path(text) {
+            return None;
+        }
+        let first = text.split("::").next()?;
+        if matches!(first, "crate" | "self" | "super") {
+            return self.resolve_in(path, module, text, false);
+        }
+        let mut aliases = self.scoped_imports(path, module, node, first);
+        if aliases.is_empty() {
+            aliases = self.imported(path, module, first);
+        }
+        if !aliases.is_empty() {
+            if aliases.len() != 1
+                || aliases[0].conditioned
+                || aliases[0].leaf.public
+                || items::lexical_with_import_proof(
+                    node,
+                    &self.files[path].source,
+                    first,
+                    self.controls,
+                ) != items::LexicalBinding::Absent
+            {
+                return None;
+            }
+            let base = self.resolve_in(path, module, &aliases[0].leaf.path, false)?;
+            if !self
+                .contexts
+                .values()
+                .any(|c| canonical(c, "").trim_end_matches("::") == base)
+            {
+                return None;
+            }
+            return Some(format!("{base}{}", text.strip_prefix(first)?));
+        }
+        if items::lexical_binding(node, &self.files[path].source, first, self.controls)
+            != items::LexicalBinding::Absent
+        {
+            return None;
+        }
+        self.resolve_in(path, module, text, false)
     }
     fn use_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
         let source = &self.files[&need.path].source;
@@ -724,11 +875,38 @@ impl Analyzer<'_> {
         }
         let mut mappings = Vec::new();
         for leaf in &leaves {
-            let Some(old) = self.resolve_in(&need.path, &module, &leaf.path, false) else {
+            let Some(old) = self.resolve_use(&need.path, &module, node, &leaf.path) else {
                 return false;
             };
             let new = self.mapped(&old);
             if old != new {
+                let parent = node.parent().expect("use scope");
+                let scope = (parent.kind() == "block")
+                    .then(|| span(parent.start_byte(), parent.end_byte()));
+                if self
+                    .imports
+                    .iter()
+                    .filter(|b| {
+                        b.path == need.path
+                            && b.module == module
+                            && b.scope_range == scope
+                            && b.leaf.binding == leaf.binding
+                    })
+                    .count()
+                    != 1
+                    || (0..parent.named_child_count())
+                        .filter_map(|i| parent.named_child(i as u32))
+                        .any(|n| {
+                            n.child_by_field_name("name")
+                                .is_some_and(|n| source[n.byte_range()] == leaf.binding)
+                        })
+                {
+                    need.category = "binding_collision";
+                    need.message =
+                        "affected import alias has competing written bindings in its lexical scope"
+                            .into();
+                    return false;
+                }
                 let mut stack = vec![self.parsed[&need.path].tree.root_node()];
                 while let Some(candidate) = stack.pop() {
                     if items::check(self.controls.0, self.controls.1).is_err() {
@@ -771,7 +949,7 @@ impl Analyzer<'_> {
         if leaves
             .iter()
             .all(|l| l.prefix_range == leaves[0].prefix_range && !l.prefix.is_empty())
-            && mappings.iter().all(|(a, b)| a != b)
+            && mappings.iter().all(|(a, b)| a != b || module != using)
             && let Some(prefix_range) = &leaves[0].prefix_range
         {
             let new_prefix = mappings[0]
@@ -806,7 +984,7 @@ impl Analyzer<'_> {
                     self.source_repair(need, prefix_range.clone(), replacement, "use_path");
                     for (old, _) in &mappings {
                         if let Some((p, i)) = self.declaration(old)
-                            && !self.visibility(&p, &i, &using, &need.item_ids)
+                            && !self.visibility_need(need, &p, &i, &using)
                         {
                             return false;
                         }
@@ -825,7 +1003,9 @@ impl Analyzer<'_> {
             if leaf.prefix.is_empty() {
                 self.source_repair(need, leaf.path_range.clone(), new.clone(), "use_path");
             } else {
-                let Some(prefix) = self.resolve_in(&need.path, &module, &leaf.prefix, false) else {
+                let Some(prefix) =
+                    self.final_resolve(&self.consumer(&need.path, node), &using, &leaf.prefix)
+                else {
                     return false;
                 };
                 if let Some(relative) = new.strip_prefix(&format!("{prefix}::")) {
@@ -867,24 +1047,33 @@ impl Analyzer<'_> {
                     }
                     self.source_repair(need, removal, String::new(), "import_leaf_extract");
                     let consumer = self.consumer(&need.path, node);
-                    if self.final_contexts[&consumer].module_segments != using {
-                        return false;
-                    }
-                    if !self.import(
+                    let references = self
+                        .import_references(&need.path, &module, &leaf.binding, node)
+                        .unwrap_or_default();
+                    if !node.parent().is_some_and(|p| p.kind() == "source_file") {
+                        let scope = node.parent().expect("use scope");
+                        let repair = Repair { path:need.path.clone(),range:span(node.end_byte(), node.end_byte()),after:import_text(&new, &leaf.binding),kind:"import_insert",target:RewriteTarget::Synthesis {path:consumer.clone(),slot:"import".into(),items:self.contributors(&need.item_ids),boundary_role:None,parent_path:None,binding:Some(format!("{}@{}", leaf.binding, node.start_byte()))},item_ids:need.item_ids.clone(),anchors:vec![anchor(self.files, &need.path, &leaf.leaf_range)],rationale:"extract only the changed leaf into an explicit binding in its original lexical scope".into(),declaration_for:None,references,caller_override:false,import_module:Some(using.clone()),import_scope:Some(span(scope.start_byte(),scope.end_byte())) };
+                        if self.binding_collision(&repair, &leaf.binding, &using) {
+                            need.category = "binding_collision";
+                            need.message =
+                                "extracted leaf conflicts with a surviving lexical binding".into();
+                            return false;
+                        }
+                        self.add(repair);
+                    } else if !self.import(
                         &consumer,
                         &leaf.binding,
                         &new,
                         &need.item_ids,
                         anchor(self.files, &need.path, &leaf.leaf_range),
-                        self.import_references(&need.path, &module, &leaf.binding)
-                            .unwrap_or_default(),
+                        references,
                     ) {
                         return false;
                     }
                 }
             }
             if let Some((p, i)) = self.declaration(&old)
-                && !self.visibility(&p, &i, &using, &need.item_ids)
+                && !self.visibility_need(need, &p, &i, &using)
             {
                 return false;
             }
@@ -984,7 +1173,7 @@ impl Analyzer<'_> {
             return false;
         };
         let Some((path, binding)) = self.declaration(&old) else {
-            return false;
+            return self.missing_target(need, &old);
         };
         let after = self.mapped(&old);
         if after == old && old_module == using {
@@ -1005,7 +1194,7 @@ impl Analyzer<'_> {
                 "path",
             );
         }
-        self.visibility(&path, &binding, &using, &need.item_ids)
+        self.visibility_need(need, &path, &binding, &using)
     }
     fn constructor_unknown(&self, item: &Item, reference: Node<'_>) -> bool {
         if item.kind != "struct_item" {
@@ -1073,6 +1262,135 @@ impl Analyzer<'_> {
             None
         }
     }
+    fn choice_target(&self, repair: &Repair, module: &[String], text: &str) -> Option<String> {
+        if let Some(absolute) = absolute_path(module, text) {
+            return Some(absolute);
+        }
+        if !simple_path(text) {
+            return None;
+        }
+        let first = text.split("::").next()?;
+        let node = self.parsed.get(&repair.path).and_then(|p| {
+            p.tree
+                .root_node()
+                .named_descendant_for_byte_range(repair.range.start_byte, repair.range.end_byte)
+        });
+        let consumer = match &repair.target {
+            RewriteTarget::Synthesis { path, .. } => path.clone(),
+            RewriteTarget::Source { .. } => self.consumer(&repair.path, node?),
+        };
+        if let Some(node) = node
+            && items::lexical_with_import_proof(
+                node,
+                &self.files[&repair.path].source,
+                first,
+                self.controls,
+            ) != items::LexicalBinding::Absent
+        {
+            return None;
+        }
+        let pending: Vec<_> = self
+            .repairs
+            .iter()
+            .filter(|r| {
+                if r.kind != "import_insert" || r.after.is_empty() {
+                    return false;
+                }
+                let RewriteTarget::Synthesis { path, .. } = &r.target else {
+                    return false;
+                };
+                path == &consumer
+                    && r.import_module
+                        .as_deref()
+                        .unwrap_or(&self.final_contexts[path].module_segments)
+                        == module
+                    && r.import_scope.as_ref().is_none_or(|scope| {
+                        r.path == repair.path
+                            && scope.start_byte <= repair.range.start_byte
+                            && scope.end_byte >= repair.range.end_byte
+                    })
+            })
+            .filter_map(|r| parsed_import(&r.after, self.controls).ok())
+            .filter(|(_, binding)| binding == first)
+            .collect();
+        if pending.len() > 1 {
+            return None;
+        }
+        if let Some((path, _)) = pending.first() {
+            let target = self.final_resolve(&consumer, module, path)?;
+            let rest = text.strip_prefix(first)?;
+            if !rest.is_empty()
+                && !self
+                    .final_contexts
+                    .values()
+                    .any(|c| canonical(c, "").trim_end_matches("::") == target)
+            {
+                return None;
+            }
+            return Some(format!("{target}{rest}"));
+        }
+        if let Some(node) = node
+            && let Some(old_module) = self.lexical_module(&repair.path, node, false)
+        {
+            let aliases = self.scoped_imports(&repair.path, &old_module, node, first);
+            if !aliases.is_empty() {
+                if aliases.len() != 1 || aliases[0].conditioned || aliases[0].leaf.public {
+                    return None;
+                }
+                let base = self.imported_target(&aliases[0])?;
+                if !self
+                    .final_contexts
+                    .values()
+                    .any(|c| canonical(c, "").trim_end_matches("::") == base)
+                {
+                    return None;
+                }
+                return Some(format!("{base}{}", text.strip_prefix(first)?));
+            }
+        }
+        self.final_resolve(&consumer, module, text)
+    }
+    fn binding_collision(&self, repair: &Repair, name: &str, module: &[String]) -> bool {
+        if let Some(scope) = &repair.import_scope {
+            let node = self.parsed[&repair.path]
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(scope.start_byte, scope.end_byte)
+                .expect("scope");
+            if (0..node.named_child_count())
+                .filter_map(|i| node.named_child(i as u32))
+                .any(|n| {
+                    n.child_by_field_name("name")
+                        .is_some_and(|n| self.files[&repair.path].source[n.byte_range()] == *name)
+                })
+            {
+                return true;
+            }
+            return self.imports.iter().any(|b| {
+                b.path == repair.path
+                    && b.leaf.binding == name
+                    && (b.scope_range.as_ref() == Some(scope)
+                        || (node.kind() == "declaration_list"
+                            && b.scope_range.is_none()
+                            && b.module == module))
+                    && !self.repairs.iter().any(|r| {
+                        r.kind == "import_leaf_extract"
+                            && r.path == b.path
+                            && r.range.start_byte <= b.leaf.leaf_range.start_byte
+                            && r.range.end_byte >= b.leaf.leaf_range.end_byte
+                    })
+            });
+        }
+        self.parsed.get(&repair.path).is_some_and(|p| {
+            p.items.iter().any(|i| {
+                i.name.as_deref() == Some(name) && self.final_path(&repair.path, i) == repair.path
+            })
+        }) || !self.imported(&repair.path, module, name).is_empty()
+            || self
+                .selected
+                .iter()
+                .any(|(_, i, d)| d == &repair.path && i.name.as_deref() == Some(name))
+    }
     fn repair_need(&self, repair: &Repair, category: &'static str, message: &str) -> Need {
         let a = repair
             .references
@@ -1091,7 +1409,12 @@ impl Analyzer<'_> {
     }
     fn choices(&mut self) -> Result<Vec<Need>, DomainError> {
         let mut failures = Vec::new();
-        for index in 0..self.repairs.len() {
+        // Final aliases must be chosen before any path validates against them, regardless of scan order.
+        self.repairs.sort_by_key(|r| r.kind != "import_insert");
+        let mut cursor = 0;
+        while cursor < self.repairs.len() {
+            let index = cursor;
+            cursor += 1;
             items::check(self.controls.0, self.controls.1)?;
             let repair = self.repairs[index].clone();
             let Some(choice) = self
@@ -1116,21 +1439,27 @@ impl Analyzer<'_> {
                     "replacement exceeds the 64-KiB alternative bound",
                 ));
             }
-            let module = match &repair.target {
-                RewriteTarget::Source { anchor } => {
-                    let node = self.parsed[&anchor.path]
-                        .tree
-                        .root_node()
-                        .named_descendant_for_byte_range(
-                            anchor.range.start_byte,
-                            anchor.range.end_byte,
-                        )
-                        .ok_or_else(|| invalid_choice("no source context for alternative"))?;
-                    self.lexical_module(&anchor.path, node, true)
-                        .ok_or_else(|| invalid_choice("uncertain lexical module for alternative"))?
-                }
-                RewriteTarget::Synthesis { path, .. } => {
-                    self.final_contexts[path].module_segments.clone()
+            let module = if let Some(module) = &repair.import_module {
+                module.clone()
+            } else {
+                match &repair.target {
+                    RewriteTarget::Source { anchor } => {
+                        let node = self.parsed[&anchor.path]
+                            .tree
+                            .root_node()
+                            .named_descendant_for_byte_range(
+                                anchor.range.start_byte,
+                                anchor.range.end_byte,
+                            )
+                            .ok_or_else(|| invalid_choice("no source context for alternative"))?;
+                        self.lexical_module(&anchor.path, node, true)
+                            .ok_or_else(|| {
+                                invalid_choice("uncertain lexical module for alternative")
+                            })?
+                    }
+                    RewriteTarget::Synthesis { path, .. } => {
+                        self.final_contexts[path].module_segments.clone()
+                    }
                 }
             };
             match repair.kind {
@@ -1170,9 +1499,9 @@ impl Analyzer<'_> {
                             format!("{prefix}::{t}")
                         }
                     };
-                    let expected = self.final_resolve(&repair.path, &module, &full(&repair.after));
+                    let expected = self.choice_target(&repair, &module, &full(&repair.after));
                     if expected.is_none()
-                        || self.final_resolve(&repair.path, &module, &full(text)) != expected
+                        || self.choice_target(&repair, &module, &full(text)) != expected
                     {
                         return Err(invalid_choice(
                             "path alternative must preserve the same evidenced final target",
@@ -1197,9 +1526,9 @@ impl Analyzer<'_> {
                     } else {
                         parsed_import(text, self.controls)?
                     };
-                    let expected = self.final_resolve(&repair.path, &module, &expected);
+                    let expected = self.choice_target(&repair, &module, &expected);
                     if expected.is_none()
-                        || self.final_resolve(&repair.path, &module, &alternative) != expected
+                        || self.choice_target(&repair, &module, &alternative) != expected
                     {
                         return Err(invalid_choice(
                             "import/path alternative must preserve the same evidenced final target",
@@ -1212,17 +1541,7 @@ impl Analyzer<'_> {
                             ));
                         }
                         let collision = !new_binding.is_empty()
-                            && (self.parsed.get(&repair.path).is_some_and(|p| {
-                                p.items.iter().any(|i| {
-                                    i.name.as_deref() == Some(&new_binding)
-                                        && self.final_path(&repair.path, i) == repair.path
-                                })
-                            }) || !self
-                                .imported(&repair.path, &module, &new_binding)
-                                .is_empty()
-                                || self.selected.iter().any(|(_, i, d)| {
-                                    d == &repair.path && i.name.as_deref() == Some(&new_binding)
-                                }));
+                            && self.binding_collision(&repair, &new_binding, &module);
                         if collision {
                             failures.push(self.repair_need(&repair, "binding_collision", "caller-selected import alias collides with a final written binding"));
                         }
@@ -1288,9 +1607,42 @@ impl Analyzer<'_> {
             .filter(|r| r.kind == "import_insert" && !r.after.is_empty())
             .collect();
         for (index, left) in imports.iter().enumerate() {
-            let (_, binding) = parsed_import(&left.after, self.controls)?;
+            let (target, binding) = parsed_import(&left.after, self.controls)?;
+            let prefix = target.split("::").next().unwrap_or("");
+            let module = left.import_module.as_deref().unwrap_or(
+                &self.final_contexts[match &left.target {
+                    RewriteTarget::Synthesis { path, .. } => path,
+                    _ => &left.path,
+                }]
+                .module_segments,
+            );
+            if !matches!(prefix, "crate" | "self" | "super")
+                && self.binding_collision(left, prefix, module)
+            {
+                failures.push(self.repair_need(
+                    left,
+                    "binding_collision",
+                    "external import prefix conflicts with a final written binding",
+                ));
+            }
+            for right in &imports {
+                if !matches!(prefix, "crate" | "self" | "super")
+                    && left.path == right.path
+                    && left.import_scope == right.import_scope
+                    && left.import_module == right.import_module
+                    && parsed_import(&right.after, self.controls)?.1 == prefix
+                {
+                    failures.push(self.repair_need(
+                        left,
+                        "binding_collision",
+                        "external import prefix conflicts with a selected alias",
+                    ));
+                }
+            }
             for right in &imports[..index] {
                 if left.path == right.path
+                    && left.import_scope == right.import_scope
+                    && left.import_module == right.import_module
                     && parsed_import(&right.after, self.controls)?.1 == binding
                     && left.after != right.after
                 {
@@ -1436,14 +1788,15 @@ impl Analyzer<'_> {
                 need.category = "binding_collision";
                 return false;
             }
-            let Some(old) = self.resolve_in(&need.path, &module, &nearest[0].leaf.path, false)
-            else {
+            let Some(old) = self.imported_target(nearest[0]) else {
                 return false;
             };
             return if let Some((p, i)) = self.declaration(&old) {
-                self.visibility(&p, &i, &using, &need.item_ids)
+                self.visibility_need(need, &p, &i, &using)
+            } else if old.starts_with("crate::") {
+                self.missing_target(need, &old)
             } else {
-                !old.starts_with("crate::")
+                true
             };
         }
         match items::lexical_binding(node, source, name, self.controls) {
@@ -1480,8 +1833,7 @@ impl Analyzer<'_> {
                 anchor(self.files, &need.path, &binding.span.range),
             )
         } else if imports.len() == 1 && !imports[0].conditioned && !imports[0].leaf.public {
-            let Some(target) = self.resolve_in(&need.path, &module, &imports[0].leaf.path, false)
-            else {
+            let Some(target) = self.imported_target(&imports[0]) else {
                 return false;
             };
             (
@@ -1534,9 +1886,11 @@ impl Analyzer<'_> {
             }
         }
         if let Some((p, i)) = self.declaration(&old) {
-            self.visibility(&p, &i, &using, &need.item_ids)
+            self.visibility_need(need, &p, &i, &using)
+        } else if old.starts_with("crate::") {
+            self.missing_target(need, &old)
         } else {
-            !old.starts_with("crate::")
+            true
         }
     }
 }
@@ -1550,6 +1904,7 @@ pub(crate) fn analyze(
     final_contexts: &BTreeMap<String, ModuleEvidence>,
     needs: Vec<Need>,
     controls: (Instant, &AtomicBool),
+    reference_candidates: &mut usize,
 ) -> Result<Analysis, DomainError> {
     let mut analyzer = Analyzer {
         request,
@@ -1561,6 +1916,7 @@ pub(crate) fn analyze(
         repairs: Vec::new(),
         imports: Vec::new(),
         descriptor_bytes: 0,
+        reference_candidates,
         exceeded: false,
         controls,
     };
@@ -1635,7 +1991,11 @@ pub(crate) fn analyze(
         }
         if analyzer.exceeded {
             return Err(DomainError::new(
-                "analysis_descriptor_bytes",
+                if *analyzer.reference_candidates > 100_000 {
+                    "reference_work_limit"
+                } else {
+                    "analysis_descriptor_bytes"
+                },
                 "rewrite evidence guard reached",
             ));
         }
