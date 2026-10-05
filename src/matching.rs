@@ -306,6 +306,31 @@ impl<'a> Lines<'a> {
             text_omitted: len > text_bytes,
         }
     }
+    pub(crate) fn context(
+        &self,
+        start: usize,
+        end: usize,
+        context: &Context,
+        text_bytes: usize,
+    ) -> ContextLines {
+        let first = self.row(start);
+        let last = self.row(end.saturating_sub(usize::from(end > start)));
+        let physical_lines = self.starts.len() - usize::from(self.source.ends_with('\n'));
+        let before_start = first.saturating_sub(context.before_lines);
+        let after_end = (last + 1 + context.after_lines).min(physical_lines);
+        ContextLines {
+            before: (before_start..first)
+                .map(|row| self.line(row, text_bytes))
+                .collect(),
+            after: (last + 1..after_end)
+                .map(|row| self.line(row, text_bytes))
+                .collect(),
+            before_clipped: context.before_lines - (first - before_start),
+            after_clipped: context.after_lines - after_end.saturating_sub(last + 1),
+            before_omitted: 0,
+            after_omitted: 0,
+        }
+    }
     fn line(&self, row: usize, text_bytes: usize) -> SourceSlice {
         self.slice(
             self.starts[row],

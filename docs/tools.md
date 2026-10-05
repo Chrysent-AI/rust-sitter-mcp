@@ -1,6 +1,6 @@
-# Structural Rust search, replacement and move plans
+# Structural Rust search, move plans and split advice
 
-`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, and explicitly selected `move_item` plans. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
+`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, and advisory-only `suggest_split` inventories/partitions. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
 
 A stdio launch configuration is:
 
@@ -208,6 +208,75 @@ Existing-file edits are sorted by path/start/end, with additive item/rewrite lin
 Common limits/admission/cancellation apply. `max_moves` defaults to 500 (1–5,000) and counts the whole explicit list. Fixed work guards are 100,000 inventory descriptors, 100,000 relevant reference candidates and 128 MiB aggregate analysis descriptors, including conservatively accounted transient binding/evidence records. Effective guards, observed counts and reference coverage are reported; query-state limits do not apply to direct CST analysis. Mandatory anchors/artifacts/audit must fit the complete duplicated wire response. `text_bytes:0` omits descriptive slices, **not** freshness checks or artifact bytes. On overflow, all artifacts are withheld and preview-array omissions are explicit. Calls allocate no search cursor/series.
 
 Definite bad requests use `INVALID_ITEM_SELECTION`, `DUPLICATE_MOVE`, `STALE_SELECTION`, `INVALID_DESTINATION`, `INVALID_NEW_FILE_NAME`, `INVALID_DECLARATION_PARENT`, `DESTINATION_ALREADY_EXISTS`, `MODULE_DECLARATION_CONFLICT`, `STALE_DESTINATION`, `INVALID_MOVE_TRIVIA_OVERRIDE`, `INVALID_REWRITE_OVERRIDE` or `STALE_REWRITE_OVERRIDE`, with actionable input fields. Uncertain identity uses `CRATE_IDENTITY_UNCERTAIN`, not a guessed cross-crate assertion. Dependency decisions distinguish binding, glob, macro, re-export, module, visibility, inherited scope and unsupported-form categories with evidence and narrowing actions. Pre-existing/new syntax recovery, unsafe attachment, overlap, cancellation, work/output limits, source changes or `CREATION_RACE` withhold the entire batch. Final byte/mode/ignore/absence rechecks are observational, not atomic or application-time guarantees.
+
+## Advisory file splitting (`suggest_split`)
+
+```json
+{"repo_path":"/absolute/project","crate_root":"src/lib.rs","source_path":"src/rich.rs","paths":["src"],"limits":{"text_bytes":0}}
+```
+
+This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no cursor, saved plan, execution handle, or implicit selection. Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
+
+The result has `advisory:true`, `source`, `inventory[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
+
+- Inventory is in original source order and includes every significant top-level written unit. Anonymous impl blocks have IDs and written type/optional trait spans in `impl_contexts`; they do not disappear because `name` is null. Outer attributes/docs are associated spans, not extra units. Each unit reports full original coordinates, kind/name, raw visibility, byte/line sizes, syntax flags, unit-kind eligibility/reasons and `signal_ids`.
+- `supported_unit` means the unit kind is supported, **not** that a move is dependency-free or safe. Modules, uses, extern/foreign and macro constructs remain inventoried with context-sensitive reasons and are retained in complete partitions.
+- Unattached scope/prologue/ambiguous trivia has separate descriptors and a `keep_in_place` default. Banner links and `banner_section` signals mean adjacency only, never banner ownership. Internal scopes belong to their whole unit. Item contexts are original neighboring complete lines; the entire-source context has no lines outside the file.
+- Signals expose snake_case/CamelCase word prefixes (≥3 characters, ≥2 names), counted directed bare/simple-path candidates with occurrence spans, banner sections, adjacent shared outer attributes/doc headings and item sizes. `get`, `set`, `new`, duplicate/common names, uncertain lexical bindings, unexpanded macros and type-directed accesses are not strong evidence. Same-spelled recognized locals/parameters/generics are not file-level edges. Inline-module bodies, macro tokens, strings/comments and unrelated qualified suffixes do not supply file-level reference proof. Candidates are **not a resolved call graph**.
+
+### Reading and editing partitions
+
+Each draft has a nonempty retain group and up to two sibling groups. Every inventoried ID appears **exactly once** in each complete draft. A sibling destination supplies a proposed absent path, an evidenced ordinary declaration parent/module chain, and an existing matching declaration descriptor when reused. The server probes the base name then `_2` through `_99`, checking scope admission, ignores, filesystem/case/layout occupancy and declaration/import collisions. It never guesses a parent from the source basename.
+
+The primary proposal seeds clusters from prefixes/sections/outer-text adjacency, joins strongly connected candidate references, and ranks by descending internal reference occurrences, same-prefix members, then section/attribute/doc agreements; earliest original span breaks ties. Other units stay in source, retaining the earliest eligible unit if necessary. A distinct alternative retains all context units and the earliest eligible unit, then chooses the original-order boundary closest to half the remaining bytes (earlier boundary wins ties). Weak cohesion uses that balanced arrangement with explicitly low confidence. Equivalent alternatives are not duplicated.
+
+Group `facts`, rationale and confidence expose integer organization evidence, not a probability of compiler correctness. High confidence requires at least two independent signal families and complete layout/membership; execution risks remain unresolved. Sizes count written item bytes/lines, not a prediction of generated file size. The 64-KiB/256-line group aim is **soft advice**: whole oversized items remain indivisible and get warnings. Cross-group candidate IDs and warnings identify import/path/visibility review needs.
+
+Every `unresolved_decision_ids[]` entry resolves to a same-response `decisions[]` record with anchored display descriptors, evidence, unresolved consequence and next action. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
+
+Empty/singleton/recovered or unsupported-layout files return inventory and an explicit no-draft reason. A work, discovery, membership, freshness or mandatory evidence/output limit gives incomplete advice and withholds **all complete drafts**. Counts distinguish observed inventory/descriptors/candidates from returned items; `counts.omissions` records suppressed arrays and membership/decision links. Dropping only source/context display text preserves complete drafts when full coordinates and required evidence links fit. `span.text:null` is not a shortened `expected_text`: obtain the complete current original bytes before execution. Integrity is input-only (`input_checked`, `input_recovered` or `not_checked`), always `semantic:"not_performed"`.
+
+### Explicit edited-batch flow
+
+1. Inspect the inventory, decisions and one or two drafts; edit/choose/ignore them **outside the server**.
+2. Obtain full current source bytes, select the intended whole-item ranges, and explicitly choose each destination/parent. Retain items by not listing them in `moves`, not by asking the server to execute a draft.
+3. Submit one `move_item` batch. Optional `draft_provenance` only echoes display metadata: it never authorizes membership or bypasses stale-anchor checks.
+4. Require `plan.applicable:true`, review all rewrites/trivia decisions and complete edits/creations/patch, then externally recheck/apply against unchanged bases. No server-side application occurs.
+
+For the shipped rich fixture, the following **caller-side** Python builds a real edited batch from an advice JSON response saved outside the source tree. It changes both memberships and filenames: `beta_write` joins the alpha functions, `beta_flush` goes separately, and other units remain in source. Run with the fixture root and the advice file as arguments; stdout is the explicit `move_item` arguments, not an execution handle:
+
+```python
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+advice = json.loads(pathlib.Path(sys.argv[2]).read_text())
+assert advice["advisory"] and advice["draft_eligibility"]["state"] == "drafted"
+source = (root / advice["source"]["path"]).read_bytes()
+by_name = {item["name"]: item for item in advice["inventory"] if item["name"]}
+moves = []
+for name, path in [("alpha_read", "src/edited_a.rs"),
+                   ("alpha_parse", "src/edited_a.rs"),
+                   ("beta_write", "src/edited_a.rs"),
+                   ("beta_flush", "src/edited_b.rs")]:
+    item = by_name[name]
+    r = item["span"]["range"]
+    moves.append({"item": {"path": item["path"], "range": r,
+                           "expected_text": source[r["start_byte"]:r["end_byte"]].decode("utf-8")},
+                  "destination": {"kind": "new_sibling", "path": path,
+                                  "parent_path": "src/lib.rs"}})
+print(json.dumps({"repo_path": str(root), "crate_root": "src/lib.rs",
+                  "paths": ["src"], "moves": moves,
+                  "draft_provenance": {"draft_id": advice["drafts"][0]["id"],
+                                       "source_snapshot_id": advice["snapshot_id"]}}))
+```
+
+This example assumes unchanged advice bytes; `move_item` still performs its own full-anchor checks. The runnable end-to-end demonstration generates the fixture, calls real stdio advice, edits those memberships, requests the batch, externally checks/applies the patch, independently reconstructs JSON bytes/modes and cargo-checks a disposable copy:
+
+```sh
+cargo test --locked --offline --test fixture_smoke stdio_advice_and_caller_edited_split -- --nocapture
+cargo test --locked --offline --test suggest_split
+```
+
+Cargo compilation here is **test-only**, not a server semantic check. Advice-only ten-run workload methodology and platform qualifications are in [benchmark-advice.md](benchmark-advice.md).
 
 ## Scope
 

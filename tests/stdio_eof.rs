@@ -75,6 +75,10 @@ fn eof_cancels_active_work_and_reaps_owned_git_child() {
 fn move_shares_admission_and_eof_reaps_owned_git_child() {
     eof_flow("move_item");
 }
+#[test]
+fn advice_shares_admission_and_eof_reaps_owned_git_child() {
+    eof_flow("suggest_split");
+}
 fn eof_flow(tool: &str) {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -136,7 +140,9 @@ fn eof_flow(tool: &str) {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"})
     )
     .unwrap();
-    let args = if tool == "move_item" {
+    let args = if tool == "suggest_split" {
+        json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs","limits":{"time_budget_ms":300000}})
+    } else if tool == "move_item" {
         json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","moves":[],"limits":{"time_budget_ms":300000}})
     } else {
         json!({"repo_path":fixture.0,"query":"(call_expression) @match","page_size":1,"limits":{"time_budget_ms":300000}})
@@ -156,7 +162,7 @@ fn eof_flow(tool: &str) {
         assert!(Instant::now() < deadline, "did not observe an owned hasher");
         thread::sleep(Duration::from_millis(10));
     };
-    if tool == "move_item" {
+    if tool == "move_item" || tool == "suggest_split" {
         // Freeze only this test's hasher so the competing request observes a held permit.
         assert!(
             Command::new("kill")
@@ -199,15 +205,21 @@ fn eof_flow(tool: &str) {
         "server process still exists"
     );
     assert!(
-        log.contains(if tool == "move_item" {
-            "move plan finished"
-        } else {
-            "search finished"
+        log.contains(match tool {
+            "move_item" => "move plan finished",
+            "suggest_split" => "split advice finished",
+            _ => "search finished",
         }) && log.contains("CANCELLED"),
         "EOF did not cancel active engine work: {log}"
     );
     for response in responses {
         if response["id"] == 2 {
+            if tool == "suggest_split" {
+                let advice = &response["result"]["structuredContent"];
+                assert_eq!(advice["integrity"]["semantic"], "not_performed");
+                assert!(advice["drafts"].as_array().unwrap().is_empty());
+                assert!(advice.get("plan").is_none() && advice.get("patch").is_none());
+            }
             if tool == "move_item" {
                 let plan = &response["result"]["structuredContent"]["plan"];
                 assert_eq!(plan["integrity"]["semantic"], "not_performed");

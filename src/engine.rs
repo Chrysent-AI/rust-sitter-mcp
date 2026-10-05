@@ -309,6 +309,13 @@ impl Engine {
     ) -> crate::move_plan::MoveEnvelope {
         crate::move_plan::run(&self.launch, request, cancelled)
     }
+    pub fn suggest_split(
+        &self,
+        request: crate::split::SuggestSplitRequest,
+        cancelled: &AtomicBool,
+    ) -> crate::split::SuggestSplitEnvelope {
+        crate::split::run(&self.launch, request, cancelled)
+    }
     pub fn launch_directory(&self) -> &Path {
         &self.launch
     }
