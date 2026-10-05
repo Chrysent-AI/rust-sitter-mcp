@@ -371,37 +371,9 @@ fn lexical_context(
             }
         }
         if parent.kind() == "block" {
-            // Let bindings begin after their initializers. Later and nested patterns do not compete.
-            for i in (0..parent.named_child_count()).rev() {
-                check(controls.0, controls.1)?;
-                let statement = parent.named_child(i as u32).expect("statement");
-                if statement.end_byte() > child.start_byte() {
-                    continue;
-                }
-                if statement.kind() == "let_declaration"
-                    && let Some(pattern) = statement.child_by_field_name("pattern")
-                    && let Some(proof) =
-                        assess_pattern(path, statement, pattern, source, name, true, controls)?
-                {
-                    return Ok(proof);
-                }
-                let macro_statement = statement.kind() == "macro_invocation"
-                    || (statement.kind() == "expression_statement"
-                        && statement
-                            .named_child(0)
-                            .is_some_and(|n| n.kind() == "macro_invocation"));
-                if macro_statement {
-                    return Ok(uncertain(
-                        path,
-                        name,
-                        parent,
-                        LexicalReason::UnsupportedPattern,
-                        Some(statement),
-                    ));
-                }
-            }
-            // Block items/imports are hoisted. A later statement macro can also
-            // introduce an item, even when no matching spelling is written in its tokens.
+            // Statement macros can introduce hoisted items as well as lets. A
+            // definite written local cannot prove their expansion disjoint,
+            // regardless of the macro's source order in this same block.
             for i in 0..parent.named_child_count() {
                 check(controls.0, controls.1)?;
                 let statement = parent.named_child(i as u32).expect("statement");
@@ -419,6 +391,26 @@ fn lexical_context(
                         Some(statement),
                     ));
                 }
+            }
+            // Let bindings begin after their initializers. Later and nested patterns do not compete.
+            for i in (0..parent.named_child_count()).rev() {
+                check(controls.0, controls.1)?;
+                let statement = parent.named_child(i as u32).expect("statement");
+                if statement.end_byte() > child.start_byte() {
+                    continue;
+                }
+                if statement.kind() == "let_declaration"
+                    && let Some(pattern) = statement.child_by_field_name("pattern")
+                    && let Some(proof) =
+                        assess_pattern(path, statement, pattern, source, name, true, controls)?
+                {
+                    return Ok(proof);
+                }
+            }
+            // Block items and imports are hoisted, unlike let bindings.
+            for i in 0..parent.named_child_count() {
+                check(controls.0, controls.1)?;
+                let statement = parent.named_child(i as u32).expect("statement");
                 if statement.kind() == "use_declaration" {
                     let relevant = use_facts(statement, source, controls)?.0
                         || (!proven_import

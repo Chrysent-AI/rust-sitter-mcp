@@ -152,6 +152,14 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::UnsupportedPattern,
         ),
         (
+            "fn f() { m!(); let selected = value; selected(); }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { let selected = value; selected(); m!(); }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
             "fn f() { #[cfg(any())] let other = value; selected(); }",
             LexicalReason::ConditionalLocalContext,
         ),
