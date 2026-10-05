@@ -89,8 +89,24 @@ fn compile(repo: &Fixture) {
 }
 #[test]
 fn sanitizer_replica_exposes_candidate_and_retains_true_blockers() {
-    let source = include_str!("fixtures/spawner_precision/sanitizers.rs");
-    let repo = spawner_precision::load(source);
+    let source = format!(
+        "{}\n\n{}\n",
+        include_str!("fixtures/spawner_precision/sanitizers.rs"),
+        r#"fn compact_transcript_event(event_type: Option<&str>) {
+    match event_type {
+        Some(event_type @ ("message_start" | "message_end" | "turn_end")) => {
+            compact_transcript_message_field(obj, "message");
+            if event_type == "message_end" {
+                for key in ["stopReason", "stop_reason"] {
+                    sanitize_transcript_field(obj, key, sanitized_transcript_stop_reason);
+                }
+            }
+        }
+        _ => {}
+    }
+}"#
+    );
+    let repo = spawner_precision::load(&source);
     let mut args = request(&repo, "fn sanitized_transcript_stop_reason");
     // Use the complete original written functions, not reconstructed source.
     args["moves"] = json!(["sanitized_transcript_stop_reason", "sanitized_transcript_error", "sanitized_transcript_terminal_value"].map(|name| {
@@ -131,30 +147,33 @@ fn sanitizer_replica_exposes_candidate_and_retains_true_blockers() {
     }
     println!("sanitizer replica remaining typed blockers: {reasons:?}; categories: {categories:?}");
     let advice = advice(&repo);
-    let at = source
-        .find("sanitized_transcript_stop_reason(value)")
-        .unwrap();
-    assert!(
-        !advice["decisions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|d| d["reason"] == "lexical_context_unproved"
-                && d["anchors"][0]["span"]["range"]["start_byte"] == at)
-    );
-    assert!(
-        advice["signals"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["kind"] == "reference_candidate"
-                && s["evidence"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|e| e["range"]["start_byte"] == at)),
-        "{advice}"
-    );
+    for reference in [
+        "sanitized_transcript_stop_reason(value)",
+        "sanitized_transcript_stop_reason);",
+    ] {
+        let at = source.find(reference).unwrap();
+        assert!(
+            !advice["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "lexical_context_unproved"
+                    && d["anchors"][0]["span"]["range"]["start_byte"] == at)
+        );
+        assert!(
+            advice["signals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["kind"] == "reference_candidate"
+                    && s["evidence"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|e| e["range"]["start_byte"] == at)),
+            "{advice}"
+        );
+    }
 }
 #[test]
 fn admitted_patterns_repair_only_free_accesses_and_compile_after_application() {
@@ -208,6 +227,54 @@ fn admitted_patterns_repair_only_free_accesses_and_compile_after_application() {
     }
 }
 #[test]
+fn captured_literal_alternatives_preserve_local_and_free_accesses() {
+    let moved = "fn selected() -> &'static str { \"message_end\" }";
+    for (arm, expected_arm) in [
+        (
+            "Some(event_type @ (\"message_start\" | \"message_end\" | \"turn_end\")) if selected() == event_type => { let _ = selected(); }",
+            "Some(event_type @ (\"message_start\" | \"message_end\" | \"turn_end\")) if relocated() == event_type => { let _ = relocated(); }",
+        ),
+        (
+            "Some(selected @ (\"message_start\" | \"message_end\" | \"turn_end\")) if selected == \"message_end\" => { let _ = selected; }",
+            "Some(selected @ (\"message_start\" | \"message_end\" | \"turn_end\")) if selected == \"message_end\" => { let _ = selected; }",
+        ),
+    ] {
+        let source = format!(
+            "{moved}\nfn caller() {{ match Some(selected()) {{ {arm}, _ => {{ let _ = selected(); }} }} }}\nfn free() {{ let _ = selected(); }}\n"
+        );
+        let repo = spawner_precision::load(&source);
+        let mut args = request(&repo, moved);
+        let result = run(&repo, args.clone());
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        assert!(
+            !result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "lexical_context_unproved")
+        );
+        let import = result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "import_insert")
+            .unwrap();
+        args["rewrite_overrides"] = json!([{"target":import["target"],"action":"replace","replacement_text":"use crate::subagent::probe_constants::selected as relocated;"}]);
+        let aliased = run(&repo, args);
+        let copy = move_artifacts::apply(&repo, &aliased);
+        compile(&copy);
+        let after = fs::read_to_string(copy.0.join(SOURCE)).unwrap();
+        assert!(after.contains(expected_arm), "{after}");
+        assert!(after.contains("match Some(relocated())"), "{after}");
+        assert!(after.contains("_ => { let _ = relocated(); }"), "{after}");
+        assert!(
+            after.contains("fn free() { let _ = relocated(); }"),
+            "{after}"
+        );
+    }
+}
+#[test]
 fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
     for (caller, reason) in [
         (
@@ -232,6 +299,30 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
         ),
         (
             "fn caller() { let (mut selected, p!()) = value; selected(); }",
+            "unsupported_pattern",
+        ),
+        (
+            "fn caller() { match value { other @ Some(selected) => selected(), _ => {} } }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller() { match value { selected @ Some(selected) => selected(), _ => {} } }",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "fn caller() { match value { selected @ p!() => selected(), _ => {} } }",
+            "unsupported_pattern",
+        ),
+        (
+            "fn caller() { match value { other @ (A(mut selected) | B(mut selected)) => selected(), _ => {} } }",
+            "unsupported_pattern",
+        ),
+        (
+            "fn caller() { match value { selected @ 1 | 2 => selected(), _ => {} } }",
+            "unsupported_pattern",
+        ),
+        (
+            "fn caller() { match value { selected @ (1 | 2) if let Some(x) = value && x > 0 => selected(), _ => {} } }",
             "unsupported_pattern",
         ),
         (

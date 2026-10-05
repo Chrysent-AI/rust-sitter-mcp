@@ -38,6 +38,14 @@ fn disjoint_binding_positions_and_scope_boundaries() {
         "fn f() { match values { -1 => selected(), _ => {} } }",
         "fn f() { match values { true => selected(), _ => {} } }",
         "fn f() { match values { r#\"literal\"# => selected(), _ => {} } }",
+        "fn f() { let other @ _ = value; selected(); }",
+        "fn f() { match values { Some(event_type @ (\"message_start\" | \"message_end\" | \"turn_end\")) => selected(), _ => {} } }",
+        "fn f() { match values { other @ (1 | 2 | 3) => selected(), _ => {} } }",
+        "fn f() { match values { | 1 | 2 => selected(), _ => {} } }",
+        "fn f() { match values { other @ (r#\"start\"# | \"stop\") => selected(), _ => {} } }",
+        "fn f() { match values { other @ (1 /* alternate */ | 2) if selected() => {}, _ => {} } }",
+        "fn f() { match selected() { selected @ (1 | 2) => {}, _ => {} } }",
+        "fn f() { match values { selected @ (1 | 2) => {}, _ => selected() } }",
         "fn f() { let (&other, _) = values; selected(); }",
         "fn f() { match selected() { Some(other) => {}, _ => {} } }",
         "fn f() { match values { Some(selected) => {}, _ => selected() } }",
@@ -49,10 +57,12 @@ fn disjoint_binding_positions_and_scope_boundaries() {
         "fn f() { let _ = |(x, y)| selected(); }",
         "fn f() { let _ = async move |x| selected(); }",
     ] {
+        let assessment = assess(source, "selected", false);
         assert_eq!(
-            assess(source, "selected", false).binding,
+            assessment.binding,
             LexicalBinding::Absent,
-            "{source}"
+            "{source}: {:?}",
+            assessment.uncertainty
         );
     }
     // Later/nested let patterns do not affect a preceding sibling occurrence.
@@ -93,6 +103,13 @@ fn forced_and_existing_simple_binders_are_independent() {
         "fn f() { selected(); fn selected() {} }",
         "fn f() { selected(); const selected: usize = 1; }",
         "fn f() { let (mut r#selected,) = value; r#selected(); }",
+        "fn f() { let selected @ _ = value; selected(); }",
+        "fn f() { match value { Some(selected @ (\"start\" | \"stop\")) => selected, _ => {} } }",
+        "fn f() { match value { selected @ (1 | 2) if selected > 0 => selected, _ => {} } }",
+        "fn f() { match value { r#selected @ (1 | 2) => r#selected, _ => {} } }",
+        "fn f() { match value { selected /* capture */ @ (1 | 2) => selected, _ => {} } }",
+        "fn f() { match value { other @ Some(selected @ (1 | 2)) => selected, _ => {} } }",
+        "fn f() { match value { other @ Some(ref selected) => selected(), _ => {} } }",
     ] {
         assert_eq!(
             assess(source, "selected", false).binding,
@@ -114,6 +131,7 @@ fn value_bindings_do_not_prove_type_references() {
         "fn f() { if let Some(ref selected) = value { let _: selected = 2; } }",
         "fn f() { while let Some(mut selected) = value { let _: selected = 2; } }",
         "fn f() { match value { Some(ref selected) => { let _: selected = 2; }, _ => {} } }",
+        "fn f() { match value { selected @ (1 | 2) => { let _: selected = 2; }, _ => {} } }",
         "fn f<const selected: usize>() { let _: selected = 2; }",
         "fn f() { const selected: u8 = 1; let _: selected = 2; }",
         "fn f() { static selected: u8 = 1; let _: selected = 2; }",
@@ -157,8 +175,44 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::UnsupportedPattern,
         ),
         (
-            "fn f() { let x @ _ = value; selected(); }",
+            "fn f() { let x @ p!() = value; selected(); }",
             LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { match value { other @ Some(selected) => selected(), _ => {} } }",
+            LexicalReason::IdentifierPatternBindingOrConstant,
+        ),
+        (
+            "fn f() { match value { selected @ Some(selected) => selected(), _ => {} } }",
+            LexicalReason::IdentifierPatternBindingOrConstant,
+        ),
+        (
+            "fn f() { match value { selected @ p!() => selected(), _ => {} } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f(selected: fn()) { match value { other @ p!() => selected(), _ => {} } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { match value { selected @ 1 | 2 => selected(), _ => {} } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { match value { other @ (\"start\" | selected) => selected(), _ => {} } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { match value { other @ (A(mut selected) | B(mut selected)) => selected(), _ => {} } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { match value { selected @ (1 | 2) if let Some(x) = value && x > 0 => selected(), _ => {} } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f() { match value { #[cfg(any())] selected @ (1 | 2) => selected(), _ => {} } }",
+            LexicalReason::ConditionalLocalContext,
         ),
         (
             "fn f() { match value { const { 1 } => selected(), _ => {} } }",
@@ -236,25 +290,31 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
 }
 #[test]
 fn syntax_recovery_is_not_a_disjointness_proof() {
-    let source = "fn f() { @ selected(); }";
-    let cancelled = AtomicBool::new(false);
-    let controls = (Instant::now() + Duration::from_secs(5), &cancelled);
-    let tree = crate::trivia::parse(source, controls.0, controls.1)
-        .unwrap()
-        .unwrap();
-    assert!(tree.root_node().has_error());
-    let at = source.find("selected()").unwrap();
-    let node = tree
-        .root_node()
-        .named_descendant_for_byte_range(at, at + 8)
-        .unwrap();
-    let assessment =
-        lexical_assessment("probe.rs", node, source, "selected", controls, false).unwrap();
-    assert_eq!(assessment.binding, LexicalBinding::Uncertain);
-    assert_eq!(
-        assessment.uncertainty.unwrap().reason,
-        LexicalReason::SyntaxRecovery
-    );
+    for source in [
+        "fn f() { @ selected(); }",
+        "fn f() { match value { selected @ => selected(), _ => {} } }",
+        "fn f() { match value { selected @ (1 | ) => selected(), _ => {} } }",
+    ] {
+        let cancelled = AtomicBool::new(false);
+        let controls = (Instant::now() + Duration::from_secs(5), &cancelled);
+        let tree = crate::trivia::parse(source, controls.0, controls.1)
+            .unwrap()
+            .unwrap();
+        assert!(tree.root_node().has_error(), "{source}");
+        let at = source.find("selected()").unwrap();
+        let node = tree
+            .root_node()
+            .named_descendant_for_byte_range(at, at + 8)
+            .unwrap();
+        let assessment =
+            lexical_assessment("probe.rs", node, source, "selected", controls, false).unwrap();
+        assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+        assert_eq!(
+            assessment.uncertainty.unwrap().reason,
+            LexicalReason::SyntaxRecovery,
+            "{source}"
+        );
+    }
 }
 #[test]
 fn nested_item_capture_context_does_not_inherit_outer_local_proof() {
