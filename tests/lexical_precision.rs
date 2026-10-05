@@ -398,6 +398,88 @@ fn moved_forced_composite_locals_pass_the_dependency_prefilter() {
     }
 }
 #[test]
+fn value_pattern_cannot_prove_a_same_spelled_type_reference_independent() {
+    let moved = "fn moved() { let (mut Widget,) = (1,); let _: Widget = 2; }";
+    let source = format!("pub(crate) type Widget = u8;\n{moved}\n");
+    let repo = spawner_precision::load(&source);
+    let result = run(&repo, request(&repo, moved));
+    withheld(&result);
+    assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    let decision = result["plan"]["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["reason"] == "lexical_context_unproved")
+        .unwrap();
+    assert_eq!(decision["blocks_applicability"], true);
+    let at = source.find("_: Widget").unwrap() + 3;
+    assert_eq!(decision["anchors"][0]["path"], SOURCE);
+    assert_eq!(decision["anchors"][0]["expected_text"], "Widget");
+    assert_eq!(
+        decision["anchors"][0]["range"],
+        json!({"start_byte": at, "end_byte": at + "Widget".len()})
+    );
+    let witness = &decision["lexical_uncertainty"];
+    assert_eq!(witness["spelling"], "Widget");
+    assert_eq!(witness["reason"], "value_binding_in_type_position");
+    for (field, text) in [
+        ("scope", "let (mut Widget,) = (1,);"),
+        ("pattern", "(mut Widget,)"),
+    ] {
+        assert_eq!(witness[field]["path"], SOURCE);
+        let range = &witness[field]["range"];
+        assert_eq!(
+            &source[range["start_byte"].as_u64().unwrap() as usize
+                ..range["end_byte"].as_u64().unwrap() as usize],
+            text
+        );
+    }
+    let advice = advice(&repo);
+    let advised = advice["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["reason"] == "lexical_context_unproved")
+        .unwrap();
+    assert_eq!(advised["lexical_uncertainty"], *witness);
+    assert_eq!(
+        advised["anchors"][0]["span"]["range"],
+        decision["anchors"][0]["range"]
+    );
+    assert_eq!(result, run(&repo, request(&repo, moved)));
+}
+#[test]
+fn actual_local_type_bindings_remain_independent_after_moving() {
+    for moved in [
+        "fn moved<Widget>(value: Widget) -> Widget { value }",
+        "fn moved() { type Widget = u8; let _: Widget = 2; }",
+    ] {
+        let source = format!("pub(crate) type Widget = u8;\n{moved}\n");
+        let repo = spawner_precision::load(&source);
+        let result = run(&repo, request(&repo, moved));
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        assert!(
+            result["plan"]["decisions"].as_array().unwrap().is_empty(),
+            "{result}"
+        );
+        assert!(
+            !result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "import_insert")
+        );
+        let copy = move_artifacts::apply(&repo, &result);
+        compile(&copy);
+        assert!(
+            fs::read_to_string(copy.0.join("cases/precision/subagent/probe_constants.rs"))
+                .unwrap()
+                .contains(moved)
+        );
+    }
+}
+#[test]
 fn local_import_proof_does_not_bypass_a_nearer_ambiguous_pattern() {
     let source = "fn selected() {}\nfn caller(pair: (fn(),)) { use crate::subagent::spawner::selected; { let (selected,) = pair; selected(); } }\n";
     let repo = spawner_precision::load(source);

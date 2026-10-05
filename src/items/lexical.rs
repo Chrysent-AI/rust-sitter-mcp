@@ -14,6 +14,7 @@ use tree_sitter::Node;
 pub enum LexicalReason {
     UnsupportedPattern,
     IdentifierPatternBindingOrConstant,
+    ValueBindingInTypePosition,
     RelevantLocalImport,
     ConditionalLocalContext,
     SyntaxRecovery,
@@ -86,6 +87,26 @@ fn uncertain(
             scope: location(path, scope),
             pattern: pattern.map(|p| location(path, p)),
         }),
+    }
+}
+/// A written value binding is not proof for a type-namespace occurrence.
+fn value_binding(
+    path: &str,
+    name: &str,
+    scope: Node<'_>,
+    binding: Node<'_>,
+    reference: Node<'_>,
+) -> LexicalAssessment {
+    if reference.kind() == "type_identifier" {
+        uncertain(
+            path,
+            name,
+            scope,
+            LexicalReason::ValueBindingInTypePosition,
+            Some(binding),
+        )
+    } else {
+        LexicalAssessment::definite(LexicalBinding::Independent)
     }
 }
 fn matches(node: Node<'_>, source: &str, name: &str) -> bool {
@@ -200,7 +221,7 @@ fn assess_pattern(
     pattern: Node<'_>,
     source: &str,
     name: &str,
-    simple: bool,
+    reference: Node<'_>,
     controls: (Instant, &AtomicBool),
 ) -> Result<Option<LexicalAssessment>, DomainError> {
     if attributed(scope) || attributed(pattern) {
@@ -212,9 +233,13 @@ fn assess_pattern(
             Some(pattern),
         )));
     }
+    let simple = matches!(
+        scope.kind(),
+        "let_declaration" | "function_item" | "closure_expression"
+    );
     Ok(
         match pattern_proof(pattern, source, name, simple, controls)? {
-            PatternProof::Binds => Some(LexicalAssessment::definite(LexicalBinding::Independent)),
+            PatternProof::Binds => Some(value_binding(path, name, scope, pattern, reference)),
             PatternProof::Disjoint => None,
             PatternProof::Unproved(reason, p) => {
                 Some(uncertain(path, name, scope, reason, Some(p)))
@@ -331,7 +356,7 @@ fn lexical_context(
                 }
             }
             if let Some(proof) =
-                assess_pattern(path, parent, pattern, source, name, false, controls)?
+                assess_pattern(path, parent, pattern, source, name, node, controls)?
             {
                 return Ok(proof);
             }
@@ -352,7 +377,7 @@ fn lexical_context(
                     .child_by_field_name("pattern")
                     .or_else(|| (parent.kind() == "closure_expression").then_some(parameter))
                     && let Some(proof) =
-                        assess_pattern(path, parent, pattern, source, name, true, controls)?
+                        assess_pattern(path, parent, pattern, source, name, node, controls)?
                 {
                     return Ok(proof);
                 }
@@ -361,12 +386,16 @@ fn lexical_context(
         if let Some(params) = parent.child_by_field_name("type_parameters") {
             for i in 0..params.named_child_count() {
                 check(controls.0, controls.1)?;
-                if params
-                    .named_child(i as u32)
-                    .and_then(|p| p.child_by_field_name("name"))
+                let parameter = params.named_child(i as u32).expect("generic parameter");
+                if parameter
+                    .child_by_field_name("name")
                     .is_some_and(|p| matches(p, source, name))
                 {
-                    return Ok(LexicalAssessment::definite(LexicalBinding::Independent));
+                    return Ok(if parameter.kind() == "const_parameter" {
+                        value_binding(path, name, parent, parameter, node)
+                    } else {
+                        LexicalAssessment::definite(LexicalBinding::Independent)
+                    });
                 }
             }
         }
@@ -402,7 +431,7 @@ fn lexical_context(
                 if statement.kind() == "let_declaration"
                     && let Some(pattern) = statement.child_by_field_name("pattern")
                     && let Some(proof) =
-                        assess_pattern(path, statement, pattern, source, name, true, controls)?
+                        assess_pattern(path, statement, pattern, source, name, node, controls)?
                 {
                     return Ok(proof);
                 }
@@ -451,7 +480,16 @@ fn lexical_context(
                             Some(statement),
                         ));
                     }
-                    return Ok(LexicalAssessment::definite(LexicalBinding::Independent));
+                    return Ok(
+                        if matches!(
+                            statement.kind(),
+                            "function_item" | "const_item" | "static_item"
+                        ) {
+                            value_binding(path, name, parent, statement, node)
+                        } else {
+                            LexicalAssessment::definite(LexicalBinding::Independent)
+                        },
+                    );
                 }
             }
         }

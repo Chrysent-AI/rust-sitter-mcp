@@ -89,6 +89,7 @@ fn forced_and_existing_simple_binders_are_independent() {
         "fn f() { while let Some(mut selected) = value { selected(); } }",
         "fn f() { match value { Some(ref selected) => selected(), _ => {} } }",
         "fn f<selected>() { let x: selected; }",
+        "fn f<const selected: usize>() { let x = selected; }",
         "fn f() { selected(); fn selected() {} }",
         "fn f() { selected(); const selected: usize = 1; }",
         "fn f() { let (mut r#selected,) = value; r#selected(); }",
@@ -98,6 +99,34 @@ fn forced_and_existing_simple_binders_are_independent() {
             LexicalBinding::Independent,
             "{source}"
         );
+    }
+}
+#[test]
+fn value_bindings_do_not_prove_type_references() {
+    for source in [
+        "fn f(selected: u8) { let _: selected = 2; }",
+        "fn f() { let selected = 1; let _: selected = 2; }",
+        "fn f() { let (mut selected,) = (1,); let _: selected = 2; }",
+        "fn f() { let (ref selected,) = (1,); let _: selected = 2; }",
+        "fn f() { let C { selected } = value; let _: selected = 2; }",
+        "fn f() { let _ = |selected: u8| { let _: selected = 2; }; }",
+        "fn f() { for mut selected in value { let _: selected = 2; } }",
+        "fn f() { if let Some(ref selected) = value { let _: selected = 2; } }",
+        "fn f() { while let Some(mut selected) = value { let _: selected = 2; } }",
+        "fn f() { match value { Some(ref selected) => { let _: selected = 2; }, _ => {} } }",
+        "fn f<const selected: usize>() { let _: selected = 2; }",
+        "fn f() { const selected: u8 = 1; let _: selected = 2; }",
+        "fn f() { static selected: u8 = 1; let _: selected = 2; }",
+        "fn f() { fn selected() {} let _: selected = 2; }",
+    ] {
+        let result = assess(source, "selected", false);
+        assert_eq!(result.binding, LexicalBinding::Uncertain, "{source}");
+        let witness = result.uncertainty.unwrap();
+        assert_eq!(witness.reason, LexicalReason::ValueBindingInTypePosition);
+        assert_eq!(witness.spelling, "selected");
+        assert_eq!(witness.scope.path, "probe.rs");
+        let pattern = witness.pattern.unwrap();
+        assert!(source[pattern.range.start_byte..pattern.range.end_byte].contains("selected"));
     }
 }
 #[test]
