@@ -217,9 +217,9 @@ Every path/use change, import insertion or leaf extraction, visibility repair, s
 
 Defaults use complete CST paths and use leaves, not equal-looking text in comments, strings or token trees. Explicit aliases survive; grouped imports use an unchanged prefix, a shared prefix edit, or comment-free leaf extraction with unrelated leaves/trivia preserved. Local and inline-module import extraction keeps the original binding scope. Only necessary imports are synthesized; equivalent destination bindings are reused and shared needs are deduplicated. Items moving together do not create artificial cross-module imports or visibility changes.
 
-Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Relevant unsupported patterns or competing namespace bindings remain anchored uncertainty. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports.
+Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Ordinary tuple/slice/constructor/struct binding positions are compared against the queried spelling: disjoint written names do not create uncertainty for every spelling in that scope. Explicit `mut`/`ref` binders and ordinary struct shorthand can prove independent locals; a matching plain identifier in a composite or refutable pattern still requires binding-versus-constant evidence. For/match/if-let/while-let patterns are checked only where their bindings are in scope, not in initializers, other arms or an if-let's else branch. Unsupported patterns, let chains, relevant local imports, macros and recovered/conditional lexical contexts remain anchored uncertainty. No macro expansion, prelude inference or semantic resolution is performed. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports.
 
-Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged absolute ancestor restrictions survive. Only a proven insufficient access receives `pub(crate)`. Relative restrictions whose scope changes, private fields/tuple constructors, members, associated/type-directed references, chained re-exports, relevant globs/macros, conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro is not by itself a veto.
+Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged absolute ancestor restrictions survive. Only a proven insufficient access receives `pub(crate)`. Relative restrictions whose scope changes, private fields/tuple constructors, members, associated/type-directed references, chained re-exports, relevant globs/macros, conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro outside the relevant binding context is not by itself a veto.
 
 Each alternative is checked against the same target and final binding/access constraints before assembly; newly colliding aliases block. Caller-authored bytes and associated reference repairs remain `origin:"caller_override"`, never compiler-verified. Always echo a complete published target: synthesized import `binding` identities can include a scope anchor, and separator identities include their boundary role. Neither display IDs nor a cached server plan authorize a choice.
 
@@ -294,6 +294,17 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   unresolved. This is the actual wire field; there is no `consequence` alias.
 - `reason` is a typed snake_case cause, independent of the legacy `category`.
   Category alone is not evidence of repairability.
+- `lexical_uncertainty`, when present, explains an unproved lexical context with
+  `spelling`, typed `reason`, `scope:{path,range,kind}`, and optional
+  `pattern:{path,range,kind}`. Its reasons are `unsupported_pattern`,
+  `identifier_pattern_binding_or_constant`, `relevant_local_import`,
+  `conditional_local_context` and `syntax_recovery`. The main decision retains
+  the original occurrence anchor. These witness coordinates locate evidence;
+  they are not replay targets or new request fields. Legacy
+  `category:"binding_collision"`/`BINDING_COLLISION` can still accompany
+  `reason:"lexical_context_unproved"`: that means uncertainty, not a proven
+  collision. Witnesses survive `text_bytes:0`; if mandatory evidence cannot fit,
+  the result is incomplete and decisions/artifacts are withheld with omissions.
 - `action.route` provides one of three additive routes:
   - `request_field` names `tool`, the actual `field`, supported `choices`, and
     `purpose` (`resolve_decision`, `review_default` or `submit_for_analysis`).

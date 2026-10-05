@@ -314,20 +314,21 @@ fn lexical_context(
                     Some(condition),
                 ));
             }
-            if parent.kind() == "match_arm"
-                && (0..parent.named_child_count()).any(|i| {
-                    parent
-                        .named_child(i as u32)
-                        .is_some_and(|n| n.kind() == "attribute_item")
-                })
-            {
-                return Ok(uncertain(
-                    path,
-                    name,
-                    parent,
-                    LexicalReason::ConditionalLocalContext,
-                    Some(pattern),
-                ));
+            if parent.kind() == "match_arm" {
+                for i in 0..parent.named_child_count() {
+                    check(controls.0, controls.1)?;
+                    if parent.named_child(i as u32).is_some_and(|n| {
+                        matches!(n.kind(), "attribute_item" | "inner_attribute_item")
+                    }) {
+                        return Ok(uncertain(
+                            path,
+                            name,
+                            parent,
+                            LexicalReason::ConditionalLocalContext,
+                            Some(pattern),
+                        ));
+                    }
+                }
             }
             if let Some(proof) =
                 assess_pattern(path, parent, pattern, source, name, false, controls)?
@@ -399,10 +400,25 @@ fn lexical_context(
                     ));
                 }
             }
-            // Block items and imports are hoisted, unlike let bindings.
+            // Block items/imports are hoisted. A later statement macro can also
+            // introduce an item, even when no matching spelling is written in its tokens.
             for i in 0..parent.named_child_count() {
                 check(controls.0, controls.1)?;
                 let statement = parent.named_child(i as u32).expect("statement");
+                if statement.kind() == "macro_invocation"
+                    || (statement.kind() == "expression_statement"
+                        && statement
+                            .named_child(0)
+                            .is_some_and(|n| n.kind() == "macro_invocation"))
+                {
+                    return Ok(uncertain(
+                        path,
+                        name,
+                        parent,
+                        LexicalReason::UnsupportedPattern,
+                        Some(statement),
+                    ));
+                }
                 if statement.kind() == "use_declaration" {
                     let relevant = use_facts(statement, source, controls)?.0
                         || (!proven_import
@@ -449,6 +465,22 @@ fn lexical_context(
         }
         if Some(parent) == boundary {
             break;
+        }
+        // A nested item does not inherit the enclosing function's lexical locals.
+        // Keep its unexamined block-item context explicit rather than treating an
+        // outer parameter/let as a proven binding inside that item.
+        if matches!(
+            parent.kind(),
+            "function_item" | "const_item" | "static_item"
+        ) && parent.parent().is_some_and(|p| p.kind() == "block")
+        {
+            return Ok(uncertain(
+                path,
+                name,
+                parent,
+                LexicalReason::ConditionalLocalContext,
+                None,
+            ));
         }
         child = parent;
     }
