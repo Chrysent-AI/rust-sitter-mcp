@@ -127,6 +127,8 @@ pub struct AdviceDecision {
     pub selected_choice: Option<String>,
     pub blocks_applicability: bool,
     pub chain_diagnostic_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_uncertainty: Option<items::LexicalUncertainty>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]

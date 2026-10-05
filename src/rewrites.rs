@@ -1151,22 +1151,23 @@ impl Analyzer<'_> {
         let first = text.split("::").next().unwrap_or("");
         let local_aliases = self.scoped_imports(&need.path, &old_module, node, first);
         if !matches!(first, "crate" | "self" | "super") {
-            let lexical = if local_aliases.len() == 1 {
-                items::lexical_with_import_proof(
-                    node,
-                    &self.files[&need.path].source,
-                    first,
-                    self.controls,
-                )
-            } else {
-                items::lexical_binding(node, &self.files[&need.path].source, first, self.controls)
+            let Ok(assessment) = items::lexical_assessment(
+                &need.path,
+                node,
+                &self.files[&need.path].source,
+                first,
+                self.controls,
+                local_aliases.len() == 1,
+            ) else {
+                return false;
             };
-            match lexical {
+            match assessment.binding {
                 items::LexicalBinding::Independent | items::LexicalBinding::Uncertain => {
                     need.reason = DecisionReason::LexicalContextUnproved;
                     need.category = "binding_collision";
+                    need.lexical(assessment);
                     need.message =
-                        "path prefix has a local/uncertain competing namespace binding".into();
+                        "path prefix has a local or unproved competing namespace binding".into();
                     return false;
                 }
                 items::LexicalBinding::Absent => {}
@@ -1444,6 +1445,7 @@ impl Analyzer<'_> {
                 reason
             },
             choice_target,
+            lexical_uncertainty: None,
             category,
             path: a.path,
             range: a.range,
@@ -1598,19 +1600,23 @@ impl Analyzer<'_> {
                                     reference.range.end_byte,
                                 )
                                 .expect("reference");
-                            if !new_binding.is_empty()
-                                && items::lexical_binding(
+                            if !new_binding.is_empty() {
+                                let assessment = items::lexical_assessment(
+                                    &reference.path,
                                     node,
                                     &self.files[&reference.path].source,
                                     &new_binding,
                                     self.controls,
-                                ) != items::LexicalBinding::Absent
-                            {
-                                failures.push(Need {reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or uncertain at an anchored access".into(),item_ids:repair.item_ids.clone()});
+                                    false,
+                                )?;
+                                if assessment.binding != items::LexicalBinding::Absent {
+                                    failures.push(Need {reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),lexical_uncertainty:assessment.uncertainty,category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or unproved at an anchored access".into(),item_ids:repair.item_ids.clone()});
+                                }
                             }
                             let need = Need {
                                 reason: DecisionReason::UnsupportedConstruct,
                                 choice_target: None,
+                                lexical_uncertainty: None,
                                 category: "unsupported_dependency_form",
                                 path: reference.path.clone(),
                                 range: reference.range.clone(),
@@ -1817,6 +1823,27 @@ impl Analyzer<'_> {
             })
             .cloned()
             .collect();
+        let Ok(assessment) = items::lexical_assessment(
+            &need.path,
+            node,
+            source,
+            name,
+            self.controls,
+            !local_imports.is_empty(),
+        ) else {
+            return false;
+        };
+        match assessment.binding {
+            items::LexicalBinding::Independent => return true,
+            items::LexicalBinding::Uncertain => {
+                need.reason = DecisionReason::LexicalContextUnproved;
+                need.category = "binding_collision";
+                need.lexical(assessment);
+                need.message = "containing lexical binding context is unproved".into();
+                return false;
+            }
+            items::LexicalBinding::Absent => {}
+        }
         if !local_imports.is_empty() {
             let nearest = local_imports
                 .iter()
@@ -1849,16 +1876,6 @@ impl Analyzer<'_> {
             } else {
                 true
             };
-        }
-        match items::lexical_binding(node, source, name, self.controls) {
-            items::LexicalBinding::Independent => return true,
-            items::LexicalBinding::Uncertain => {
-                need.reason = DecisionReason::LexicalContextUnproved;
-                need.category = "binding_collision";
-                need.message = "containing lexical binding context is uncertain".into();
-                return false;
-            }
-            items::LexicalBinding::Absent => {}
         }
         let imports = self.imported(&need.path, &module, name);
         let direct = self
@@ -2061,6 +2078,7 @@ pub(crate) fn analyze(
         }
     }
     remaining.extend(analyzer.choices()?);
+    items::check(controls.0, controls.1)?;
     if analyzer.exceeded {
         return Err(DomainError::new(
             "analysis_descriptor_bytes",

@@ -707,6 +707,7 @@ fn make_draft(
                 selected_choice: None,
                 blocks_applicability: true,
                 chain_diagnostic_ids: Vec::new(),
+                lexical_uncertainty: None,
             };
             result.account(descriptor_bytes(&decision)?)?;
             result.decisions.push(decision);
@@ -779,6 +780,7 @@ pub(super) fn build(
                     selected_choice: None,
                     blocks_applicability: true,
                     chain_diagnostic_ids: vec![diagnostic.id.clone()],
+                    lexical_uncertainty: None,
                 };
                 result.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
                 result.chain_diagnostics.push(diagnostic);
