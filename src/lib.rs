@@ -13,5 +13,6 @@ mod query;
 pub mod result;
 mod rewrites;
 mod scope;
+pub mod split;
 mod template;
 mod trivia;

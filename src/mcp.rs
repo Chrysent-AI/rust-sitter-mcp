@@ -3,6 +3,7 @@ use crate::{
     move_plan::{MoveEnvelope, MoveRequest},
     plan::{PlanEnvelope, ReplaceRequest},
     result::{DomainError, Limits, PatternRequest, SearchEnvelope, SearchRequest},
+    split::{SuggestSplitEnvelope, SuggestSplitRequest},
 };
 use rmcp::{
     RoleServer, ServerHandler,
@@ -203,6 +204,48 @@ impl Server {
             ),
         }
     }
+    async fn run_suggest(
+        &self,
+        request: SuggestSplitRequest,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let failure = |limits, error| suggest_wire(SuggestSplitEnvelope::failed(limits, error));
+        let Ok(permit) = self.admission.clone().try_acquire_owned() else {
+            return failure(
+                request.limits,
+                DomainError::new(
+                    "BUSY",
+                    "another engine call is running; retry after it finishes",
+                ),
+            );
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let _guard = CancelOnDrop(flag.clone());
+        {
+            let mut active = self.active.lock().expect("active lock");
+            flag.store(active.cancelled, Ordering::Relaxed);
+            active.flags.retain(|weak| weak.strong_count() > 0);
+            active.flags.push(Arc::downgrade(&flag));
+        }
+        let engine = self.engine.clone();
+        let limits = request.limits.clone();
+        let worker_flag = flag.clone();
+        let mut job = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            engine.suggest_split(request, &worker_flag)
+        });
+        let result = tokio::select! {
+            result = &mut job => result,
+            _ = context.ct.cancelled() => { flag.store(true, Ordering::Relaxed); job.await }
+        };
+        match result {
+            Ok(result) => suggest_wire(result),
+            Err(_) => failure(
+                limits,
+                DomainError::new("INTERNAL", "blocking engine task failed"),
+            ),
+        }
+    }
     pub async fn shutdown(&self) {
         self.cancel_requests();
         // The owned permit lives until all blocking workers and Git children have joined.
@@ -227,8 +270,25 @@ fn move_wire(result: MoveEnvelope) -> CallToolResult {
         CallToolResult::structured(value)
     }
 }
+fn suggest_wire(result: SuggestSplitEnvelope) -> CallToolResult {
+    let failed = result.error.is_some();
+    let value = serde_json::to_value(result).expect("serializable advice");
+    if failed {
+        CallToolResult::structured_error(value)
+    } else {
+        CallToolResult::structured(value)
+    }
+}
 #[tool_router]
 impl Server {
+    #[tool(name = "suggest_split", description = "Read-only advisory split inventory for one explicit source_path in a caller-selected crate_root. Inventories every written top-level unit, including anonymous impls and context-sensitive constructs. Source-linked heuristic prefixes, reference candidates, sections and sizes explain up to two complete partitions, or an honest no-draft/incomplete result. Banner adjacency never assigns ownership. No patch, edit, creation content, execution handle, stored plan or autonomous application. Edit/ignore groups outside the server, obtain full original item text, then request explicit move_item anchors/destinations as one batch. Syntax is input-only; semantic checking is not_performed. No resolved call graph, macro expansion, cfg/types or API safety claim.", output_schema = rmcp::handler::server::tool::schema_for_output::<SuggestSplitEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn suggest_split(
+        &self,
+        Parameters(request): Parameters<SuggestSplitRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        self.run_suggest(request, context).await
+    }
     #[tool(name = "move_item", description = "Read-only simultaneous move plan for explicitly anchored dependency-free whole top-level Rust items. Required crate_root supplies ordinary written module context, not Cargo/semantic resolution. Existing EOF/before-item and absent new sibling destinations only; parent declarations are synthesized privately or reused. Carries owned trivia; ambiguous prologues stay. All edits, creations, synthesis audits and Git patch fit together or are withheld. Dependency/import/path/visibility repair needs are blockers, never guessed. semantic checking is not_performed. Server never writes sources or applies patches; review and externally check/apply against unchanged bases.", output_schema = rmcp::handler::server::tool::schema_for_output::<MoveEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
     async fn move_item(
         &self,
@@ -289,6 +349,7 @@ impl ServerHandler for Server {
             && request.name != "search"
             && request.name != "replace"
             && request.name != "move_item"
+            && request.name != "suggest_split"
         {
             return Err(rmcp::ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
@@ -298,7 +359,11 @@ impl ServerHandler for Server {
         let decoded = if serde_json::to_vec(&args).expect("JSON args").len() > 8 * 1024 * 1024 {
             Err("decoded arguments exceed 8 MiB".into())
         } else {
-            if request.name == "move_item" {
+            if request.name == "suggest_split" {
+                serde_json::from_value::<SuggestSplitRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else if request.name == "move_item" {
                 serde_json::from_value::<MoveRequest>(args)
                     .map(|_| ())
                     .map_err(|e| e.to_string())
@@ -317,6 +382,13 @@ impl ServerHandler for Server {
             }
         };
         if let Err(message) = decoded {
+            if request.name == "suggest_split" {
+                return Ok(suggest_wire(SuggestSplitEnvelope::failed(
+                    Limits::default(),
+                    DomainError::new("INVALID_PARAMS", message),
+                ))
+                .into());
+            }
             if request.name == "move_item" {
                 return Ok(move_wire(MoveEnvelope::failed(
                     Limits::default(),

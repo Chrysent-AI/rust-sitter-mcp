@@ -1,3 +1,5 @@
+#[path = "support/advice_flow.rs"]
+mod advice_flow;
 #[path = "support/fixture_gen.rs"]
 mod fixture_gen;
 #[path = "support/move_artifacts.rs"]
@@ -21,11 +23,9 @@ const UNWRAP_QUERY: &str = "((call_expression function: (field_expression value:
 // Pending import/visibility rewrite integration: src/rewrite.rs clean repairs/reuse/dedup/private descendant/batch;
 // each isolated cases/ambiguity area; reject required rewrite, anchored alternative,
 // stale source/destination/override, duplicate/conflicting batch, no partial artifacts.
-// Pending split advice integration: rich/weak/single/empty/recovered/unsupported-layout advice;
-// exact-once deterministic membership, same-response decision IDs, bounded no-drafts;
-// no patch/edits/creates, retained anonymous/context units, text/work/output caps.
-// Pending edited-split batch integration: caller edits rich.rs membership AND filenames into two new siblings,
-// submits full explicit anchors through move_item, no execute-draft shortcut.
+// Advice and caller-edited two-sibling execution below exercise complete membership,
+// linked decisions, no execution artifacts, external application and test-only compilation.
+// Focused advice tests additionally cover bounds, recovery, layout and fresh-process determinism.
 // Join all above here using the same read-only snapshot and external applicator;
 // cancellation/deadline/work/output/failed scan/no-op/busy must withhold every artifact.
 
@@ -231,7 +231,13 @@ fn deterministic_generations_and_available_tool_flow() {
         cargo_check(&repo.copy());
         let mut client = Client::new();
         let tools = client.rpc("tools/list", json!({}));
-        for name in ["search", "search_query", "replace", "move_item"] {
+        for name in [
+            "search",
+            "search_query",
+            "replace",
+            "move_item",
+            "suggest_split",
+        ] {
             let tool = tools["tools"]
                 .as_array()
                 .unwrap()
@@ -297,6 +303,66 @@ fn deterministic_generations_and_available_tool_flow() {
             "fresh fixture: search/raw/replace, Git apply + independent JSON, source/Git bytes/modes/mtimes passed"
         );
     }
+}
+
+#[test]
+fn stdio_advice_and_caller_edited_split() {
+    let repo = Fixture::generate();
+    let before = observe(&repo.0);
+    let mut client = Client::new();
+    let make = |path| json!({"repo_path":repo.0,"crate_root":"src/lib.rs","source_path":path,"paths":["src"],"limits":{"text_bytes":0}});
+    let advice = client.call("suggest_split", make("src/rich.rs"));
+    advice_flow::complete(&advice);
+    assert!(!advice["drafts"].as_array().unwrap().is_empty(), "{advice}");
+    assert_eq!(advice, client.call("suggest_split", make("src/rich.rs")));
+    let batch = advice_flow::edited_batch(&repo, &advice);
+    let moved = client.call("move_item", batch);
+    assert_eq!(moved["plan"]["created_files"].as_array().unwrap().len(), 2);
+    let copy = move_artifacts::apply(&repo, &moved);
+    cargo_check(&copy);
+    assert!(
+        fs::read_to_string(copy.0.join("src/edited_a.rs"))
+            .unwrap()
+            .contains("fn beta_write")
+    );
+    assert!(
+        !fs::read_to_string(copy.0.join("src/edited_b.rs"))
+            .unwrap()
+            .contains("fn beta_write")
+    );
+    for path in [
+        "src/inventory.rs",
+        "src/weak.rs",
+        "src/single.rs",
+        "src/empty.rs",
+    ] {
+        let result = client.call("suggest_split", make(path));
+        advice_flow::complete(&result);
+        if path == "src/inventory.rs" {
+            assert_eq!(
+                result["inventory"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|i| i["kind"] == "impl_item")
+                    .count(),
+                3
+            );
+        }
+        if path == "src/empty.rs" || path == "src/single.rs" {
+            assert!(result["drafts"].as_array().unwrap().is_empty());
+            assert!(
+                !result["draft_eligibility"]["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+    assert_eq!(observe(&repo.0), before);
+    eprintln!(
+        "stdio advice + edited batch: every unit accounted once, complete decision closure, no execution artifact; caller-edited membership/filenames; Git/JSON/modes, compile-on-copy and read-only observations passed"
+    );
 }
 
 #[test]
