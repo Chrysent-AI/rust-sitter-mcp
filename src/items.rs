@@ -433,7 +433,7 @@ fn binding_pattern(node: Node<'_>, source: &str, name: &str) -> bool {
     false
 }
 /// Resolve only written lexical bindings in containing scopes, never a same-spelled name elsewhere.
-fn local(
+pub(crate) fn local(
     node: Node<'_>,
     item: Node<'_>,
     source: &str,
@@ -503,6 +503,109 @@ fn local(
         child = parent;
     }
     false
+}
+/// A spelling is not binding evidence. Unsupported containing patterns/uses are uncertainty,
+/// while recognized locals are demonstrably independent of file-level declarations.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LexicalBinding {
+    Independent,
+    Uncertain,
+    Absent,
+}
+pub(crate) fn lexical_binding(
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+) -> LexicalBinding {
+    let mut owner = node;
+    while let Some(parent) = owner.parent() {
+        if parent.kind() == "source_file" {
+            break;
+        }
+        owner = parent;
+    }
+    if local(node, owner, source, name, controls.0, controls.1) {
+        return LexicalBinding::Independent;
+    }
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        if check(controls.0, controls.1).is_err() {
+            return LexicalBinding::Uncertain;
+        }
+        if matches!(
+            parent.kind(),
+            "closure_expression"
+                | "for_expression"
+                | "match_arm"
+                | "if_let_expression"
+                | "while_let_expression"
+        ) {
+            return LexicalBinding::Uncertain;
+        }
+        if let Some(params) = parent.child_by_field_name("parameters") {
+            for i in 0..params.named_child_count() {
+                if let Some(pattern) = params
+                    .named_child(i as u32)
+                    .and_then(|p| p.child_by_field_name("pattern"))
+                    && !matches!(
+                        pattern.kind(),
+                        "identifier" | "mut_pattern" | "reference_pattern" | "self_parameter"
+                    )
+                {
+                    return LexicalBinding::Uncertain;
+                }
+            }
+        }
+        if parent.kind() == "block" {
+            for i in 0..parent.named_child_count() {
+                let statement = parent.named_child(i as u32).expect("child");
+                if statement.kind() == "use_declaration"
+                    || (statement.kind() == "let_declaration"
+                        && statement.end_byte() <= child.start_byte()
+                        && statement.child_by_field_name("pattern").is_some_and(|p| {
+                            !matches!(p.kind(), "identifier" | "mut_pattern" | "reference_pattern")
+                        }))
+                {
+                    return LexicalBinding::Uncertain;
+                }
+                if matches!(
+                    statement.kind(),
+                    "struct_item" | "enum_item" | "type_item" | "const_item" | "static_item"
+                ) && statement
+                    .child_by_field_name("name")
+                    .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
+                {
+                    return LexicalBinding::Independent;
+                }
+            }
+        }
+        if parent == owner {
+            break;
+        }
+        child = parent;
+    }
+    LexicalBinding::Absent
+}
+pub(crate) fn reference_role(node: Node<'_>) -> bool {
+    if declaration_name(node) {
+        return false;
+    }
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        if parent.child_by_field_name("pattern") == Some(child)
+            || matches!(parent.kind(), "type_parameters" | "lifetime" | "loop_label")
+            || (parent.kind() == "field_expression"
+                && parent.child_by_field_name("field") == Some(child))
+        {
+            return false;
+        }
+        if matches!(parent.kind(), "function_item" | "block" | "source_file") {
+            break;
+        }
+        child = parent;
+    }
+    true
 }
 /// Conservative relocation guard: dependencies requiring a repair are evidence, not edits.
 /// `final_paths` is simultaneous membership; co-moved written declarations can remain bound.
@@ -907,7 +1010,7 @@ pub fn dependencies(
                     }
                     if matches!(current.kind(), "identifier" | "type_identifier")
                         && text.trim_start_matches("r#") == name
-                        && !declaration_name(current)
+                        && reference_role(current)
                     {
                         *candidates += 1;
                         if *candidates > 100_000 {
@@ -922,7 +1025,16 @@ pub fn dependencies(
                             matches!(p.kind(), "scoped_identifier" | "scoped_type_identifier")
                         });
                         if path == source_path || path_reference {
-                            needs.push(need("unsupported_dependency_form", path, current, "remaining written consumer or shadow candidate requires explicit repair/evidence"));
+                            let lexical = if path_reference {
+                                LexicalBinding::Absent
+                            } else {
+                                lexical_binding(current, other_source, name, controls)
+                            };
+                            match lexical {
+                                LexicalBinding::Independent => {}
+                                LexicalBinding::Uncertain => needs.push(need("binding_collision", path, current, "containing lexical binding context is uncertain; no file-level reference proof")),
+                                LexicalBinding::Absent => needs.push(need("unsupported_dependency_form", path, current, "remaining written consumer requires explicit repair/evidence")),
+                            }
                         }
                     }
                     for i in (0..current.named_child_count()).rev() {

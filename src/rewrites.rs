@@ -19,6 +19,8 @@ pub(crate) struct Repair {
     pub item_ids: Vec<String>,
     pub anchors: Vec<SourceAnchor>,
     pub rationale: String,
+    /// A visibility operation on the declaration linking this proposed file.
+    pub declaration_for: Option<String>,
 }
 pub(crate) struct Analysis {
     pub repairs: Vec<Repair>,
@@ -116,28 +118,108 @@ impl Analyzer<'_> {
     }
     fn visibility(&mut self, path: &str, item: &Item, consumer: &str, ids: &[String]) -> bool {
         let final_path = self.final_path(path, item).to_owned();
-        let Some(defining) = self.final_contexts.get(&final_path) else {
+        let Some(defining) = self.final_contexts.get(&final_path).cloned() else {
             return false;
         };
-        let Some(using) = self.final_contexts.get(consumer) else {
+        let Some(using) = self.final_contexts.get(consumer).cloned() else {
             return false;
         };
-        if using.module_segments.starts_with(&defining.module_segments)
-            || item.visibility_key == "pub"
-            || item.visibility_key == "pub(crate)"
+        // Each edge is declared in its parent scope, not inside the child it introduces.
+        // Synthesized edges have no fictional source anchor and remain explicit evidence.
+        for (index, declaration) in defining.declaration_anchors.iter().enumerate() {
+            let Some(module) = self.parsed[&declaration.path]
+                .items
+                .iter()
+                .find(|i| i.span.range == declaration.range)
+                .cloned()
+            else {
+                return false;
+            };
+            let parent = &defining.module_segments[..index];
+            let created = self
+                .request
+                .moves
+                .iter()
+                .find_map(|m| match &m.destination {
+                    crate::move_plan::Destination::NewSibling { path, parent_path }
+                        if parent_path == &declaration.path
+                            && self.final_contexts[path].declaration_anchors.last()
+                                == Some(declaration) =>
+                    {
+                        Some(path.clone())
+                    }
+                    _ => None,
+                });
+            if !self.widen(
+                &declaration.path,
+                Some(&module),
+                parent,
+                &using.module_segments,
+                ids,
+                created,
+            ) {
+                return false;
+            }
+        }
+        if let Some(crate::move_plan::Destination::NewSibling { parent_path, .. }) = self
+            .request
+            .moves
+            .iter()
+            .find(|m| m.destination.path() == final_path)
+            .map(|m| &m.destination)
+            && defining.declaration_anchors.len() < defining.module_segments.len()
+            && !self.widen(
+                parent_path,
+                None,
+                &defining.module_segments[..defining.module_segments.len() - 1],
+                &using.module_segments,
+                ids,
+                Some(final_path.clone()),
+            )
         {
+            return false;
+        }
+        self.widen(
+            path,
+            Some(item),
+            &defining.module_segments,
+            &using.module_segments,
+            ids,
+            None,
+        )
+    }
+    fn widen(
+        &mut self,
+        path: &str,
+        item: Option<&Item>,
+        defining: &[String],
+        using: &[String],
+        ids: &[String],
+        declaration_for: Option<String>,
+    ) -> bool {
+        let visibility = item.map(|i| i.visibility_key).unwrap_or("private");
+        if using.starts_with(defining) || matches!(visibility, "pub" | "pub(crate)") {
             return true;
         }
-        if item.visibility_key != "private" {
+        if visibility != "private" {
             return false;
         }
-        let at = item.span.range.start_byte;
-        let name = canonical(defining, item.name.as_deref().unwrap_or(""));
+        let at = item
+            .map(|i| i.span.range.start_byte)
+            .unwrap_or(self.files[path].source.len());
+        let mut parts = vec!["crate".to_owned()];
+        parts.extend(defining.iter().cloned());
+        parts.push(item.and_then(|i| i.name.clone()).unwrap_or_else(|| {
+            items::module_name(declaration_for.as_deref().expect("virtual declaration"))
+                .expect("validated name")
+                .into()
+        }));
         self.add(Repair {
             path: path.into(), range: span(at, at), after: "pub(crate) ".into(), kind: "visibility",
-            target: RewriteTarget::Synthesis { path: path.into(), slot: "visibility_insert".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(name) },
-            item_ids: ids.to_vec(), anchors: vec![anchor(self.files, path, &item.span.range)],
-            rationale: "a written cross-module access is outside this private declaration's defining module and descendants".into(),
+            target: RewriteTarget::Synthesis { path: path.into(), slot: "visibility_insert".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(parts.join("::")) },
+            item_ids: ids.to_vec(), anchors: item.map(|i| vec![anchor(self.files, path, &i.span.range)]).unwrap_or_default(),
+            rationale: "a proven written access is outside the declaration's parent lexical scope and descendants".into(),
+            declaration_for,
         });
         true
     }
@@ -193,7 +275,7 @@ impl Analyzer<'_> {
         self.add(Repair {
             path: path.into(), range: span(at, at), after: text, kind: "import_insert",
             target: RewriteTarget::Synthesis { path: path.into(), slot: "import".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(binding.into()) },
-            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"),
+            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"), declaration_for: None,
         });
         true
     }
@@ -277,7 +359,7 @@ impl Analyzer<'_> {
         if after != text {
             let range = span(node.start_byte(), node.end_byte());
             let a = anchor(self.files, &need.path, &range);
-            self.add(Repair { path: need.path.clone(), range, after, kind: "path", target: RewriteTarget::Source { anchor: a.clone() }, item_ids: need.item_ids.clone(), anchors: vec![a], rationale: "the complete simple path identifies one written declaration in its old ordinary context".into() });
+            self.add(Repair { path: need.path.clone(), range, after, kind: "path", target: RewriteTarget::Source { anchor: a.clone() }, item_ids: need.item_ids.clone(), anchors: vec![a], rationale: "the complete simple path identifies one written declaration in its old ordinary context".into(), declaration_for: None });
         }
         self.visibility(path, binding, &consumer, &need.item_ids)
     }
@@ -327,19 +409,10 @@ impl Analyzer<'_> {
             })
             .map(|(_, _, d)| d.clone())
             .unwrap_or_else(|| need.path.clone());
-        // An unsupported local/shadow candidate must not be converted into a module import.
-        let mut parent = node.parent();
-        while let Some(p) = parent {
-            if matches!(
-                p.kind(),
-                "parameter" | "type_parameter" | "const_parameter" | "let_declaration"
-            ) {
-                return false;
-            }
-            if p.kind() == "function_item" {
-                break;
-            }
-            parent = p.parent();
+        match items::lexical_binding(node, source, name, self.controls) {
+            items::LexicalBinding::Independent => return true,
+            items::LexicalBinding::Uncertain => return false,
+            items::LexicalBinding::Absent => {}
         }
         let destination = self.final_path(&need.path, &binding).to_owned();
         if destination == consumer {

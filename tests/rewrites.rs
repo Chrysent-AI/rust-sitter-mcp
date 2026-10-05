@@ -22,6 +22,116 @@ fn withheld(value: &Value) {
         assert!(value["plan"][field].is_null(), "{value}");
     }
 }
+fn compile_layout(repo: &Fixture) {
+    let copy = repo.copy();
+    copy.write("Cargo.toml", "[package]\nname = \"fixture-corpus\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"cases/layout/lib.rs\"\n");
+    let check = Command::new("cargo")
+        .current_dir(&copy.0)
+        .args(["check", "--locked", "--offline", "--quiet"])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+#[test]
+fn full_module_chain_and_declaration_visibility_links() {
+    for reused in [false, true] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod a;\nmod b;\n");
+        repo.write(
+            "cases/layout/a.rs",
+            if reused {
+                "pub(crate) mod nested;\nmod target;\n"
+            } else {
+                "pub(crate) mod nested;\n"
+            },
+        );
+        repo.write("cases/layout/a/nested.rs", "pub(crate) fn selected() {}\n");
+        repo.write(
+            "cases/layout/b.rs",
+            "fn caller() { crate::a::nested::selected(); }\n",
+        );
+        if !reused {
+            compile_layout(&repo);
+        }
+        let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/a/nested.rs","pub(crate) fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/a/target.rs","parent_path":"cases/layout/a.rs"}}]});
+        let result = run(&repo, args.clone());
+        let copy = apply(&repo, &result);
+        compile_layout(&copy);
+        assert!(
+            fs::read_to_string(copy.0.join("cases/layout/a.rs"))
+                .unwrap()
+                .contains("pub(crate) mod target;")
+        );
+        assert_eq!(
+            fs::read_to_string(copy.0.join("cases/layout/lib.rs")).unwrap(),
+            "mod a;\nmod b;\n"
+        );
+        let file = &result["plan"]["created_files"][0];
+        let visibility = result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == file["declaration_visibility_rewrite_id"])
+            .unwrap();
+        assert_eq!(visibility["kind"], "visibility");
+        let mut rejected = args;
+        rejected["rewrite_overrides"] = json!([{"target":visibility["target"],"action":"retain"}]);
+        withheld(&run(&repo, rejected));
+    }
+}
+#[test]
+fn independent_lexical_bindings_do_not_create_access_needs() {
+    for caller in [
+        "fn caller() { fn selected() {} selected(); }",
+        "fn caller(selected: fn()) { selected(); }",
+        "fn caller() { let selected = || {}; selected(); }",
+    ] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod source;\n");
+        repo.write(
+            "cases/layout/source.rs",
+            &format!("fn selected() {{}}\n{caller}\n"),
+        );
+        compile_layout(&repo);
+        let result = run(
+            &repo,
+            json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+        );
+        let copy = apply(&repo, &result);
+        compile_layout(&copy);
+        assert!(
+            !result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "visibility" || r["kind"] == "import_insert")
+        );
+    }
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "fn selected() {}\nfn caller(pair: (fn(),)) { let (selected,) = pair; selected(); }\n",
+    );
+    compile_layout(&repo);
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+    );
+    withheld(&result);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["category"] == "binding_collision"
+                && !d["anchors"].as_array().unwrap().is_empty())
+    );
+}
 #[test]
 fn private_remaining_caller_vertical_slice() {
     let repo = Fixture::generate();

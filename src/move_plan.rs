@@ -33,7 +33,7 @@ pub enum Destination {
     },
 }
 impl Destination {
-    fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         match self {
             Self::Existing { path, .. } | Self::NewSibling { path, .. } => path,
         }
@@ -550,6 +550,7 @@ struct Insertion {
 struct Creation {
     parent: String,
     link: Option<DeclarationLink>,
+    visibility_id: Option<String>,
     selections: Vec<usize>,
 }
 fn validate_anchor<'a>(
@@ -831,6 +832,7 @@ fn build(
                 let creation = creations.entry(path.clone()).or_insert(Creation {
                     parent: parent_path.clone(),
                     link: None,
+                    visibility_id: None,
                     selections: Vec::new(),
                 });
                 if creation.parent != *parent_path {
@@ -1609,6 +1611,12 @@ fn assemble(
         if matches!(repair.target, RewriteTarget::Source { .. }) {
             audit.origin = "copied".into();
         }
+        if let Some(path) = &repair.declaration_for {
+            creations
+                .get_mut(path)
+                .expect("proposed declaration")
+                .visibility_id = Some(id.clone());
+        }
         authored.push((repair, id, after));
     }
     let mut groups: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
@@ -1778,6 +1786,16 @@ fn assemble(
                 parent_path: Some(path.clone()),
                 binding: None,
             };
+            if let Some((_, id, text)) = authored
+                .iter()
+                .find(|(r, _, _)| r.declaration_for.as_deref() == Some(&created_path))
+            {
+                let start = insertion.text.len();
+                insertion.text.push_str(text);
+                insertion
+                    .rewrites
+                    .push((id.clone(), range(start, insertion.text.len())));
+            }
             let name = items::module_name(&created_path)?;
             let (id, text) = rewrite(
                 request,
@@ -1865,9 +1883,18 @@ fn assemble(
         }
         insertions.push(insertion);
     }
-    let mut absorbed = BTreeSet::new();
+    let mut absorbed: BTreeSet<_> = authored
+        .iter()
+        .filter(|(r, _, _)| {
+            r.declaration_for.as_ref().is_some_and(|p| {
+                matches!(creations[p].link, Some(DeclarationLink::Synthesized { .. }))
+            })
+        })
+        .map(|(_, id, _)| id.clone())
+        .collect();
     for (repair, id, text) in &authored {
         if repair.kind != "import_insert"
+            && !absorbed.contains(id)
             && repair.range.start_byte == repair.range.end_byte
             && !selected.iter().any(|s| {
                 s.runs.iter().any(|run| {
@@ -2165,7 +2192,7 @@ fn assemble(
             content: content.clone(),
             parent_path: creation.parent.clone(),
             declaration_link: creation.link.clone().expect("linked declaration"),
-            declaration_visibility_rewrite_id: None,
+            declaration_visibility_rewrite_id: creation.visibility_id.clone(),
             item_ids: insertion.item_ids.clone(),
             trivia_ids: Vec::new(),
             rewrite_ids: insertion
@@ -2302,6 +2329,9 @@ fn sort_rewrites(result: &mut MoveEnvelope, edits: &mut [Edit], created: &mut [C
     }
     for file in created {
         for id in &mut file.rewrite_ids {
+            *id = ids[id].clone();
+        }
+        if let Some(id) = &mut file.declaration_visibility_rewrite_id {
             *id = ids[id].clone();
         }
         if let DeclarationLink::Synthesized { rewrite_id } = &mut file.declaration_link {
