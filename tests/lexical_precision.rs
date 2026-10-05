@@ -117,6 +117,15 @@ fn sanitizer_replica_exposes_candidate_and_retains_true_blockers() {
     }));
     let result = run(&repo, args);
     withheld(&result);
+    let binder = source.find("|raw|").unwrap() + 1;
+    assert!(
+        !result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["anchors"][0]["range"]["start_byte"] == binder),
+        "{result}"
+    );
     let mut reasons = BTreeMap::<String, usize>::new();
     let mut categories = BTreeMap::<String, usize>::new();
     for decision in result["plan"]["decisions"].as_array().unwrap() {
@@ -173,6 +182,45 @@ fn sanitizer_replica_exposes_candidate_and_retains_true_blockers() {
                         .any(|e| e["range"]["start_byte"] == at)),
             "{advice}"
         );
+    }
+}
+#[test]
+fn closure_binders_are_not_dependencies_but_body_and_type_references_are() {
+    for (closure, dependency) in [
+        ("|raw| raw", None),
+        ("|raw| free(raw)", Some("free")),
+        ("|| raw()", Some("raw")),
+        ("|raw: ExternalType| raw", Some("ExternalType")),
+        ("|(ExternalType(raw),)| raw", Some("ExternalType")),
+        ("|ExternalType { raw }| raw", Some("ExternalType")),
+    ] {
+        let selected = format!("fn selected() {{ let _ = {closure}; }}");
+        let repo = spawner_precision::load(&selected);
+        let result = run(&repo, request(&repo, &selected));
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        let decisions = result["plan"]["decisions"].as_array().unwrap();
+        if let Some(dependency) = dependency {
+            withheld(&result);
+            assert!(
+                decisions
+                    .iter()
+                    .any(|d| d["reason"] == "external_or_missing_binding"
+                        && d["anchors"][0]["expected_text"] == dependency),
+                "{closure}: {result}"
+            );
+        } else {
+            assert_eq!(result["plan"]["applicable"], true, "{closure}: {result}");
+        }
+        if closure.starts_with("|raw") {
+            let binder = selected.find("raw").unwrap();
+            assert!(
+                !decisions
+                    .iter()
+                    .any(|d| d["reason"] == "external_or_missing_binding"
+                        && d["anchors"][0]["range"]["start_byte"] == binder),
+                "{closure}: {result}"
+            );
+        }
     }
 }
 #[test]

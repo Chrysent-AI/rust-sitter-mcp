@@ -715,6 +715,15 @@ pub(crate) fn reference_role(node: Node<'_>) -> bool {
     if declaration_name(node) {
         return false;
     }
+    // Bare closure parameters have no `pattern` field; only a direct
+    // identifier is a binder, not types or constructors nested in parameters.
+    if node.kind() == "identifier"
+        && node
+            .parent()
+            .is_some_and(|p| p.kind() == "closure_parameters")
+    {
+        return false;
+    }
     let mut child = node;
     while let Some(parent) = child.parent() {
         // The grammar wraps a match guard inside match_pattern, but its
