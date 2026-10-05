@@ -560,7 +560,7 @@ fn unrelated_module_aliases_do_not_block_moves() {
 }
 
 #[test]
-fn relevant_module_alias_consumers_still_block_moves() {
+fn ordinary_module_alias_consumers_repair_but_globs_still_block() {
     for import in [
         "use crate::source as source_alias;\n",
         "use crate::{source as source_alias};\n",
@@ -590,6 +590,15 @@ fn relevant_module_alias_consumers_still_block_moves() {
                     json!([entry(&repo, selected, new("cases/layout/target.rs"))]),
                 ),
             );
+            if category == "UNSUPPORTED_DEPENDENCY_FORM" {
+                let copy = apply(&repo, &result);
+                assert!(
+                    fs::read_to_string(copy.0.join("cases/layout/lib.rs"))
+                        .unwrap()
+                        .contains("crate::target::selected()")
+                );
+                continue;
+            }
             code(&result, category);
             let item_id = &result["plan"]["moves"][0]["item"]["id"];
             assert!(

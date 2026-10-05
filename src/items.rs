@@ -378,6 +378,114 @@ pub fn modules(
     Ok(out)
 }
 
+/// Written use leaves retain original ranges; lists are never regenerated.
+#[derive(Clone)]
+pub(crate) struct UseLeaf {
+    pub path: String,
+    pub binding: String,
+    pub path_range: ByteRange,
+    pub leaf_range: ByteRange,
+    pub prefix: String,
+    pub prefix_range: Option<ByteRange>,
+    pub list_range: Option<ByteRange>,
+    pub declaration: ByteRange,
+    pub public: bool,
+}
+pub(crate) fn use_leaves(
+    node: Node<'_>,
+    source: &str,
+    controls: (Instant, &AtomicBool),
+) -> Result<Vec<UseLeaf>, DomainError> {
+    let declaration = ByteRange {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    };
+    let public = visibility_key(node, source, controls.0, controls.1)? != "private";
+    let mut out = Vec::new();
+    let Some(argument) = node.child_by_field_name("argument") else {
+        return Ok(out);
+    };
+    let mut stack = vec![(argument, String::new(), None, None)];
+    while let Some((node, prefix, prefix_range, list_range)) = stack.pop() {
+        check(controls.0, controls.1)?;
+        match node.kind() {
+            "scoped_use_list" => {
+                let part = node.child_by_field_name("path");
+                let next = part
+                    .map(|n| source[n.byte_range()].to_owned())
+                    .unwrap_or_default();
+                let full = if prefix.is_empty() {
+                    next
+                } else {
+                    format!("{prefix}::{next}")
+                };
+                stack.push((
+                    node.child_by_field_name("list").expect("list"),
+                    full,
+                    part.map(|n| ByteRange {
+                        start_byte: n.start_byte(),
+                        end_byte: n.end_byte(),
+                    }),
+                    list_range,
+                ));
+            }
+            "use_list" => {
+                let range = ByteRange {
+                    start_byte: node.start_byte(),
+                    end_byte: node.end_byte(),
+                };
+                for i in (0..node.named_child_count()).rev() {
+                    let child = node.named_child(i as u32).expect("child");
+                    if !matches!(child.kind(), "line_comment" | "block_comment") {
+                        stack.push((
+                            child,
+                            prefix.clone(),
+                            prefix_range.clone(),
+                            Some(range.clone()),
+                        ));
+                    }
+                }
+            }
+            "use_wildcard" => {}
+            _ => {
+                let path = node
+                    .child_by_field_name("path")
+                    .filter(|_| node.kind() == "use_as_clause")
+                    .unwrap_or(node);
+                let text = &source[path.byte_range()];
+                let full = if prefix.is_empty() {
+                    text.into()
+                } else if text == "self" {
+                    prefix.clone()
+                } else {
+                    format!("{prefix}::{text}")
+                };
+                let binding = node
+                    .child_by_field_name("alias")
+                    .map(|n| source[n.byte_range()].to_owned())
+                    .unwrap_or_else(|| full.rsplit("::").next().unwrap_or("").into());
+                out.push(UseLeaf {
+                    path: full,
+                    binding,
+                    path_range: ByteRange {
+                        start_byte: path.start_byte(),
+                        end_byte: path.end_byte(),
+                    },
+                    leaf_range: ByteRange {
+                        start_byte: node.start_byte(),
+                        end_byte: node.end_byte(),
+                    },
+                    prefix,
+                    prefix_range,
+                    list_range,
+                    declaration: declaration.clone(),
+                    public,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
 #[derive(Clone, Serialize)]
 pub struct Need {
     pub category: &'static str,
@@ -842,10 +950,26 @@ pub fn dependencies(
                         && other.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name)
                 });
                 if !self_context && !own && !bound && !co_moved {
-                    let glob = data.items.iter().any(|i| {
-                        i.kind == "use_declaration"
-                            && source[i.span.range.start_byte..i.span.range.end_byte].contains('*')
-                    });
+                    let mut explicit = false;
+                    for i in data.items.iter().filter(|i| i.kind == "use_declaration") {
+                        let use_node = data
+                            .tree
+                            .root_node()
+                            .named_descendant_for_byte_range(
+                                i.span.range.start_byte,
+                                i.span.range.end_byte,
+                            )
+                            .expect("use");
+                        explicit |= use_leaves(use_node, source, controls)?
+                            .iter()
+                            .any(|leaf| leaf.binding == name);
+                    }
+                    let glob = !explicit
+                        && data.items.iter().any(|i| {
+                            i.kind == "use_declaration"
+                                && source[i.span.range.start_byte..i.span.range.end_byte]
+                                    .contains('*')
+                        });
                     needs.push(need(if glob { "glob_dependency" } else { "unsupported_dependency_form" }, source_path, current, "written bare dependency is not retained in the final scope; explicit import/path repair required"));
                 }
             }
@@ -878,10 +1002,19 @@ pub fn dependencies(
                         ));
                     }
                     if other.kind == "use_declaration"
-                        && files[destination].source
-                            [other.span.range.start_byte..other.span.range.end_byte]
-                            .split(|c: char| !c.is_alphanumeric() && c != '_')
-                            .any(|s| s == name)
+                        && use_leaves(
+                            dest.tree
+                                .root_node()
+                                .named_descendant_for_byte_range(
+                                    other.span.range.start_byte,
+                                    other.span.range.end_byte,
+                                )
+                                .expect("use"),
+                            &files[destination].source,
+                            controls,
+                        )?
+                        .iter()
+                        .any(|leaf| leaf.binding == name)
                     {
                         needs.push(need(
                             "binding_collision",

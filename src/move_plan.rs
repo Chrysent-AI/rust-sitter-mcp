@@ -1484,7 +1484,9 @@ fn rewrite(
             }
         }
     }
-    if after.is_empty() || (kind == "separator" && !after.contains('\n')) {
+    if (after.is_empty() && kind != "import_leaf_extract")
+        || (kind == "separator" && !after.contains('\n'))
+    {
         result.blocker("UNSUPPORTED_TRIVIA_DISPOSITION", "retained/replaced required synthesis does not provide a safe separate-line boundary/declaration", None, None);
     }
     let id = format!("r/{}", result.plan.rewrites.len());
