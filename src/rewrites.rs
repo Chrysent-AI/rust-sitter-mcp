@@ -1412,7 +1412,13 @@ impl Analyzer<'_> {
                 .iter()
                 .any(|(_, i, d)| d == &repair.path && i.name.as_deref() == Some(name))
     }
-    fn repair_need(&self, repair: &Repair, category: &'static str, message: &str) -> Need {
+    fn repair_need(
+        &self,
+        repair: &Repair,
+        reason: DecisionReason,
+        category: &'static str,
+        message: &str,
+    ) -> Need {
         let a = repair
             .references
             .first()
@@ -1432,12 +1438,10 @@ impl Analyzer<'_> {
             })
             .then(|| repair.target.clone());
         Need {
-            reason: if category == "visibility_context" {
-                DecisionReason::VisibilityScopeUnproved
-            } else if choice_target.is_some() {
-                DecisionReason::FinalAliasConflict
-            } else {
+            reason: if reason == DecisionReason::FinalAliasConflict && choice_target.is_none() {
                 DecisionReason::DestinationBindingConflict
+            } else {
+                reason
             },
             choice_target,
             category,
@@ -1556,7 +1560,7 @@ impl Analyzer<'_> {
                         ));
                     }
                     if compact.is_empty() {
-                        failures.push(self.repair_need(&repair, "visibility_context", "selected private visibility still leaves the proven access outside its allowed scope"));
+                        failures.push(self.repair_need(&repair, DecisionReason::VisibilityScopeUnproved, "visibility_context", "selected private visibility still leaves the proven access outside its allowed scope"));
                     }
                 }
                 "import_insert" => {
@@ -1583,7 +1587,7 @@ impl Analyzer<'_> {
                         let collision = !new_binding.is_empty()
                             && self.binding_collision(&repair, &new_binding, &module);
                         if collision {
-                            failures.push(self.repair_need(&repair, "binding_collision", "caller-selected import alias collides with a final written binding"));
+                            failures.push(self.repair_need(&repair, DecisionReason::FinalAliasConflict, "binding_collision", "caller-selected import alias collides with a final written binding"));
                         }
                         for reference in &repair.references {
                             let node = self.parsed[&reference.path]
@@ -1663,6 +1667,7 @@ impl Analyzer<'_> {
             {
                 failures.push(self.repair_need(
                     left,
+                    DecisionReason::FinalAliasConflict,
                     "binding_collision",
                     "external import prefix conflicts with a final written binding",
                 ));
@@ -1676,6 +1681,7 @@ impl Analyzer<'_> {
                 {
                     failures.push(self.repair_need(
                         left,
+                        DecisionReason::FinalAliasConflict,
                         "binding_collision",
                         "external import prefix conflicts with a selected alias",
                     ));
@@ -1690,6 +1696,7 @@ impl Analyzer<'_> {
                 {
                     failures.push(self.repair_need(
                         left,
+                        DecisionReason::FinalAliasConflict,
                         "binding_collision",
                         "selected imports introduce competing final aliases",
                     ));

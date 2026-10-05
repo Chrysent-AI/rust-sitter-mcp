@@ -717,6 +717,12 @@ fn run_with_recheck(
         ),
     ) {
         Ok(groups) => result.plan.decision_groups = groups,
+        Err(error) if error.code == "CANCELLED" => {
+            result.status = "failed".into();
+            result.error = Some(error);
+            result.plan.state = "blocked".into();
+            result.withhold();
+        }
         Err(error) => {
             result.incomplete(&error.code);
         }
@@ -1462,6 +1468,14 @@ fn build(
                     && !decision.item_ids.contains(&s.item.id)
                 {
                     result.counts.analysis_descriptor_bytes += s.item.id.len() + 32;
+                    if result.counts.analysis_descriptor_bytes
+                        > result.effective_work_limits.analysis_descriptor_bytes
+                    {
+                        return Err(DomainError::new(
+                            "analysis_descriptor_bytes",
+                            "chain item-link descriptor guard reached",
+                        ));
+                    }
                     decision.item_ids.push(s.item.id.clone());
                 }
             }
