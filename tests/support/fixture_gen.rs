@@ -146,7 +146,7 @@ fn git(root: &Path, args: &[&str]) {
 pub struct Entry {
     pub bytes: Vec<u8>,
     pub mode: u32,
-    pub modified: (i64, i64),
+    pub modified: i64,
     pub link: Option<PathBuf>,
 }
 // Include directories, symlink targets and ALL Git data; never follow symlinks.
@@ -162,7 +162,7 @@ pub fn observe(root: &Path) -> BTreeMap<PathBuf, Entry> {
                     vec![]
                 },
                 mode: m.mode(),
-                modified: (m.mtime(), m.mtime_nsec()),
+                modified: m.mtime(),
                 link: if m.is_symlink() {
                     Some(fs::read_link(path).unwrap())
                 } else {
@@ -188,7 +188,7 @@ pub fn tree(root: &Path) -> BTreeMap<PathBuf, Entry> {
             if path.components().any(|c| c.as_os_str() == ".git") {
                 return None;
             }
-            entry.modified = (0, 0);
+            entry.modified = 0;
             Some((path, entry))
         })
         .collect()
