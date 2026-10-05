@@ -21,10 +21,13 @@ pub(crate) struct Repair {
     pub rationale: String,
     /// A visibility operation on the declaration linking this proposed file.
     pub declaration_for: Option<String>,
+    pub references: Vec<SourceAnchor>,
+    pub caller_override: bool,
 }
 pub(crate) struct Analysis {
     pub repairs: Vec<Repair>,
     pub needs: Vec<Need>,
+    pub descriptor_bytes: usize,
 }
 fn span(start: usize, end: usize) -> ByteRange {
     ByteRange {
@@ -54,6 +57,68 @@ pub(crate) fn simple_path(text: &str) -> bool {
                 .all(|(i, b)| b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit()))
     })
 }
+fn invalid_choice(message: &str) -> DomainError {
+    let mut error = DomainError::new("INVALID_REWRITE_OVERRIDE", message);
+    error.field = Some("rewrite_overrides".into());
+    error
+}
+fn absolute_path(module: &[String], text: &str) -> Option<String> {
+    if !simple_path(text) {
+        return None;
+    }
+    let mut parts: Vec<_> = text.split("::").map(str::to_owned).collect();
+    let mut prefix = match parts.first()?.as_str() {
+        "crate" => {
+            parts.remove(0);
+            Vec::new()
+        }
+        "self" => {
+            parts.remove(0);
+            module.to_vec()
+        }
+        "super" => {
+            let mut prefix = module.to_vec();
+            while parts.first().is_some_and(|p| p == "super") {
+                parts.remove(0);
+                prefix.pop()?;
+            }
+            prefix
+        }
+        _ => return None,
+    };
+    prefix.splice(0..0, ["crate".into()]);
+    prefix.extend(parts);
+    Some(prefix.join("::"))
+}
+fn parsed_import(
+    text: &str,
+    controls: (Instant, &AtomicBool),
+) -> Result<(String, String), DomainError> {
+    let tree = crate::trivia::parse(text, controls.0, controls.1)?
+        .ok_or_else(|| invalid_choice("alternative parse interrupted"))?;
+    if tree.root_node().has_error() || tree.root_node().named_child_count() != 1 {
+        return Err(invalid_choice(
+            "alternative must be exactly one explicit non-glob use",
+        ));
+    }
+    let node = tree.root_node().named_child(0).expect("child");
+    let leaves = items::use_leaves(node, text, controls)?;
+    if node.kind() != "use_declaration"
+        || leaves.len() != 1
+        || leaves[0].public
+        || !leaves[0].prefix.is_empty()
+        || !simple_path(&leaves[0].path)
+        || !simple_path(&leaves[0].binding)
+        || leaves[0].binding.contains("::")
+        || text.contains("//")
+        || text.contains("/*")
+    {
+        return Err(invalid_choice(
+            "only one private explicit use with a simple path and optional alias is supported",
+        ));
+    }
+    Ok((leaves[0].path.clone(), leaves[0].binding.clone()))
+}
 fn canonical(context: &ModuleEvidence, name: &str) -> String {
     let mut parts = vec!["crate".to_owned()];
     parts.extend(context.module_segments.clone());
@@ -66,6 +131,7 @@ struct ImportBinding {
     module: Vec<String>,
     leaf: items::UseLeaf,
     conditioned: bool,
+    scope_range: Option<ByteRange>,
 }
 struct Analyzer<'a> {
     request: &'a MoveRequest,
@@ -76,18 +142,40 @@ struct Analyzer<'a> {
     final_contexts: &'a BTreeMap<String, ModuleEvidence>,
     repairs: Vec<Repair>,
     imports: Vec<ImportBinding>,
+    descriptor_bytes: usize,
+    exceeded: bool,
     controls: (Instant, &'a AtomicBool),
 }
 impl Analyzer<'_> {
     fn add(&mut self, repair: Repair) {
-        if let Some(existing) = self
-            .repairs
-            .iter_mut()
-            .find(|r| r.path == repair.path && r.range == repair.range && r.after == repair.after)
-        {
+        self.descriptor_bytes += repair.path.len()
+            + repair.after.len()
+            + repair.rationale.len()
+            + repair
+                .anchors
+                .iter()
+                .chain(&repair.references)
+                .map(|a| a.path.len() + a.expected_text.len() + 128)
+                .sum::<usize>()
+            + 512;
+        if self.descriptor_bytes > 128 * 1024 * 1024 || self.repairs.len() >= 100_000 {
+            self.exceeded = true;
+            return;
+        }
+        if let Some(existing) = self.repairs.iter_mut().find(|r| {
+            r.path == repair.path
+                && r.range == repair.range
+                && r.after == repair.after
+                && r.declaration_for == repair.declaration_for
+        }) {
             for id in repair.item_ids {
                 if !existing.item_ids.contains(&id) {
                     existing.item_ids.push(id);
+                }
+            }
+            for a in repair.references {
+                if !existing.references.contains(&a) {
+                    existing.references.push(a);
                 }
             }
             for a in repair.anchors {
@@ -174,8 +262,14 @@ impl Analyzer<'_> {
     fn declaration(&self, target: &str) -> Option<(String, Item)> {
         let mut found = Vec::new();
         for (path, data) in self.parsed {
+            if items::check(self.controls.0, self.controls.1).is_err() {
+                return None;
+            }
             if let Some(context) = self.contexts.get(path) {
                 for item in &data.items {
+                    if items::check(self.controls.0, self.controls.1).is_err() {
+                        return None;
+                    }
                     if item
                         .name
                         .as_deref()
@@ -191,7 +285,12 @@ impl Analyzer<'_> {
     fn imported(&self, path: &str, module: &[String], name: &str) -> Vec<ImportBinding> {
         self.imports
             .iter()
-            .filter(|b| b.path == path && b.module == module && b.leaf.binding == name)
+            .filter(|b| {
+                b.path == path
+                    && b.module == module
+                    && b.leaf.binding == name
+                    && b.scope_range.is_none()
+            })
             .cloned()
             .collect()
     }
@@ -230,8 +329,9 @@ impl Analyzer<'_> {
                 .find_map(|m| match &m.destination {
                     crate::move_plan::Destination::NewSibling { path, parent_path }
                         if parent_path == &declaration.path
-                            && self.final_contexts[path].declaration_anchors.last()
-                                == Some(declaration) =>
+                            && self.final_contexts.get(path).is_some_and(|c| {
+                                c.declaration_anchors.last() == Some(declaration)
+                            }) =>
                     {
                         Some(path.clone())
                     }
@@ -288,6 +388,55 @@ impl Analyzer<'_> {
         if using.starts_with(defining) || matches!(visibility, "pub" | "pub(crate)") {
             return true;
         }
+        if visibility == "restricted" {
+            let Some(item) = item else {
+                return false;
+            };
+            let node = self.parsed[path]
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(
+                    item.span.range.start_byte,
+                    item.span.range.end_byte,
+                )
+                .expect("item");
+            let Some(scope) =
+                items::absolute_visibility(node, &self.files[path].source, self.controls)
+            else {
+                return false;
+            };
+            if !defining.starts_with(&scope) {
+                return false;
+            }
+            if using.starts_with(&scope) {
+                return true;
+            }
+            let modifier = (0..node.named_child_count())
+                .filter_map(|i| node.named_child(i as u32))
+                .find(|n| n.kind() == "visibility_modifier")
+                .expect("restriction");
+            let bytes = &self.files[path].source[modifier.byte_range()];
+            if bytes.contains("//") || bytes.contains("/*") {
+                return false;
+            }
+            let range = span(modifier.start_byte(), modifier.end_byte());
+            let a = anchor(self.files, path, &range);
+            self.add(Repair {
+                path: path.into(),
+                range,
+                after: "pub(crate)".into(),
+                kind: "visibility",
+                target: RewriteTarget::Source { anchor: a.clone() },
+                item_ids: ids.to_vec(),
+                anchors: vec![a],
+                rationale: "known absolute restriction is insufficient for a proven final access"
+                    .into(),
+                declaration_for,
+                references: Vec::new(),
+                caller_override: false,
+            });
+            return true;
+        }
         if visibility != "private" {
             return false;
         }
@@ -307,6 +456,7 @@ impl Analyzer<'_> {
             item_ids: ids.to_vec(), anchors: item.map(|i| vec![anchor(self.files, path, &i.span.range)]).unwrap_or_default(),
             rationale: "a proven written access is outside the declaration's parent lexical scope and descendants".into(),
             declaration_for,
+            references: Vec::new(), caller_override: false,
         });
         true
     }
@@ -317,6 +467,7 @@ impl Analyzer<'_> {
         target: &str,
         ids: &[String],
         evidence: SourceAnchor,
+        references: Vec<SourceAnchor>,
     ) -> bool {
         if let Some(data) = self.parsed.get(path)
             && data
@@ -386,7 +537,7 @@ impl Analyzer<'_> {
         self.add(Repair {
             path: path.into(), range: span(at, at), after: text, kind: "import_insert",
             target: RewriteTarget::Synthesis { path: path.into(), slot: "import".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(binding.into()) },
-            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"), declaration_for: None,
+            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false,
         });
         true
     }
@@ -485,17 +636,81 @@ impl Analyzer<'_> {
             anchors: vec![a],
             rationale: "complete written binding in a verified ordinary lexical context".into(),
             declaration_for: None,
+            references: Vec::new(),
+            caller_override: false,
         });
     }
-    fn use_repair(&mut self, need: &Need, node: Node<'_>) -> bool {
+    fn import_references(
+        &self,
+        path: &str,
+        module: &[String],
+        binding: &str,
+    ) -> Option<Vec<SourceAnchor>> {
+        let mut references = Vec::new();
+        let source = &self.files[path].source;
+        let mut stack = vec![self.parsed[path].tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if items::check(self.controls.0, self.controls.1).is_err() {
+                return None;
+            }
+            if matches!(
+                node.kind(),
+                "use_declaration"
+                    | "macro_invocation"
+                    | "macro_definition"
+                    | "line_comment"
+                    | "block_comment"
+                    | "attribute_item"
+                    | "inner_attribute_item"
+                    | "string_literal"
+                    | "raw_string_literal"
+                    | "char_literal"
+            ) {
+                continue;
+            }
+            if matches!(node.kind(), "identifier" | "type_identifier")
+                && source[node.byte_range()] == *binding
+                && items::reference_role(node)
+                && self.consumer(path, node) == path
+                && self.lexical_module(path, node, false).as_deref() == Some(module)
+            {
+                if node.parent().is_some_and(|p| {
+                    matches!(p.kind(), "scoped_identifier" | "scoped_type_identifier")
+                }) {
+                    return None;
+                }
+                match items::lexical_binding(node, source, binding, self.controls) {
+                    items::LexicalBinding::Independent => {}
+                    items::LexicalBinding::Uncertain => return None,
+                    items::LexicalBinding::Absent => references.push(anchor(
+                        self.files,
+                        path,
+                        &span(node.start_byte(), node.end_byte()),
+                    )),
+                }
+            }
+            if references.len() > 100_000 {
+                return None;
+            }
+            for i in (0..node.named_child_count()).rev() {
+                stack.push(node.named_child(i as u32).expect("child"));
+            }
+        }
+        Some(references)
+    }
+    fn use_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
         let source = &self.files[&need.path].source;
         if node
             .prev_named_sibling()
             .is_some_and(|n| n.kind() == "attribute_item")
         {
+            need.category = "scope_dependency";
+            need.message = "affected import has unexamined attribute/conditional context".into();
             return false;
         }
         let Some(module) = self.lexical_module(&need.path, node, false) else {
+            need.category = "module_context";
+            need.message = "affected import has uncertain inline/conditional module context".into();
             return false;
         };
         let Some(using) = self.lexical_module(&need.path, node, true) else {
@@ -513,6 +728,43 @@ impl Analyzer<'_> {
                 return false;
             };
             let new = self.mapped(&old);
+            if old != new {
+                let mut stack = vec![self.parsed[&need.path].tree.root_node()];
+                while let Some(candidate) = stack.pop() {
+                    if items::check(self.controls.0, self.controls.1).is_err() {
+                        return false;
+                    }
+                    if matches!(candidate.kind(), "macro_invocation" | "macro_definition") {
+                        if self.lexical_module(&need.path, candidate, false).as_deref()
+                            == Some(module.as_slice())
+                            && items::lexical_binding(
+                                candidate,
+                                source,
+                                &leaf.binding,
+                                self.controls,
+                            ) != items::LexicalBinding::Independent
+                            && items::token_candidate(
+                                candidate,
+                                source,
+                                &leaf.binding,
+                                self.controls.0,
+                                self.controls.1,
+                            )
+                            .unwrap_or(true)
+                        {
+                            need.category = "macro_dependency";
+                            need.range = span(candidate.start_byte(), candidate.end_byte());
+                            need.message =
+                                "affected imported alias occurs in unexamined macro tokens".into();
+                            return false;
+                        }
+                        continue;
+                    }
+                    for i in (0..candidate.named_child_count()).rev() {
+                        stack.push(candidate.named_child(i as u32).expect("child"));
+                    }
+                }
+            }
             mappings.push((old, new));
         }
         // One common changed prefix can be replaced without touching any delimiter or alias.
@@ -529,13 +781,29 @@ impl Analyzer<'_> {
                 .unwrap_or("");
             if mappings.iter().zip(&leaves).all(|((_, new), leaf)| {
                 new.rsplit_once("::").is_some_and(|(p, suffix)| {
-                    p == new_prefix && suffix == leaf.path.rsplit("::").next().unwrap_or("")
+                    p == new_prefix
+                        && suffix == leaf.path.rsplit("::").next().unwrap_or("")
+                        && source[leaf.path_range.start_byte..leaf.path_range.end_byte] == *suffix
                 })
             }) {
                 let written_prefix = &source[prefix_range.start_byte..prefix_range.end_byte];
-                // Only a full prefix is replaceable here; nested prefixes use leaf surgery below.
-                if written_prefix == leaves[0].prefix {
-                    self.source_repair(need, prefix_range.clone(), new_prefix.into(), "use_path");
+                let inherited = leaves[0]
+                    .prefix
+                    .strip_suffix(written_prefix)
+                    .unwrap_or("")
+                    .trim_end_matches("::");
+                let replacement = if inherited.is_empty() {
+                    Some(new_prefix.to_owned())
+                } else {
+                    self.resolve_in(&need.path, &module, inherited, false)
+                        .and_then(|prefix| {
+                            new_prefix
+                                .strip_prefix(&format!("{prefix}::"))
+                                .map(str::to_owned)
+                        })
+                };
+                if let Some(replacement) = replacement {
+                    self.source_repair(need, prefix_range.clone(), replacement, "use_path");
                     for (old, _) in &mappings {
                         if let Some((p, i)) = self.declaration(old)
                             && !self.visibility(&p, &i, &using, &need.item_ids)
@@ -580,10 +848,21 @@ impl Analyzer<'_> {
                         if !preceding[at + 1..].trim().is_empty() {
                             return false;
                         }
-                        removal.start_byte = list.start_byte + 1 + at;
+                        let comma = list.start_byte + 1 + at;
+                        if !self.repairs.iter().any(|r| {
+                            r.path == need.path
+                                && r.kind == "import_leaf_extract"
+                                && r.range.start_byte <= comma
+                                && r.range.end_byte > comma
+                        }) {
+                            removal.start_byte = comma;
+                        }
                     }
                     let bytes = &source[removal.start_byte..removal.end_byte];
                     if bytes.contains("//") || bytes.contains("/*") {
+                        need.category = "trivia_ownership";
+                        need.message =
+                            "leaf/delimiter trivia cannot be consumed during extraction".into();
                         return false;
                     }
                     self.source_repair(need, removal, String::new(), "import_leaf_extract");
@@ -597,6 +876,8 @@ impl Analyzer<'_> {
                         &new,
                         &need.item_ids,
                         anchor(self.files, &need.path, &leaf.leaf_range),
+                        self.import_references(&need.path, &module, &leaf.binding)
+                            .unwrap_or_default(),
                     ) {
                         return false;
                     }
@@ -610,33 +891,112 @@ impl Analyzer<'_> {
         }
         true
     }
-    fn path_repair(&mut self, need: &Need, node: Node<'_>) -> bool {
+    fn scoped_imports(
+        &self,
+        path: &str,
+        module: &[String],
+        node: Node<'_>,
+        name: &str,
+    ) -> Vec<ImportBinding> {
+        let mut found: Vec<_> = self
+            .imports
+            .iter()
+            .filter(|b| {
+                b.path == path
+                    && b.module == module
+                    && b.leaf.binding == name
+                    && b.scope_range.as_ref().is_some_and(|r| {
+                        r.start_byte <= node.start_byte() && r.end_byte >= node.end_byte()
+                    })
+            })
+            .cloned()
+            .collect();
+        if let Some(nearest) = found
+            .iter()
+            .map(|b| {
+                b.scope_range.as_ref().expect("scope").end_byte
+                    - b.scope_range.as_ref().expect("scope").start_byte
+            })
+            .min()
+        {
+            found.retain(|b| {
+                b.scope_range.as_ref().expect("scope").end_byte
+                    - b.scope_range.as_ref().expect("scope").start_byte
+                    == nearest
+            });
+        }
+        found
+    }
+    fn path_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
         if items::check(self.controls.0, self.controls.1).is_err() {
             return false;
         }
         let text = &self.files[&need.path].source[node.byte_range()];
         let Some(old_module) = self.lexical_module(&need.path, node, false) else {
+            need.category = "module_context";
+            need.message =
+                "containing inline/conditional lexical module is not uniquely evidenced".into();
             return false;
         };
         let Some(using) = self.lexical_module(&need.path, node, true) else {
             return false;
         };
         let first = text.split("::").next().unwrap_or("");
+        let local_aliases = self.scoped_imports(&need.path, &old_module, node, first);
         if !matches!(first, "crate" | "self" | "super") {
-            match items::lexical_binding(node, &self.files[&need.path].source, first, self.controls)
-            {
-                items::LexicalBinding::Independent => return true,
-                items::LexicalBinding::Uncertain => return false,
+            let lexical = if local_aliases.len() == 1 {
+                items::lexical_with_import_proof(
+                    node,
+                    &self.files[&need.path].source,
+                    first,
+                    self.controls,
+                )
+            } else {
+                items::lexical_binding(node, &self.files[&need.path].source, first, self.controls)
+            };
+            match lexical {
+                items::LexicalBinding::Independent | items::LexicalBinding::Uncertain => {
+                    need.category = "binding_collision";
+                    need.message =
+                        "path prefix has a local/uncertain competing namespace binding".into();
+                    return false;
+                }
                 items::LexicalBinding::Absent => {}
             }
         }
-        let Some(old) = self.resolve_in(&need.path, &old_module, text, true) else {
+        let old = if local_aliases.len() == 1
+            && !local_aliases[0].conditioned
+            && !local_aliases[0].leaf.public
+        {
+            self.resolve_in(&need.path, &old_module, &local_aliases[0].leaf.path, false)
+                .filter(|base| {
+                    self.contexts
+                        .values()
+                        .any(|c| canonical(c, "").trim_end_matches("::") == base)
+                })
+                .map(|base| format!("{base}{}", text.strip_prefix(first).expect("prefix")))
+        } else if local_aliases.is_empty() {
+            self.resolve_in(&need.path, &old_module, text, true)
+        } else {
+            None
+        };
+        let Some(old) = old else {
             return false;
         };
         let Some((path, binding)) = self.declaration(&old) else {
             return false;
         };
         let after = self.mapped(&old);
+        if after == old && old_module == using {
+            return true;
+        }
+        if self.constructor_unknown(&binding, node) {
+            need.category = "visibility_context";
+            need.message =
+                "constructor/field access is not established by top-level visibility evidence"
+                    .into();
+            return false;
+        }
         if after != old || old_module != using {
             self.source_repair(
                 need,
@@ -647,8 +1007,358 @@ impl Analyzer<'_> {
         }
         self.visibility(&path, &binding, &using, &need.item_ids)
     }
+    fn constructor_unknown(&self, item: &Item, reference: Node<'_>) -> bool {
+        if item.kind != "struct_item" {
+            return false;
+        }
+        let declaration = self.parsed[&item.path]
+            .tree
+            .root_node()
+            .named_descendant_for_byte_range(item.span.range.start_byte, item.span.range.end_byte)
+            .expect("item");
+        let tuple = declaration
+            .child_by_field_name("body")
+            .is_some_and(|n| n.kind() == "ordered_field_declaration_list");
+        let mut parent = reference.parent();
+        while let Some(p) = parent {
+            if p.kind() == "struct_expression" {
+                return true;
+            }
+            if p.kind() == "call_expression" {
+                return tuple;
+            }
+            if !matches!(
+                p.kind(),
+                "scoped_identifier" | "scoped_type_identifier" | "generic_function"
+            ) {
+                break;
+            }
+            parent = p.parent();
+        }
+        false
+    }
+    fn final_resolve(&self, path: &str, module: &[String], text: &str) -> Option<String> {
+        if let Some(absolute) = absolute_path(module, text) {
+            return Some(absolute);
+        }
+        let first = text.split("::").next()?;
+        let imports = self.imported(path, module, first);
+        if imports.len() == 1 && !imports[0].conditioned && !imports[0].leaf.public {
+            let base = self.resolve_in(path, module, &imports[0].leaf.path, false)?;
+            let final_base = self.mapped(&base);
+            let rest = text.strip_prefix(first)?;
+            if !rest.is_empty() {
+                return Some(format!("{final_base}{rest}"));
+            }
+        }
+        let mut parts = vec!["crate".to_owned()];
+        parts.extend(module.iter().cloned());
+        parts.push(text.into());
+        let local = parts.join("::");
+        if self
+            .final_contexts
+            .values()
+            .any(|c| canonical(c, "").trim_end_matches("::") == local)
+            || self.selected.iter().any(|(_, i, d)| {
+                i.name
+                    .as_deref()
+                    .is_some_and(|n| canonical(&self.final_contexts[d], n) == local)
+            })
+            || self.declaration(&local).is_some()
+        {
+            Some(local)
+        } else if simple_path(text) && imports.is_empty() {
+            Some(text.into())
+        } else {
+            None
+        }
+    }
+    fn repair_need(&self, repair: &Repair, category: &'static str, message: &str) -> Need {
+        let a = repair
+            .references
+            .first()
+            .or(repair.anchors.first())
+            .cloned()
+            .or_else(|| self.contributors(&repair.item_ids).into_iter().next())
+            .expect("repair has original evidence");
+        Need {
+            category,
+            path: a.path,
+            range: a.range,
+            message: message.into(),
+            item_ids: repair.item_ids.clone(),
+        }
+    }
+    fn choices(&mut self) -> Result<Vec<Need>, DomainError> {
+        let mut failures = Vec::new();
+        for index in 0..self.repairs.len() {
+            items::check(self.controls.0, self.controls.1)?;
+            let repair = self.repairs[index].clone();
+            let Some(choice) = self
+                .request
+                .rewrite_overrides
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .find(|c| c.target == repair.target)
+            else {
+                continue;
+            };
+            if !matches!(choice.action, crate::move_plan::RewriteAction::Replace) {
+                continue;
+            }
+            let text = choice
+                .replacement_text
+                .as_deref()
+                .ok_or_else(|| invalid_choice("replace requires replacement_text"))?;
+            if text.len() > 64 * 1024 {
+                return Err(invalid_choice(
+                    "replacement exceeds the 64-KiB alternative bound",
+                ));
+            }
+            let module = match &repair.target {
+                RewriteTarget::Source { anchor } => {
+                    let node = self.parsed[&anchor.path]
+                        .tree
+                        .root_node()
+                        .named_descendant_for_byte_range(
+                            anchor.range.start_byte,
+                            anchor.range.end_byte,
+                        )
+                        .ok_or_else(|| invalid_choice("no source context for alternative"))?;
+                    self.lexical_module(&anchor.path, node, true)
+                        .ok_or_else(|| invalid_choice("uncertain lexical module for alternative"))?
+                }
+                RewriteTarget::Synthesis { path, .. } => {
+                    self.final_contexts[path].module_segments.clone()
+                }
+            };
+            match repair.kind {
+                "path" | "use_path" => {
+                    if !simple_path(text) {
+                        return Err(invalid_choice(
+                            "only complete simple paths are supported; no comments, raw/absolute/qualified paths or code injection",
+                        ));
+                    }
+                    let prefix = self
+                        .imports
+                        .iter()
+                        .find(|b| {
+                            b.path == repair.path
+                                && (b.leaf.path_range == repair.range
+                                    || b.leaf.prefix_range.as_ref() == Some(&repair.range))
+                        })
+                        .map(|b| {
+                            if b.leaf.path_range == repair.range {
+                                b.leaf.prefix.as_str()
+                            } else {
+                                b.leaf
+                                    .prefix
+                                    .strip_suffix(
+                                        &self.files[&repair.path].source
+                                            [repair.range.start_byte..repair.range.end_byte],
+                                    )
+                                    .unwrap_or("")
+                                    .trim_end_matches("::")
+                            }
+                        })
+                        .unwrap_or("");
+                    let full = |t: &str| {
+                        if prefix.is_empty() {
+                            t.to_owned()
+                        } else {
+                            format!("{prefix}::{t}")
+                        }
+                    };
+                    let expected = self.final_resolve(&repair.path, &module, &full(&repair.after));
+                    if expected.is_none()
+                        || self.final_resolve(&repair.path, &module, &full(text)) != expected
+                    {
+                        return Err(invalid_choice(
+                            "path alternative must preserve the same evidenced final target",
+                        ));
+                    }
+                }
+                "visibility" => {
+                    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+                    if compact != "pub(crate)" && !compact.is_empty() {
+                        return Err(invalid_choice(
+                            "visibility alternative must be private or pub(crate); no pub/API escalation",
+                        ));
+                    }
+                    if compact.is_empty() {
+                        failures.push(self.repair_need(&repair, "visibility_context", "selected private visibility still leaves the proven access outside its allowed scope"));
+                    }
+                }
+                "import_insert" => {
+                    let (expected, binding) = parsed_import(&repair.after, self.controls)?;
+                    let (alternative, new_binding) = if simple_path(text) {
+                        (text.to_owned(), String::new())
+                    } else {
+                        parsed_import(text, self.controls)?
+                    };
+                    let expected = self.final_resolve(&repair.path, &module, &expected);
+                    if expected.is_none()
+                        || self.final_resolve(&repair.path, &module, &alternative) != expected
+                    {
+                        return Err(invalid_choice(
+                            "import/path alternative must preserve the same evidenced final target",
+                        ));
+                    }
+                    if new_binding != binding {
+                        if repair.references.is_empty() {
+                            return Err(invalid_choice(
+                                "binding change requires anchored written reference evidence",
+                            ));
+                        }
+                        let collision = !new_binding.is_empty()
+                            && (self.parsed.get(&repair.path).is_some_and(|p| {
+                                p.items.iter().any(|i| {
+                                    i.name.as_deref() == Some(&new_binding)
+                                        && self.final_path(&repair.path, i) == repair.path
+                                })
+                            }) || !self
+                                .imported(&repair.path, &module, &new_binding)
+                                .is_empty()
+                                || self.selected.iter().any(|(_, i, d)| {
+                                    d == &repair.path && i.name.as_deref() == Some(&new_binding)
+                                }));
+                        if collision {
+                            failures.push(self.repair_need(&repair, "binding_collision", "caller-selected import alias collides with a final written binding"));
+                        }
+                        for reference in &repair.references {
+                            let node = self.parsed[&reference.path]
+                                .tree
+                                .root_node()
+                                .named_descendant_for_byte_range(
+                                    reference.range.start_byte,
+                                    reference.range.end_byte,
+                                )
+                                .expect("reference");
+                            if !new_binding.is_empty()
+                                && items::lexical_binding(
+                                    node,
+                                    &self.files[&reference.path].source,
+                                    &new_binding,
+                                    self.controls,
+                                ) != items::LexicalBinding::Absent
+                            {
+                                failures.push(Need {category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or uncertain at an anchored access".into(),item_ids:repair.item_ids.clone()});
+                            }
+                            let need = Need {
+                                category: "unsupported_dependency_form",
+                                path: reference.path.clone(),
+                                range: reference.range.clone(),
+                                message: String::new(),
+                                item_ids: repair.item_ids.clone(),
+                            };
+                            let start = self.repairs.len();
+                            self.source_repair(
+                                &need,
+                                reference.range.clone(),
+                                if new_binding.is_empty() {
+                                    alternative.clone()
+                                } else {
+                                    new_binding.clone()
+                                },
+                                "path",
+                            );
+                            for authored in &mut self.repairs[start..] {
+                                authored.caller_override = true;
+                            }
+                        }
+                        if new_binding.is_empty() {
+                            self.repairs[index].after.clear();
+                            self.repairs[index].caller_override = true;
+                            continue;
+                        }
+                    }
+                }
+                "import_leaf_extract" if text.is_empty() => {}
+                _ if text == repair.after => {}
+                _ => return Err(invalid_choice("unsupported rewrite alternative")),
+            }
+            self.repairs[index].after = text.into();
+            self.repairs[index].caller_override = true;
+        }
+        // Recheck all chosen synthesized bindings as one simultaneous set.
+        let imports: Vec<_> = self
+            .repairs
+            .iter()
+            .filter(|r| r.kind == "import_insert" && !r.after.is_empty())
+            .collect();
+        for (index, left) in imports.iter().enumerate() {
+            let (_, binding) = parsed_import(&left.after, self.controls)?;
+            for right in &imports[..index] {
+                if left.path == right.path
+                    && parsed_import(&right.after, self.controls)?.1 == binding
+                    && left.after != right.after
+                {
+                    failures.push(self.repair_need(
+                        left,
+                        "binding_collision",
+                        "selected imports introduce competing final aliases",
+                    ));
+                }
+            }
+        }
+        Ok(failures)
+    }
     fn repair(&mut self, need: &mut Need) -> bool {
-        if need.category != "unsupported_dependency_form" {
+        if matches!(need.category, "reexport_dependency" | "glob_dependency") {
+            let node = self.parsed[&need.path]
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(need.range.start_byte, need.range.end_byte);
+            if let Some(node) = node.filter(|n| n.kind() == "use_declaration")
+                && items::use_facts(node, &self.files[&need.path].source, self.controls)
+                    .is_ok_and(|f| !f.0)
+                && let Some(module) = self.lexical_module(&need.path, node, false)
+                && let Ok(leaves) =
+                    items::use_leaves(node, &self.files[&need.path].source, self.controls)
+                && !leaves.is_empty()
+                && leaves.iter().all(|leaf| {
+                    self.resolve_in(&need.path, &module, &leaf.path, false)
+                        .is_some_and(|target| {
+                            !self.selected.iter().any(|(p, i, _)| {
+                                need.item_ids.contains(&i.id)
+                                    && i.name.as_deref().is_some_and(|name| {
+                                        canonical(&self.contexts[p], name) == target
+                                    })
+                            })
+                        })
+                })
+            {
+                return true;
+            }
+        }
+        if need.category == "visibility_context"
+            && let Some((path, item, destination)) = self.selected.iter().find(|(p, i, _)| {
+                p == &need.path && i.span.range == need.range && i.visibility_key == "restricted"
+            })
+        {
+            let node = self.parsed[path]
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(
+                    item.span.range.start_byte,
+                    item.span.range.end_byte,
+                )
+                .expect("item");
+            return items::absolute_visibility(node, &self.files[path].source, self.controls)
+                .is_some_and(|scope| {
+                    self.contexts
+                        .get(path)
+                        .is_some_and(|c| c.module_segments.starts_with(&scope))
+                        && self
+                            .final_contexts
+                            .get(destination)
+                            .is_some_and(|c| c.module_segments.starts_with(&scope))
+                });
+        }
+        if need.category != "unsupported_dependency_form"
+            && !(need.category == "binding_collision" && need.message.contains("lexical"))
+        {
             return false;
         }
         let data = &self.parsed[&need.path];
@@ -685,11 +1395,57 @@ impl Analyzer<'_> {
         let name = &source[node.byte_range()];
         let consumer = self.consumer(&need.path, node);
         let Some(module) = self.lexical_module(&need.path, node, false) else {
+            need.category = "module_context";
+            need.message = "written consumer has uncertain lexical module context".into();
             return false;
         };
         let Some(using) = self.lexical_module(&need.path, node, true) else {
             return false;
         };
+        let local_imports: Vec<_> = self
+            .imports
+            .iter()
+            .filter(|b| {
+                b.path == need.path
+                    && b.module == module
+                    && b.leaf.binding == name
+                    && b.scope_range.as_ref().is_some_and(|r| {
+                        r.start_byte <= node.start_byte() && r.end_byte >= node.end_byte()
+                    })
+            })
+            .cloned()
+            .collect();
+        if !local_imports.is_empty() {
+            let nearest = local_imports
+                .iter()
+                .map(|b| {
+                    b.scope_range.as_ref().expect("scope").end_byte
+                        - b.scope_range.as_ref().expect("scope").start_byte
+                })
+                .min()
+                .expect("import");
+            let nearest: Vec<_> = local_imports
+                .iter()
+                .filter(|b| {
+                    b.scope_range.as_ref().expect("scope").end_byte
+                        - b.scope_range.as_ref().expect("scope").start_byte
+                        == nearest
+                })
+                .collect();
+            if nearest.len() != 1 || nearest[0].conditioned || nearest[0].leaf.public {
+                need.category = "binding_collision";
+                return false;
+            }
+            let Some(old) = self.resolve_in(&need.path, &module, &nearest[0].leaf.path, false)
+            else {
+                return false;
+            };
+            return if let Some((p, i)) = self.declaration(&old) {
+                self.visibility(&p, &i, &using, &need.item_ids)
+            } else {
+                !old.starts_with("crate::")
+            };
+        }
         match items::lexical_binding(node, source, name, self.controls) {
             items::LexicalBinding::Independent => return true,
             items::LexicalBinding::Uncertain => {
@@ -704,6 +1460,18 @@ impl Analyzer<'_> {
             .binding(&need.path, name)
             .filter(|_| self.contexts[&need.path].module_segments == module);
         if imports.len() > 1 || (direct.is_some() && !imports.is_empty()) {
+            need.category = "binding_collision";
+            need.message = "several written declarations/imports compete for this binding".into();
+            return false;
+        }
+        if imports.len() == 1 && (imports[0].conditioned || imports[0].leaf.public) {
+            need.category = if imports[0].conditioned {
+                "scope_dependency"
+            } else {
+                "reexport_dependency"
+            };
+            need.message =
+                "needed import has conditional or public/chained exposure context".into();
             return false;
         }
         let (old, evidence) = if let Some(binding) = direct {
@@ -723,9 +1491,20 @@ impl Analyzer<'_> {
         } else {
             return false;
         };
+        if let Some((_, binding)) = self.declaration(&old)
+            && self.constructor_unknown(&binding, node)
+        {
+            need.category = "visibility_context";
+            need.message =
+                "constructor/field access is not established by top-level visibility evidence"
+                    .into();
+            return false;
+        }
         let target = self.mapped(&old);
         let same_module = self.declaration(&old).is_some_and(|(p, i)| {
-            self.final_contexts[self.final_path(&p, &i)].module_segments == using
+            self.final_contexts
+                .get(self.final_path(&p, &i))
+                .is_some_and(|c| c.module_segments == using)
         });
         if !same_module {
             if self.final_contexts[&consumer].module_segments != using {
@@ -735,7 +1514,22 @@ impl Analyzer<'_> {
                     target.clone(),
                     "path",
                 );
-            } else if !self.import(&consumer, name, &target, &need.item_ids, evidence) {
+            } else if !self.import(
+                &consumer,
+                name,
+                &target,
+                &need.item_ids,
+                evidence,
+                vec![anchor(
+                    self.files,
+                    &need.path,
+                    &span(node.start_byte(), node.end_byte()),
+                )],
+            ) {
+                need.category = "binding_collision";
+                need.message =
+                    "required destination import conflicts with a final declaration/import/alias"
+                        .into();
                 return false;
             }
         }
@@ -766,6 +1560,8 @@ pub(crate) fn analyze(
         final_contexts,
         repairs: Vec::new(),
         imports: Vec::new(),
+        descriptor_bytes: 0,
+        exceeded: false,
         controls,
     };
     for (path, data) in parsed {
@@ -781,6 +1577,18 @@ pub(crate) fn analyze(
             if node.kind() == "use_declaration" {
                 if let Some(module) = analyzer.lexical_module(path, node, false) {
                     for leaf in items::use_leaves(node, &files[path].source, controls)? {
+                        analyzer.descriptor_bytes += leaf.path.len()
+                            + leaf.prefix.len()
+                            + leaf.binding.len()
+                            + path.len()
+                            + module.iter().map(|s| s.len() + 32).sum::<usize>()
+                            + 512;
+                        if analyzer.descriptor_bytes > 128 * 1024 * 1024 {
+                            return Err(DomainError::new(
+                                "analysis_descriptor_bytes",
+                                "written import index guard reached",
+                            ));
+                        }
                         analyzer.imports.push(ImportBinding {
                             path: path.clone(),
                             module: module.clone(),
@@ -788,6 +1596,21 @@ pub(crate) fn analyze(
                             conditioned: node
                                 .prev_named_sibling()
                                 .is_some_and(|n| n.kind() == "attribute_item"),
+                            scope_range: {
+                                let mut parent = node.parent();
+                                let mut scope = None;
+                                while let Some(p) = parent {
+                                    if p.kind() == "block" {
+                                        scope = Some(span(p.start_byte(), p.end_byte()));
+                                        break;
+                                    }
+                                    if matches!(p.kind(), "source_file" | "mod_item") {
+                                        break;
+                                    }
+                                    parent = p.parent();
+                                }
+                                scope
+                            },
                         });
                         if analyzer.imports.len() > 100_000 {
                             return Err(DomainError::new(
@@ -810,9 +1633,23 @@ pub(crate) fn analyze(
         if !analyzer.repair(&mut need) {
             remaining.push(need);
         }
+        if analyzer.exceeded {
+            return Err(DomainError::new(
+                "analysis_descriptor_bytes",
+                "rewrite evidence guard reached",
+            ));
+        }
+    }
+    remaining.extend(analyzer.choices()?);
+    if analyzer.exceeded {
+        return Err(DomainError::new(
+            "analysis_descriptor_bytes",
+            "caller-authored evidence guard reached",
+        ));
     }
     Ok(Analysis {
         repairs: analyzer.repairs,
         needs: remaining,
+        descriptor_bytes: analyzer.descriptor_bytes,
     })
 }

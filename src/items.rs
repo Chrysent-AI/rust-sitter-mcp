@@ -196,6 +196,51 @@ fn visibility_key(
         _ => "restricted",
     })
 }
+/// Only a written absolute ancestor restriction has unchanged meaning after relocation.
+pub(crate) fn absolute_visibility(
+    node: Node<'_>,
+    source: &str,
+    controls: (Instant, &AtomicBool),
+) -> Option<Vec<String>> {
+    let visibility = (0..node.named_child_count())
+        .filter_map(|i| node.named_child(i as u32))
+        .find(|n| n.kind() == "visibility_modifier")?;
+    let mut text = String::new();
+    let mut stack = vec![visibility];
+    while let Some(node) = stack.pop() {
+        if check(controls.0, controls.1).is_err() {
+            return None;
+        }
+        if matches!(node.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if node.child_count() == 0 {
+            text.push_str(&source[node.byte_range()]);
+        } else {
+            for i in (0..node.child_count()).rev() {
+                stack.push(node.child(i).expect("child"));
+            }
+        }
+    }
+    let path = text.strip_prefix("pub(incrate")?.strip_suffix(')')?;
+    if path.is_empty() {
+        return Some(Vec::new());
+    }
+    let segments: Vec<_> = path
+        .strip_prefix("::")?
+        .split("::")
+        .map(str::to_owned)
+        .collect();
+    segments
+        .iter()
+        .all(|s| {
+            !s.is_empty()
+                && s.bytes().enumerate().all(|(i, b)| {
+                    b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
+                })
+        })
+        .then_some(segments)
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ModuleEvidence {
@@ -378,6 +423,32 @@ pub fn modules(
     Ok(out)
 }
 
+pub(crate) fn use_facts(
+    node: Node<'_>,
+    source: &str,
+    controls: (Instant, &AtomicBool),
+) -> Result<(bool, Vec<String>), DomainError> {
+    let mut glob = false;
+    let mut names = Vec::new();
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        check(controls.0, controls.1)?;
+        if matches!(node.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        glob |= node.kind() == "use_wildcard";
+        if matches!(
+            node.kind(),
+            "identifier" | "type_identifier" | "crate" | "self" | "super"
+        ) {
+            names.push(source[node.byte_range()].trim_start_matches("r#").into());
+        }
+        for i in (0..node.named_child_count()).rev() {
+            stack.push(node.named_child(i as u32).expect("child"));
+        }
+    }
+    Ok((glob, names))
+}
 /// Written use leaves retain original ranges; lists are never regenerated.
 #[derive(Clone)]
 pub(crate) struct UseLeaf {
@@ -402,12 +473,20 @@ pub(crate) fn use_leaves(
     };
     let public = visibility_key(node, source, controls.0, controls.1)? != "private";
     let mut out = Vec::new();
+    let mut bytes = 0usize;
     let Some(argument) = node.child_by_field_name("argument") else {
         return Ok(out);
     };
     let mut stack = vec![(argument, String::new(), None, None)];
     while let Some((node, prefix, prefix_range, list_range)) = stack.pop() {
         check(controls.0, controls.1)?;
+        bytes += prefix.len() * 3 + node.end_byte() - node.start_byte() + 256;
+        if bytes > 128 * 1024 * 1024 {
+            return Err(DomainError::new(
+                "analysis_descriptor_bytes",
+                "owned use-leaf evidence guard reached",
+            ));
+        }
         match node.kind() {
             "scoped_use_list" => {
                 let part = node.child_by_field_name("path");
@@ -437,6 +516,13 @@ pub(crate) fn use_leaves(
                 for i in (0..node.named_child_count()).rev() {
                     let child = node.named_child(i as u32).expect("child");
                     if !matches!(child.kind(), "line_comment" | "block_comment") {
+                        bytes += prefix.len() + 256;
+                        if bytes > 128 * 1024 * 1024 {
+                            return Err(DomainError::new(
+                                "analysis_descriptor_bytes",
+                                "group prefix evidence guard reached",
+                            ));
+                        }
                         stack.push((
                             child,
                             prefix.clone(),
@@ -559,9 +645,10 @@ pub(crate) fn local(
                 if check(deadline, cancelled).is_err() {
                     return false;
                 }
-                if let Some(p) = params
-                    .named_child(i as u32)
-                    .and_then(|p| p.child_by_field_name("pattern"))
+                let parameter = params.named_child(i as u32).expect("parameter");
+                if let Some(p) = parameter
+                    .child_by_field_name("pattern")
+                    .or_else(|| (parent.kind() == "closure_expression").then_some(parameter))
                     && binding_pattern(p, source, name)
                 {
                     return true;
@@ -626,6 +713,23 @@ pub(crate) fn lexical_binding(
     name: &str,
     controls: (Instant, &AtomicBool),
 ) -> LexicalBinding {
+    lexical_context(node, source, name, controls, false)
+}
+pub(crate) fn lexical_with_import_proof(
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+) -> LexicalBinding {
+    lexical_context(node, source, name, controls, true)
+}
+fn lexical_context(
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+    proven_import: bool,
+) -> LexicalBinding {
     let mut owner = node;
     while let Some(parent) = owner.parent() {
         if parent.kind() == "source_file" {
@@ -643,12 +747,22 @@ pub(crate) fn lexical_binding(
         }
         if matches!(
             parent.kind(),
-            "closure_expression"
-                | "for_expression"
-                | "match_arm"
-                | "if_let_expression"
-                | "while_let_expression"
+            "for_expression" | "match_arm" | "if_let_expression" | "while_let_expression"
         ) {
+            return LexicalBinding::Uncertain;
+        }
+        if parent.kind() == "closure_expression"
+            && parent.child_by_field_name("parameters").is_some_and(|p| {
+                (0..p.named_child_count())
+                    .filter_map(|i| p.named_child(i as u32))
+                    .any(|n| {
+                        !matches!(
+                            n.kind(),
+                            "identifier" | "mut_pattern" | "reference_pattern" | "parameter"
+                        )
+                    })
+            })
+        {
             return LexicalBinding::Uncertain;
         }
         if let Some(params) = parent.child_by_field_name("parameters") {
@@ -668,11 +782,24 @@ pub(crate) fn lexical_binding(
         if parent.kind() == "block" {
             for i in 0..parent.named_child_count() {
                 let statement = parent.named_child(i as u32).expect("child");
-                if statement.kind() == "use_declaration"
+                let relevant_use = if statement.kind() == "use_declaration" {
+                    use_facts(statement, source, controls)
+                        .map(|f| f.0)
+                        .unwrap_or(true)
+                        || use_leaves(statement, source, controls)
+                            .map(|leaves| leaves.iter().any(|leaf| leaf.binding == name))
+                            .unwrap_or(true)
+                } else {
+                    false
+                };
+                if (relevant_use && !proven_import)
                     || (statement.kind() == "let_declaration"
                         && statement.end_byte() <= child.start_byte()
                         && statement.child_by_field_name("pattern").is_some_and(|p| {
-                            !matches!(p.kind(), "identifier" | "mut_pattern" | "reference_pattern")
+                            !matches!(
+                                p.kind(),
+                                "identifier" | "mut_pattern" | "reference_pattern" | "_"
+                            )
                         }))
                 {
                     return LexicalBinding::Uncertain;
@@ -702,7 +829,7 @@ pub(crate) fn reference_role(node: Node<'_>) -> bool {
     let mut child = node;
     while let Some(parent) = child.parent() {
         if parent.child_by_field_name("pattern") == Some(child)
-            || matches!(parent.kind(), "type_parameters" | "lifetime" | "loop_label")
+            || matches!(parent.kind(), "lifetime" | "loop_label")
             || (parent.kind() == "field_expression"
                 && parent.child_by_field_name("field") == Some(child))
         {
@@ -909,28 +1036,13 @@ pub fn dependencies(
             if kind == "field_expression" {
                 needs.push(need("visibility_context", source_path, current, "member/method access and trait-import context are not established syntactically"));
             }
-            if matches!(
-                kind,
-                "closure_expression"
-                    | "for_expression"
-                    | "match_expression"
-                    | "if_let_expression"
-                    | "while_let_expression"
-            ) {
-                needs.push(need(
-                    "unsupported_dependency_form",
-                    source_path,
-                    current,
-                    "lexical pattern context outside the supported binding checker",
-                ));
-            }
             let is_pattern = current
                 .parent()
                 .is_some_and(|p| p.child_by_field_name("pattern") == Some(current));
             if is_pattern && matches!(kind, "identifier" | "mut_pattern" | "reference_pattern") {
                 continue;
             }
-            if matches!(kind, "identifier" | "type_identifier") && !declaration_name(current) {
+            if matches!(kind, "identifier" | "type_identifier") && reference_role(current) {
                 *candidates += 1;
                 if *candidates > 100_000 {
                     return Err(DomainError::new(
@@ -951,6 +1063,7 @@ pub fn dependencies(
                 });
                 if !self_context && !own && !bound && !co_moved {
                     let mut explicit = false;
+                    let mut glob = false;
                     for i in data.items.iter().filter(|i| i.kind == "use_declaration") {
                         let use_node = data
                             .tree
@@ -960,16 +1073,12 @@ pub fn dependencies(
                                 i.span.range.end_byte,
                             )
                             .expect("use");
+                        glob |= use_facts(use_node, source, controls)?.0;
                         explicit |= use_leaves(use_node, source, controls)?
                             .iter()
                             .any(|leaf| leaf.binding == name);
                     }
-                    let glob = !explicit
-                        && data.items.iter().any(|i| {
-                            i.kind == "use_declaration"
-                                && source[i.span.range.start_byte..i.span.range.end_byte]
-                                    .contains('*')
-                        });
+                    let glob = glob && !explicit;
                     needs.push(need(if glob { "glob_dependency" } else { "unsupported_dependency_form" }, source_path, current, "written bare dependency is not retained in the final scope; explicit import/path repair required"));
                 }
             }
@@ -984,9 +1093,18 @@ pub fn dependencies(
                 for other in &dest.items {
                     check(deadline, cancelled)?;
                     if other.kind == "use_declaration"
-                        && files[destination].source
-                            [other.span.range.start_byte..other.span.range.end_byte]
-                            .contains('*')
+                        && use_facts(
+                            dest.tree
+                                .root_node()
+                                .named_descendant_for_byte_range(
+                                    other.span.range.start_byte,
+                                    other.span.range.end_byte,
+                                )
+                                .expect("use"),
+                            &files[destination].source,
+                            controls,
+                        )?
+                        .0
                     {
                         needs.push(need(
                             "glob_dependency",
@@ -1054,24 +1172,29 @@ pub fn dependencies(
                 .and_then(|e| e.module_segments.last())
                 .map(String::as_str);
             let mut module_spellings = std::collections::BTreeSet::new();
-            module_spellings.insert(segment.unwrap_or("crate"));
+            module_spellings.insert(segment.unwrap_or("crate").to_owned());
             // Alias declarations alone are not affected consumers. Retain their spellings
             // for conservative glob relevance; written uses of the moved name are checked below.
             for (path, data) in parsed {
                 for item in &data.items {
                     check(deadline, cancelled)?;
                     if item.kind == "use_declaration" {
-                        let text = &files[path].source
-                            [item.span.range.start_byte..item.span.range.end_byte];
-                        let words: Vec<_> = text
-                            .split(|c: char| !c.is_alphanumeric() && c != '_')
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                        if words.contains(&segment.unwrap_or("crate"))
-                            && let Some(i) = words.iter().position(|s| *s == "as")
-                            && let Some(alias) = words.get(i + 1)
-                        {
-                            module_spellings.insert(*alias);
+                        let node = data
+                            .tree
+                            .root_node()
+                            .named_descendant_for_byte_range(
+                                item.span.range.start_byte,
+                                item.span.range.end_byte,
+                            )
+                            .expect("use");
+                        for leaf in use_leaves(node, &files[path].source, controls)? {
+                            if leaf
+                                .path
+                                .split("::")
+                                .any(|p| p == segment.unwrap_or("crate"))
+                            {
+                                module_spellings.insert(leaf.binding);
+                            }
                         }
                     }
                 }
@@ -1105,21 +1228,21 @@ pub fn dependencies(
                         continue;
                     }
                     let text = &other_source[current.byte_range()];
-                    if current.kind() == "use_declaration"
-                        && (text
-                            .split(|c: char| !c.is_alphanumeric() && c != '_')
-                            .any(|s| s == name)
-                            || (text.contains('*')
-                                && text
-                                    .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                    .any(|s| module_spellings.contains(s))))
+                    let use_evidence = if current.kind() == "use_declaration" {
+                        Some(use_facts(current, other_source, controls)?)
+                    } else {
+                        None
+                    };
+                    if let Some((glob, names)) = &use_evidence
+                        && (names.iter().any(|s| s == name)
+                            || (*glob && names.iter().any(|s| module_spellings.contains(s))))
                     {
                         needs.push(need(
                             if visibility_key(current, other_source, deadline, cancelled)?
                                 != "private"
                             {
                                 "reexport_dependency"
-                            } else if text.contains('*') {
+                            } else if *glob {
                                 "glob_dependency"
                             } else {
                                 "unsupported_dependency_form"
@@ -1191,7 +1314,7 @@ pub fn dependencies(
     bound_needs(&needs, &mut seen_needs, analysis_bytes)?;
     Ok((needs, *candidates))
 }
-fn token_candidate(
+pub(crate) fn token_candidate(
     node: Node<'_>,
     source: &str,
     name: &str,

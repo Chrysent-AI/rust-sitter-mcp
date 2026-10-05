@@ -422,7 +422,7 @@ fn quoted_directories_legacy_layout_root_extraction_and_override_errors() {
         .find(|r| r["kind"] == "module_declaration")
         .unwrap();
     for (action, replacement, expected) in [
-        ("retain", None, "UNSUPPORTED_TRIVIA_DISPOSITION"),
+        ("retain", None, "MODULE_CONTEXT"),
         (
             "replace",
             Some("pub mod target;"),

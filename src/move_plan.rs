@@ -904,7 +904,14 @@ fn build(
                     "moves.destination",
                 ));
             }
-            if declaration.visibility_key == "restricted" {
+            if declaration.visibility_key == "restricted"
+                && items::absolute_visibility(
+                    node,
+                    &files[&creation.parent].source,
+                    (deadline, cancelled),
+                )
+                .is_none()
+            {
                 result.blocker("VISIBILITY_CONTEXT", "reused restricted declaration needs verified absolute access context; no visibility repair is performed", Some(&creation.parent), Some(declaration.span.range.clone()));
             }
             creation.link = Some(DeclarationLink::Reused {
@@ -982,6 +989,7 @@ fn build(
         needs,
         (deadline, cancelled),
     )?;
+    result.account(analysis.descriptor_bytes)?;
     for need in analysis.needs {
         items::check(deadline, cancelled)?;
         if result.plan.decisions.len() == 100_000 {
@@ -997,7 +1005,7 @@ fn build(
             Some(&need.path),
             Some(need.range.clone()),
         );
-        result.plan.decisions.push(Decision { id, category: need.category.into(), anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)], item_ids: need.item_ids, evidence: vec![Lines::new(&files[&need.path].source).slice(need.range.start_byte, need.range.end_byte, request.limits.text_bytes)], unresolved_consequence: need.message, next_action: "change/narrow selection; automatic dependency repairs are not part of dependency-free moves".into(), resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true });
+        result.plan.decisions.push(Decision { id, category: need.category.into(), anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)], item_ids: need.item_ids, evidence: vec![Lines::new(&files[&need.path].source).slice(need.range.start_byte, need.range.end_byte, request.limits.text_bytes)], unresolved_consequence: need.message, next_action: "supply supported written binding/context evidence or change/narrow the selection; acknowledgments cannot clear uncertainty".into(), resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true });
         result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
     }
     // Structural context blockers need the same actionable decision shape as dependency needs.
@@ -1407,6 +1415,7 @@ fn ending(source: &str, at: usize) -> &'static str {
     }
     "\n"
 }
+#[allow(clippy::too_many_arguments)] // Original target, default bytes and validated choice stay explicit for audit.
 fn rewrite(
     request: &MoveRequest,
     used: &mut BTreeSet<usize>,
@@ -1415,10 +1424,15 @@ fn rewrite(
     kind: &str,
     text: &str,
     ids: &[String],
+    validated_choice: Option<&str>,
 ) -> Result<(String, String), DomainError> {
     let mut after = text.to_owned();
     let mut action = "accept_default";
-    let mut origin = "synthesized";
+    let mut origin = if matches!(target, RewriteTarget::Source { .. }) {
+        "copied"
+    } else {
+        "synthesized"
+    };
     for (index, choice) in request
         .rewrite_overrides
         .as_deref()
@@ -1455,7 +1469,10 @@ fn rewrite(
                 }
                 if matches!(choice.action, RewriteAction::Retain) {
                     action = "retain";
-                    after.clear();
+                    after = match &target {
+                        RewriteTarget::Source { anchor } => anchor.expected_text.clone(),
+                        _ => String::new(),
+                    };
                 }
             }
             RewriteAction::Replace => {
@@ -1466,12 +1483,16 @@ fn rewrite(
                         "rewrite_overrides",
                     )
                 })?;
-                if after.len() > 64 * 1024
+                let requested = after.clone();
+                if let Some(validated) = validated_choice {
+                    after = validated.into();
+                }
+                if requested.len() > 64 * 1024
                     || (kind == "separator"
                         && !after
                             .bytes()
                             .all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n')))
-                    || (kind != "separator" && after != text)
+                    || (kind != "separator" && validated_choice.is_none() && after != text)
                 {
                     return Err(error(
                         "INVALID_REWRITE_OVERRIDE",
@@ -1484,17 +1505,36 @@ fn rewrite(
             }
         }
     }
-    if (after.is_empty() && kind != "import_leaf_extract")
-        || (kind == "separator" && !after.contains('\n'))
-    {
+    if kind == "separator" && !after.contains('\n') {
         result.blocker("UNSUPPORTED_TRIVIA_DISPOSITION", "retained/replaced required synthesis does not provide a safe separate-line boundary/declaration", None, None);
+    }
+    let mut decision_ids = Vec::new();
+    if action == "retain" && kind != "separator" {
+        let category = match kind {
+            "visibility" => "visibility_context",
+            "module_declaration" => "module_context",
+            _ => "unsupported_dependency_form",
+        };
+        let anchors = match &target {
+            RewriteTarget::Source { anchor } => vec![anchor.clone()],
+            RewriteTarget::Synthesis { items, .. } => items.clone(),
+        };
+        let id = format!("d/{}", result.plan.decisions.len());
+        result.blocker(
+            &category.to_uppercase(),
+            "retained syntax leaves a proven relocation dependency/access unresolved",
+            anchors.first().map(|a| a.path.as_str()),
+            anchors.first().map(|a| a.range.clone()),
+        );
+        result.plan.decisions.push(Decision { id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), next_action:"accept the default or replay a supported same-target alternative".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true });
+        decision_ids.push(id);
     }
     let id = format!("r/{}", result.plan.rewrites.len());
     result.plan.rewrites.push(Rewrite {
         id: id.clone(),
         kind: kind.into(),
         item_ids: ids.to_vec(),
-        decision_ids: Vec::new(),
+        decision_ids,
         anchors: Vec::new(),
         target,
         before_text: String::new(),
@@ -1544,7 +1584,7 @@ fn add_separator(
         parent_path: None,
         binding: Some(identity),
     };
-    let (id, text) = rewrite(request, used, result, target, "separator", eol, &ids)?;
+    let (id, text) = rewrite(request, used, result, target, "separator", eol, &ids, None)?;
     let start = insertion.text.len();
     insertion.text.push_str(&text);
     insertion
@@ -1597,6 +1637,7 @@ fn assemble(
             repair.kind,
             &repair.after,
             &repair.item_ids,
+            repair.caller_override.then_some(repair.after.as_str()),
         )?;
         let audit = result.plan.rewrites.last_mut().expect("repair audit");
         audit.before_text = files
@@ -1610,8 +1651,8 @@ fn assemble(
             .iter()
             .map(|a| format!("{}:{}..{}", a.path, a.range.start_byte, a.range.end_byte))
             .collect();
-        if matches!(repair.target, RewriteTarget::Source { .. }) {
-            audit.origin = "copied".into();
+        if repair.caller_override {
+            audit.origin = "caller_override".into();
         }
         if let Some(path) = &repair.declaration_for {
             creations
@@ -1745,15 +1786,17 @@ fn assemble(
                 .rewrites
                 .push((id.clone(), range(start, insertion.text.len())));
             insertion.item_ids.extend(repair.item_ids.clone());
-            add_separator(
-                request,
-                &mut used,
-                result,
-                &mut insertion,
-                &contributors,
-                selected,
-                (eol, "after_payload", format!("import:{}", repair.after)),
-            )?;
+            if !text.is_empty() {
+                add_separator(
+                    request,
+                    &mut used,
+                    result,
+                    &mut insertion,
+                    &contributors,
+                    selected,
+                    (eol, "after_payload", format!("import:{}", repair.after)),
+                )?;
+            }
         }
         for created_path in declarations.remove(&key).unwrap_or_default() {
             items::check(deadline, cancelled)?;
@@ -1807,6 +1850,7 @@ fn assemble(
                 "module_declaration",
                 &format!("mod {name};"),
                 &ids,
+                None,
             )?;
             let start = insertion.text.len();
             insertion.text.push_str(&text);
@@ -2238,6 +2282,13 @@ fn assemble(
                 record.origin_ids.push(origin.id.clone());
             }
         }
+        record.decision_ids = result
+            .plan
+            .decisions
+            .iter()
+            .filter(|d| d.item_ids.contains(&record.id))
+            .map(|d| d.id.clone())
+            .collect();
         record.rewrite_ids = result
             .plan
             .rewrites
@@ -2297,14 +2348,32 @@ fn assemble(
     Ok(())
 }
 fn sort_rewrites(result: &mut MoveEnvelope, edits: &mut [Edit], created: &mut [CreatedFile]) {
+    for rewrite in &mut result.plan.rewrites {
+        rewrite.item_ids.sort();
+        rewrite.item_ids.dedup();
+    }
     result.plan.rewrites.sort_by_key(|r| {
-        let path = match &r.target {
-            RewriteTarget::Source { anchor } => anchor.path.clone(),
-            RewriteTarget::Synthesis { path, .. } => path.clone(),
+        let destination = match r.artifact_links.first() {
+            Some(ArtifactLink::Edit { index, .. }) => edits[*index].path.clone(),
+            Some(ArtifactLink::CreatedFile { id, .. }) => created
+                .iter()
+                .find(|f| &f.id == id)
+                .expect("created artifact")
+                .path
+                .clone(),
+            None => match &r.target {
+                RewriteTarget::Source { anchor } => anchor.path.clone(),
+                RewriteTarget::Synthesis { path, .. } => path.clone(),
+            },
+        };
+        let original = match &r.target {
+            RewriteTarget::Source { anchor } => (false, anchor.path.clone(), anchor.range.clone()),
+            RewriteTarget::Synthesis { .. } => (true, String::new(), range(0, 0)),
         };
         (
-            path,
+            destination,
             r.kind.clone(),
+            original,
             serde_json::to_string(&r.target).expect("target JSON"),
             r.item_ids.clone(),
         )
