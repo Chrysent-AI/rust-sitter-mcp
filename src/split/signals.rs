@@ -657,6 +657,7 @@ pub(super) fn add_decision(
         },
         selected_choice: banner.then(|| "keep_in_place".into()),
         blocks_applicability: !banner,
+        chain_diagnostic_ids: Vec::new(),
     };
     result.account(descriptor_bytes(&value)?)?;
     result.decisions.push(value);

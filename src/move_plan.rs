@@ -173,6 +173,7 @@ pub struct Decision {
     pub supported_choices: Vec<String>,
     pub selected_choice: Option<String>,
     pub blocks_applicability: bool,
+    pub chain_diagnostic_ids: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -270,6 +271,7 @@ pub struct MovePlan {
     pub moves: Vec<MoveRecord>,
     pub trivia_decisions: Vec<MoveTriviaDecision>,
     pub decisions: Vec<Decision>,
+    pub chain_diagnostics: Vec<items::ChainDiagnostic>,
     pub rewrites: Vec<Rewrite>,
     pub base_files: Vec<BaseFile>,
     pub blockers: Vec<Blocker>,
@@ -333,6 +335,7 @@ impl MoveEnvelope {
                 moves: Vec::new(),
                 trivia_decisions: Vec::new(),
                 decisions: Vec::new(),
+                chain_diagnostics: Vec::new(),
                 rewrites: Vec::new(),
                 base_files: Vec::new(),
                 blockers: Vec::new(),
@@ -363,6 +366,44 @@ impl MoveEnvelope {
                 "analysis_descriptor_bytes",
                 "whole-call descriptor guard reached",
             ));
+        }
+        Ok(())
+    }
+    fn chain_decisions(
+        &mut self,
+        diagnostics: Vec<items::ChainDiagnostic>,
+        fallback: &SourceAnchor,
+        files: &BTreeMap<String, FileSnapshot>,
+    ) -> Result<(), DomainError> {
+        for mut diagnostic in diagnostics {
+            diagnostic.id.clear();
+            if self.plan.chain_diagnostics.iter().any(|d| {
+                let mut prior = d.clone();
+                prior.id.clear();
+                prior == diagnostic
+            }) {
+                continue;
+            }
+            diagnostic.id = format!("chain/{}", self.plan.chain_diagnostics.len());
+            let location = diagnostic.declaration.as_ref();
+            let anchors = location
+                .and_then(|d| {
+                    files
+                        .get(&d.path)
+                        .map(|f| anchor(&d.path, &f.source, &d.range))
+                })
+                .map(|a| vec![a])
+                .unwrap_or_else(|| vec![fallback.clone()]);
+            let decision = Decision {
+                id: format!("d/{}", self.plan.decisions.len()), category: "module_context".into(), anchors, item_ids: Vec::new(), evidence: Vec::new(),
+                unresolved_consequence: format!("ordinary chain from supplied root {} cannot prove {}: {:?}", diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason),
+                next_action: "admit the evidenced ordinary chain or supply a provable root/parent; no Cargo target or cfg resolution is inferred".into(),
+                resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true,
+                chain_diagnostic_ids: vec![diagnostic.id.clone()],
+            };
+            self.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
+            self.plan.chain_diagnostics.push(diagnostic);
+            self.plan.decisions.push(decision);
         }
         Ok(())
     }
@@ -427,6 +468,15 @@ impl MoveEnvelope {
             ("moves", self.plan.moves.len()),
             ("trivia_decisions", self.plan.trivia_decisions.len()),
             ("decisions", self.plan.decisions.len()),
+            ("chain_diagnostics", self.plan.chain_diagnostics.len()),
+            (
+                "chain_diagnostic_references",
+                self.plan
+                    .decisions
+                    .iter()
+                    .map(|d| d.chain_diagnostic_ids.len())
+                    .sum(),
+            ),
             ("rewrites", self.plan.rewrites.len()),
             ("base_files", self.plan.base_files.len()),
             ("origins", self.plan.origins.len()),
@@ -437,6 +487,7 @@ impl MoveEnvelope {
         self.plan.moves.clear();
         self.plan.trivia_decisions.clear();
         self.plan.decisions.clear();
+        self.plan.chain_diagnostics.clear();
         self.plan.rewrites.clear();
         self.plan.base_files.clear();
         self.plan.origins.clear();
@@ -521,6 +572,12 @@ fn run_with_recheck(
             result.error = Some(error);
             result.plan.state = "blocked".into();
             result.withhold();
+        }
+    }
+    let links = items::finalize_chain(&mut result.plan.chain_diagnostics);
+    for decision in &mut result.plan.decisions {
+        for id in &mut decision.chain_diagnostic_ids {
+            *id = links[id].clone();
         }
     }
     result.fit();
@@ -668,6 +725,16 @@ fn build(
     }
     let files: BTreeMap<_, _> = files.into_iter().map(|f| (f.path.clone(), f)).collect();
     if !files.contains_key(&request.crate_root) {
+        let mut diagnostic = items::ChainDiagnostic::boundary(
+            &request.crate_root,
+            &request.crate_root,
+            items::ChainRole::Source,
+            items::ChainReason::ChainFileUnadmitted,
+        );
+        diagnostic.id = "chain/0".into();
+        diagnostic.candidate_paths.push(request.crate_root.clone());
+        result.account(descriptor_bytes(&diagnostic)?)?;
+        result.plan.chain_diagnostics.push(diagnostic);
         return Err(error(
             "STALE_SELECTION",
             "crate_root must be an admitted existing Rust file",
@@ -706,14 +773,16 @@ fn build(
         }
         parsed.insert(path.clone(), data);
     }
-    let contexts = items::modules(
+    let module_analysis = items::modules(
         &scope,
         &request.crate_root,
         &files,
         &parsed,
         deadline,
         cancelled,
+        &mut result.counts.analysis_descriptor_bytes,
     )?;
+    let contexts = &module_analysis.contexts;
     result.account(descriptor_bytes(&contexts)?)?;
     if request.moves.is_empty()
         && (request
@@ -815,6 +884,31 @@ fn build(
                 if !files.contains_key(parent_path)
                     || items::child_path(parent_path, &request.crate_root, name) != *path
                 {
+                    let mut diagnostic = items::ChainDiagnostic::boundary(
+                        &request.crate_root,
+                        parent_path,
+                        items::ChainRole::DeclarationParent,
+                        if files.contains_key(parent_path) {
+                            items::ChainReason::OrdinaryLayoutMismatch
+                        } else {
+                            items::ChainReason::ChainFileUnadmitted
+                        },
+                    );
+                    diagnostic.at_file_path = parent_path.clone();
+                    diagnostic.candidate_paths = if files.contains_key(parent_path) {
+                        vec![
+                            items::child_path(parent_path, &request.crate_root, name),
+                            path.clone(),
+                        ]
+                    } else {
+                        vec![parent_path.clone()]
+                    };
+                    diagnostic.evidenced_prefix_paths = contexts
+                        .get(parent_path)
+                        .map(|e| e.filesystem_paths.clone())
+                        .unwrap_or_default();
+                    diagnostic.parent_candidates.push(parent_path.clone());
+                    result.chain_decisions(vec![diagnostic], &entry.item, &files)?;
                     return Err(error(
                         "INVALID_DECLARATION_PARENT",
                         "ordinary 2018 child path does not equal requested sibling",
@@ -829,6 +923,19 @@ fn build(
                     })?;
                 let competing = format!("{}/mod.rs", path.trim_end_matches(".rs"));
                 if items::present(&scope, &competing)? {
+                    let mut diagnostic = items::ChainDiagnostic::boundary(
+                        &request.crate_root,
+                        path,
+                        items::ChainRole::DeclarationParent,
+                        items::ChainReason::CompetingFileLayout,
+                    );
+                    diagnostic.at_file_path = parent_path.clone();
+                    diagnostic.evidenced_prefix_paths = contexts
+                        .get(parent_path)
+                        .map(|e| e.filesystem_paths.clone())
+                        .unwrap_or_default();
+                    diagnostic.candidate_paths = vec![path.clone(), competing];
+                    result.chain_decisions(vec![diagnostic], &entry.item, &files)?;
                     return Err(error(
                         "MODULE_DECLARATION_CONFLICT",
                         "competing name/mod.rs layout",
@@ -839,6 +946,20 @@ fn build(
                     .keys()
                     .any(|p| p != path && p.to_lowercase() == path.to_lowercase())
                 {
+                    let mut diagnostic = items::ChainDiagnostic::boundary(
+                        &request.crate_root,
+                        path,
+                        items::ChainRole::DeclarationParent,
+                        items::ChainReason::CompetingDeclarations,
+                    );
+                    diagnostic.at_file_path = parent_path.clone();
+                    diagnostic.candidate_paths = creations
+                        .keys()
+                        .filter(|p| p.to_lowercase() == path.to_lowercase())
+                        .cloned()
+                        .chain(std::iter::once(path.clone()))
+                        .collect();
+                    result.chain_decisions(vec![diagnostic], &entry.item, &files)?;
                     return Err(error(
                         "MODULE_DECLARATION_CONFLICT",
                         "batch has case-folded creation aliases",
@@ -852,6 +973,16 @@ fn build(
                     selections: Vec::new(),
                 });
                 if creation.parent != *parent_path {
+                    let mut diagnostic = items::ChainDiagnostic::boundary(
+                        &request.crate_root,
+                        path,
+                        items::ChainRole::DeclarationParent,
+                        items::ChainReason::CompetingDeclarations,
+                    );
+                    diagnostic.at_file_path = parent_path.clone();
+                    diagnostic.parent_candidates =
+                        vec![creation.parent.clone(), parent_path.clone()];
+                    result.chain_decisions(vec![diagnostic], &entry.item, &files)?;
                     return Err(error(
                         "MODULE_DECLARATION_CONFLICT",
                         "conflicting creation descriptors",
@@ -914,6 +1045,41 @@ fn build(
                 || !declaration.attributes.is_empty()
                 || node.child_by_field_name("body").is_some()
             {
+                let mut reasons =
+                    items::declaration_reasons(parent, &files[&creation.parent], declaration);
+                if matches.len() != 1 || declaration.kind != "mod_item" {
+                    reasons.push(items::ChainReason::CompetingDeclarations);
+                }
+                let diagnostics = reasons
+                    .into_iter()
+                    .map(|reason| {
+                        let mut diagnostic = items::ChainDiagnostic::boundary(
+                            &request.crate_root,
+                            path,
+                            items::ChainRole::DeclarationParent,
+                            reason,
+                        );
+                        diagnostic.at_file_path = creation.parent.clone();
+                        diagnostic.evidenced_prefix_paths = contexts
+                            .get(&creation.parent)
+                            .map(|e| e.filesystem_paths.clone())
+                            .unwrap_or_default();
+                        diagnostic.declaration = Some(items::ChainLocation {
+                            path: creation.parent.clone(),
+                            range: declaration.span.range.clone(),
+                        });
+                        diagnostic.candidate_paths = vec![
+                            path.clone(),
+                            format!("{}/mod.rs", path.trim_end_matches(".rs")),
+                        ];
+                        diagnostic
+                    })
+                    .collect();
+                result.chain_decisions(
+                    diagnostics,
+                    &request.moves[creation.selections[0]].item,
+                    &files,
+                )?;
                 return Err(error(
                     "MODULE_DECLARATION_CONFLICT",
                     "name conflicts with conditional/inline/competing declaration",
@@ -973,6 +1139,30 @@ fn build(
             || new.is_none_or(|e| !e.unresolved.is_empty())
         {
             result.blocker("CRATE_IDENTITY_UNCERTAIN", "required ordinary module chain is missing/ambiguous/recovered; admit the chain or change destination", Some(&selection.source), Some(selection.item.span.range.clone()));
+            let fallback = anchor(
+                &selection.source,
+                &files[&selection.source].source,
+                &selection.item.span.range,
+            );
+            let mut diagnostics = module_analysis.project(
+                &request.crate_root,
+                &selection.source,
+                items::ChainRole::Source,
+                (deadline, cancelled),
+            )?;
+            let (path, role) = match &selection.destination {
+                Destination::Existing { path, .. } => (path, items::ChainRole::Destination),
+                Destination::NewSibling { parent_path, .. } => {
+                    (parent_path, items::ChainRole::DeclarationParent)
+                }
+            };
+            diagnostics.extend(module_analysis.project(
+                &request.crate_root,
+                path,
+                role,
+                (deadline, cancelled),
+            )?);
+            result.chain_decisions(diagnostics, &fallback, &files)?;
         }
     }
     let tuples: Vec<_> = selected
@@ -989,7 +1179,7 @@ fn build(
         &files,
         &parsed,
         &tuples,
-        &contexts,
+        contexts,
         (deadline, cancelled),
         &mut result.counts.reference_candidates,
         &mut result.counts.analysis_descriptor_bytes,
@@ -1000,7 +1190,7 @@ fn build(
         &files,
         &parsed,
         &tuples,
-        &contexts,
+        contexts,
         &new_contexts,
         needs,
         (deadline, cancelled),
@@ -1022,16 +1212,16 @@ fn build(
             Some(&need.path),
             Some(need.range.clone()),
         );
-        result.plan.decisions.push(Decision { id, category: need.category.into(), anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)], item_ids: need.item_ids, evidence: vec![Lines::new(&files[&need.path].source).slice(need.range.start_byte, need.range.end_byte, request.limits.text_bytes)], unresolved_consequence: need.message, next_action: "supply supported written binding/context evidence or change/narrow the selection; acknowledgments cannot clear uncertainty".into(), resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true });
+        result.plan.decisions.push(Decision { id, category: need.category.into(), anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)], item_ids: need.item_ids, evidence: vec![Lines::new(&files[&need.path].source).slice(need.range.start_byte, need.range.end_byte, request.limits.text_bytes)], unresolved_consequence: need.message, next_action: "supply supported written binding/context evidence or change/narrow the selection; acknowledgments cannot clear uncertainty".into(), resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true, chain_diagnostic_ids: Vec::new() });
         result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
     }
     // Structural context blockers need the same actionable decision shape as dependency needs.
     for blocker in result.plan.blockers.clone() {
-        let category = if blocker.code == "CRATE_IDENTITY_UNCERTAIN" {
-            "module_context".to_owned()
-        } else {
-            blocker.code.to_lowercase()
-        };
+        // Chain decisions were recorded at detection, independent of capped summary blockers.
+        if blocker.code == "CRATE_IDENTITY_UNCERTAIN" {
+            continue;
+        }
+        let category = blocker.code.to_lowercase();
         if !matches!(
             category.as_str(),
             "binding_collision" | "reexport_dependency" | "visibility_context" | "module_context"
@@ -1052,7 +1242,7 @@ fn build(
             item_ids: selected.iter().map(|s| s.item.id.clone()).collect(), evidence: Vec::new(),
             unresolved_consequence: blocker.message,
             next_action: "admit unique ordinary context or change selection/destination; no API/visibility repair is performed".into(),
-            resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true };
+            resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true, chain_diagnostic_ids: Vec::new() };
         result.account(descriptor_bytes(&decision)?)?;
         result.plan.decisions.push(decision);
     }
@@ -1366,7 +1556,7 @@ fn collect_trivia(
             });
             result.account(descriptor_bytes(&result.plan.trivia_decisions.last())?)?;
             if t.classification == "ambiguous" {
-                result.plan.decisions.push(Decision { id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), next_action: "keep default or replay an anchored ordinary-comment carry choice".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false });
+                result.plan.decisions.push(Decision { id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), next_action: "keep default or replay an anchored ordinary-comment carry choice".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new() });
                 result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
             }
         }
@@ -1543,7 +1733,7 @@ fn rewrite(
             anchors.first().map(|a| a.path.as_str()),
             anchors.first().map(|a| a.range.clone()),
         );
-        result.plan.decisions.push(Decision { id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), next_action:"accept the default or replay a supported same-target alternative".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true });
+        result.plan.decisions.push(Decision { id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), next_action:"accept the default or replay a supported same-target alternative".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new() });
         decision_ids.push(id);
     }
     let id = format!("r/{}", result.plan.rewrites.len());

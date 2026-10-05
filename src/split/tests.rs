@@ -85,6 +85,40 @@ fn cancellation_after_analysis_keeps_a_typed_failed_envelope() {
     assert!(result.drafts.is_empty());
 }
 #[test]
+fn stopped_chain_analysis_omits_provisional_diagnostics_and_links_together() {
+    for cancel in [false, true] {
+        let repo = Fixture::new();
+        fs::write(repo.0.join("lib.rs"), "use fixture_library::scheduler;\n").unwrap();
+        fs::write(repo.0.join("leaf.rs"), "fn one() {}\nfn two() {}\n").unwrap();
+        let mut request = repo.request();
+        request.source_path = "leaf.rs".into();
+        let cancelled = AtomicBool::new(false);
+        let result = run_with_recheck(&repo.0, request, &cancelled, || {
+            if cancel {
+                cancelled.store(true, Ordering::Relaxed);
+            } else {
+                fs::write(repo.0.join("leaf.rs"), "fn changed() {}\n").unwrap();
+            }
+        });
+        if cancel {
+            assert_eq!(result.error.as_ref().unwrap().code, "CANCELLED");
+        } else {
+            assert!(
+                result
+                    .truncation_reasons
+                    .iter()
+                    .any(|r| r == "SOURCE_CHANGED")
+            );
+        }
+        assert!(result.chain_diagnostics.is_empty());
+        assert!(result.decisions.is_empty());
+        assert!(result.drafts.is_empty());
+        assert_eq!(result.counts.omissions["chain_diagnostics"], 1);
+        assert_eq!(result.counts.omissions["chain_diagnostic_references"], 1);
+    }
+}
+
+#[test]
 fn injected_small_candidate_cap_stops_at_its_first_excess() {
     let repo = Fixture::new();
     fs::write(

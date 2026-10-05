@@ -124,6 +124,7 @@ pub struct AdviceDecision {
     pub supported_choices: Vec<String>,
     pub selected_choice: Option<String>,
     pub blocks_applicability: bool,
+    pub chain_diagnostic_ids: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -217,6 +218,7 @@ pub struct SuggestSplitEnvelope {
     pub skipped: Skipped,
     pub diagnostics: Vec<Diagnostic>,
     pub diagnostics_omitted: usize,
+    pub chain_diagnostics: Vec<items::ChainDiagnostic>,
     pub error: Option<DomainError>,
     pub source: Option<SourceDescription>,
     pub scope_trivia: Vec<ScopeTrivia>,
@@ -253,6 +255,7 @@ impl SuggestSplitEnvelope {
             skipped: skipped_map(),
             diagnostics: Vec::new(),
             diagnostics_omitted: 0,
+            chain_diagnostics: Vec::new(),
             error: None,
             source: None,
             scope_trivia: Vec::new(),
@@ -442,6 +445,15 @@ impl SuggestSplitEnvelope {
         self.incomplete("response_bytes");
         self.omit("signals", self.signals.len());
         self.omit("decisions", self.decisions.len());
+        self.omit("chain_diagnostics", self.chain_diagnostics.len());
+        self.omit(
+            "chain_diagnostic_references",
+            self.decisions
+                .iter()
+                .map(|d| d.chain_diagnostic_ids.len())
+                .sum(),
+        );
+        self.chain_diagnostics.clear();
         self.omit("scope_trivia", self.scope_trivia.len());
         self.omit("impl_contexts", self.impl_contexts.len());
         self.impl_contexts.clear();
@@ -596,6 +608,7 @@ fn run_with_recheck(
     let mut result = SuggestSplitEnvelope::empty(request.limits.clone());
     result.effective_work_limits.max_items = request.max_items;
     let outcome = build(launch, &request, controls, before_recheck, &mut result)
+        .and_then(|()| drafts::finalize(&mut result, controls))
         .and_then(|()| result.fit(controls))
         .and_then(|()| controls.check());
     if let Err(error) = outcome {
@@ -611,7 +624,19 @@ fn run_with_recheck(
             result.inventory.iter().map(|i| i.signal_ids.len()).sum(),
         );
         result.signals.clear();
+        result.omit(
+            "chain_diagnostic_references",
+            result
+                .decisions
+                .iter()
+                .map(|d| d.chain_diagnostic_ids.len())
+                .sum(),
+        );
         result.decisions.clear();
+        if error.code != "STALE_SELECTION" {
+            result.omit("chain_diagnostics", result.chain_diagnostics.len());
+            result.chain_diagnostics.clear();
+        }
         for item in &mut result.inventory {
             item.signal_ids.clear();
         }
@@ -818,6 +843,16 @@ fn build(
         return Ok(());
     }
     if !files.contains_key(&request.crate_root) {
+        let mut diagnostic = items::ChainDiagnostic::boundary(
+            &request.crate_root,
+            &request.source_path,
+            items::ChainRole::Source,
+            items::ChainReason::ChainFileUnadmitted,
+        );
+        diagnostic.id = "chain/0".into();
+        diagnostic.candidate_paths.push(request.crate_root.clone());
+        result.account(descriptor_bytes(&diagnostic)?)?;
+        result.chain_diagnostics.push(diagnostic);
         return Err(field_error(
             "STALE_SELECTION",
             "crate_root must be an admitted existing Rust file",
@@ -841,14 +876,16 @@ fn build(
         result.account(descriptor_bytes(&(&data.items, &data.trivia))?)?;
         parsed.insert(path.clone(), data);
     }
-    let contexts = items::modules(
+    let analysis = items::modules(
         &scope,
         &request.crate_root,
         &files,
         &parsed,
         controls.deadline,
         controls.cancelled,
+        &mut result.counts.analysis_descriptor_bytes,
     )?;
+    let contexts = &analysis.contexts;
     result.account(descriptor_bytes(&contexts)?)?;
     if let Some(evidence) = contexts.get(&source.path) {
         result.source.as_mut().expect("source").module = Some(module_description(
@@ -883,7 +920,7 @@ fn build(
         );
     } else {
         drafts::build(
-            &scope, request, &files, &parsed, &contexts, controls, result,
+            &scope, request, &files, &parsed, &analysis, controls, result,
         )?;
     }
     result.counts.signals = result.signals.len();

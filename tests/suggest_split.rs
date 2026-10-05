@@ -1,5 +1,7 @@
 #[path = "support/advice_flow.rs"]
 mod advice_flow;
+#[path = "support/chain_fixture.rs"]
+mod chain_fixture;
 #[path = "support/fixture_gen.rs"]
 mod fixture_gen;
 #[path = "support/move_artifacts.rs"]
@@ -676,6 +678,8 @@ fn cancelled_invalid_and_strict_stdio_failures_are_typed() {
         assert_eq!(advice["tool"], "suggest_split");
         assert_eq!(advice["error"]["code"], "INVALID_PARAMS");
         assert_eq!(advice["integrity"]["semantic"], "not_performed");
+        assert_eq!(advice["chain_diagnostics"], json!([]));
+        assert_eq!(advice["decisions"], json!([]));
         assert!(advice.get("plan").is_none());
     }
     let mut invalid = args(&repo, "src/rich.rs");
@@ -743,6 +747,281 @@ fn edited_membership_flow_and_staleness_use_only_explicit_moves() {
         stale.plan.patch.is_none()
             && stale.plan.edits.is_none()
             && stale.plan.created_files.is_none()
+    );
+}
+
+#[test]
+fn wrong_binary_root_names_the_exhausted_boundary_and_correct_root_drafts() {
+    use chain_fixture::*;
+    let repo = Fixture::generate();
+    install(&repo);
+    let before = observe(&repo.0);
+    let mut request = json!({"repo_path":repo.0,"crate_root":BIN_ROOT,"source_path":SOURCE,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":0}});
+    let mut client = Client::new();
+    let wrong = client.call("suggest_split", request.clone());
+    advice_flow::complete(&wrong);
+    assert!(wrong["drafts"].as_array().unwrap().is_empty());
+    assert!(wrong["source"]["module"].is_null());
+    assert!(
+        wrong["draft_eligibility"]["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("unsupported_or_uncertain_ordinary_layout"))
+    );
+    let diagnostic = &wrong["chain_diagnostics"][0];
+    assert_eq!(diagnostic["reason"], "source_not_in_root_chain");
+    assert_eq!(diagnostic["crate_root"], BIN_ROOT);
+    assert_eq!(diagnostic["requested_path"], SOURCE);
+    assert_eq!(diagnostic["at_file_path"], BIN_ROOT);
+    assert_eq!(diagnostic["evidenced_prefix_paths"], json!([BIN_ROOT]));
+    assert_eq!(diagnostic["relation"], "root_search_exhausted");
+    assert_eq!(diagnostic["role"], "source");
+    assert!(diagnostic["declaration"].is_null());
+    linked(&wrong["chain_diagnostics"], &wrong["decisions"]);
+    assert_eq!(wrong, client.call("suggest_split", request.clone()));
+    // Existing destinations and dangling declarations are in the same library fixture.
+    assert!(repo.0.join(DESTINATION).exists());
+    assert!(
+        fs::read_to_string(repo.0.join(PARENT))
+            .unwrap()
+            .contains("mod dangling;")
+    );
+    assert_eq!(item(&wrong, "selected")["bytes"], SELECTED.len());
+    request["crate_root"] = json!(LIB_ROOT);
+    let correct = client.call("suggest_split", request);
+    advice_flow::complete(&correct);
+    assert!(!correct["drafts"].as_array().unwrap().is_empty());
+    assert!(correct["chain_diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(
+        correct["source"]["module"]["filesystem_paths"],
+        json!([LIB_ROOT, PARENT, SOURCE])
+    );
+    assert_eq!(
+        correct["drafts"][0]["groups"][1]["destination"]["parent_path"],
+        PARENT
+    );
+    assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
+fn failed_declaration_taxonomy_retains_original_coordinates() {
+    let repo = Fixture::generate();
+    let root = "cases/chain/lib.rs";
+    let source = "cases/chain/leaf.rs";
+    repo.write(source, "fn one() {}\nfn two() {}\n");
+    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":1}});
+    for (written, declaration, reason) in [
+        (
+            "#[cfg(any())]\nmod leaf;\n",
+            "mod leaf;",
+            "conditional_declaration",
+        ),
+        (
+            "#[cfg_attr(any(), path = \"other.rs\")]\nmod leaf;\n",
+            "mod leaf;",
+            "conditional_declaration",
+        ),
+        (
+            "#[path = \"other.rs\"]\nmod leaf;\n",
+            "mod leaf;",
+            "path_attribute",
+        ),
+        (
+            "mod leaf;\nmod leaf;\n",
+            "mod leaf;",
+            "competing_declarations",
+        ),
+        ("mod leaf {}\n", "mod leaf {}", "inline_module_layout"),
+        (
+            "#[allow(dead_code)]\nmod leaf;\n",
+            "mod leaf;",
+            "unexamined_declaration_attributes",
+        ),
+        // Attribute payload names must not be mistaken for the attribute itself.
+        (
+            "#[allow(cfg, path)]\nmod leaf;\n",
+            "mod leaf;",
+            "unexamined_declaration_attributes",
+        ),
+    ] {
+        repo.write(root, written);
+        let before = observe(&repo.0);
+        let result = run(&repo, request.clone());
+        advice_flow::complete(&result);
+        assert!(result["drafts"].as_array().unwrap().is_empty());
+        let diagnostic = result["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["reason"] == reason)
+            .unwrap_or_else(|| panic!("{reason}: {result}"));
+        assert_eq!(diagnostic["crate_root"], root);
+        assert_eq!(diagnostic["requested_path"], source);
+        assert_eq!(diagnostic["at_file_path"], root);
+        assert_eq!(diagnostic["relation"], "direct");
+        assert_eq!(
+            diagnostic["candidate_paths"],
+            json!([source, "cases/chain/leaf/mod.rs"])
+        );
+        let start = written.find(declaration).unwrap();
+        assert_eq!(
+            diagnostic["declaration"],
+            json!({"path":root,"range":{"start_byte":start,"end_byte":start+declaration.len()}})
+        );
+        let decision = result["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| {
+                d["chain_diagnostic_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&diagnostic["id"])
+            })
+            .unwrap();
+        assert_eq!(
+            decision["anchors"][0]["span"]["range"],
+            diagnostic["declaration"]["range"]
+        );
+        chain_fixture::linked(&result["chain_diagnostics"], &result["decisions"]);
+        assert_eq!(observe(&repo.0), before);
+    }
+    repo.write(root, "mod leaf;\n");
+    repo.write("cases/chain/leaf/mod.rs", "fn competing() {}\n");
+    let competing = run(&repo, request);
+    assert_eq!(
+        competing["chain_diagnostics"][0]["reason"],
+        "competing_file_layout"
+    );
+}
+
+#[test]
+fn missing_unadmitted_and_inherited_hops_name_evidence_not_leaf_guesses() {
+    let repo = Fixture::generate();
+    let root = "cases/hops/lib.rs";
+    let intermediate = "cases/hops/branch.rs";
+    let source = "cases/hops/branch/leaf.rs";
+    repo.write(root, "mod branch;\n");
+    repo.write(source, "fn one() {}\nfn two() {}\n");
+    let mut request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/hops"],"limits":{"text_bytes":0}});
+    let missing = run(&repo, request.clone());
+    let diagnostic = &missing["chain_diagnostics"][0];
+    assert_eq!(diagnostic["reason"], "chain_file_missing");
+    assert_eq!(diagnostic["relation"], "possible_ancestor");
+    assert_eq!(diagnostic["at_file_path"], root);
+    assert_eq!(diagnostic["evidenced_prefix_paths"], json!([root]));
+    assert_eq!(
+        diagnostic["declaration"]["range"],
+        json!({"start_byte":0,"end_byte":11})
+    );
+    repo.write(intermediate, "mod leaf;\n");
+    request["globs"] = json!([root, source]);
+    let excluded = run(&repo, request.clone());
+    assert_eq!(
+        excluded["chain_diagnostics"][0]["reason"],
+        "chain_file_unadmitted"
+    );
+    assert_eq!(excluded["chain_diagnostics"][0]["at_file_path"], root);
+    assert_eq!(
+        excluded["chain_diagnostics"][0]["relation"],
+        "possible_ancestor"
+    );
+    request.as_object_mut().unwrap().remove("globs");
+    for (prefix, origin) in [
+        ("#![no_implicit_prelude]\n", "scope_attributes"),
+        ("@\n", "syntax_recovery"),
+    ] {
+        repo.write(intermediate, &format!("{prefix}mod leaf;\n"));
+        let result = run(&repo, request.clone());
+        let diagnostic = result["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["reason"] == "inherited_uncertainty")
+            .unwrap();
+        assert_eq!(diagnostic["at_file_path"], intermediate);
+        assert_eq!(
+            diagnostic["evidenced_prefix_paths"],
+            json!([root, intermediate])
+        );
+        assert!(
+            diagnostic["origin_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(origin))
+        );
+        assert_eq!(diagnostic["relation"], "direct");
+        assert!(result["drafts"].as_array().unwrap().is_empty());
+        chain_fixture::linked(&result["chain_diagnostics"], &result["decisions"]);
+    }
+    // Unrelated failures do not veto a clean, provable chain.
+    repo.write(intermediate, "mod leaf;\n");
+    repo.write(
+        root,
+        "mod branch;\nmod absent;\n#[cfg(any())] mod unrelated;\n",
+    );
+    let good = run(&repo, request.clone());
+    assert!(!good["drafts"].as_array().unwrap().is_empty());
+    assert!(good["chain_diagnostics"].as_array().unwrap().is_empty());
+    request["globs"] = json!([source]);
+    let unadmitted_root = run(&repo, request);
+    assert_eq!(unadmitted_root["error"]["code"], "STALE_SELECTION");
+    assert_eq!(unadmitted_root["error"]["field"], "crate_root");
+    assert_eq!(
+        unadmitted_root["chain_diagnostics"][0]["reason"],
+        "chain_file_unadmitted"
+    );
+    assert_eq!(unadmitted_root["chain_diagnostics"][0]["crate_root"], root);
+}
+
+#[test]
+fn mandatory_chain_evidence_overflow_is_incomplete_with_no_dangling_links() {
+    let repo = Fixture::generate();
+    let root = "cases/chain/lib.rs";
+    let source = "cases/chain/leaf.rs";
+    repo.write(source, "fn one() {}\nfn two() {}\n");
+    repo.write(
+        root,
+        "#[cfg(any())]\n#[path = \"elsewhere.rs\"]\n#[allow(dead_code)]\nmod leaf {}\nmod leaf;\n",
+    );
+    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":0}});
+    let full = run(&repo, request.clone());
+    assert_eq!(full["chain_diagnostics"].as_array().unwrap().len(), 5);
+    chain_fixture::linked(&full["chain_diagnostics"], &full["decisions"]);
+    // Each admitted ancestor contributes its own mandatory, evidenced uncertainty origin.
+    let long_root = "cases/proof_chain/lib.rs";
+    repo.write(long_root, "#![no_implicit_prelude]\nmod level;\n");
+    let mut directory = "cases/proof_chain".to_owned();
+    for _ in 0..35 {
+        directory.push_str("/level");
+        repo.write(
+            &format!("{directory}/mod.rs"),
+            "#![no_implicit_prelude]\nmod level;\n",
+        );
+    }
+    let long_source = format!("{directory}/level.rs");
+    repo.write(&long_source, "fn one() {}\nfn two() {}\n");
+    let mut limited = request;
+    limited["crate_root"] = json!(long_root);
+    limited["source_path"] = json!(long_source);
+    limited["paths"] = json!(["cases/proof_chain"]);
+    limited["limits"]["response_bytes"] = json!(65536);
+    let result = run(&repo, limited);
+    assert_eq!(result["status"], "partial", "{result}");
+    assert!(result["chain_diagnostics"].as_array().unwrap().is_empty());
+    assert!(result["decisions"].as_array().unwrap().is_empty());
+    assert!(result["drafts"].as_array().unwrap().is_empty());
+    assert!(
+        result["counts"]["omissions"]["chain_diagnostics"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        result["counts"]["omissions"]["chain_diagnostic_references"]
+            .as_u64()
+            .unwrap()
+            > 0
     );
 }
 

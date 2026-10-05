@@ -1,6 +1,8 @@
 //! Deterministic cluster selection, balanced alternatives and admitted sibling layout search.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+mod tests;
 
 struct Layout<'a> {
     scope: &'a Scope,
@@ -8,6 +10,7 @@ struct Layout<'a> {
     files: &'a BTreeMap<String, FileSnapshot>,
     parsed: &'a BTreeMap<String, ParsedFile>,
     contexts: &'a BTreeMap<String, items::ModuleEvidence>,
+    analysis: &'a items::ModuleAnalysis,
     controls: Controls<'a>,
 }
 struct GroupFacts {
@@ -360,7 +363,11 @@ fn group_facts(
         prefix,
     })
 }
-fn supported_parent<'a>(layout: &Layout<'a>) -> Result<Option<&'a str>, DomainError> {
+enum ParentOutcome<'a> {
+    Supported(&'a str),
+    Unsupported(Vec<items::ChainDiagnostic>),
+}
+fn supported_parent<'a>(layout: &Layout<'a>) -> Result<ParentOutcome<'a>, DomainError> {
     let Layout {
         request,
         parsed,
@@ -372,7 +379,12 @@ fn supported_parent<'a>(layout: &Layout<'a>) -> Result<Option<&'a str>, DomainEr
         .get(&request.source_path)
         .is_none_or(|e| !e.unresolved.is_empty())
     {
-        return Ok(None);
+        return Ok(ParentOutcome::Unsupported(layout.analysis.project(
+            &request.crate_root,
+            &request.source_path,
+            items::ChainRole::Source,
+            (controls.deadline, controls.cancelled),
+        )?));
     }
     let directory = Path::new(&request.source_path)
         .parent()
@@ -394,9 +406,28 @@ fn supported_parent<'a>(layout: &Layout<'a>) -> Result<Option<&'a str>, DomainEr
     }
     // Multiple candidate parents are not resolved by choosing one alphabetically.
     if candidates.len() == 1 {
-        Ok(parsed.get_key_value(candidates[0]).map(|(p, _)| p.as_str()))
+        Ok(ParentOutcome::Supported(
+            parsed
+                .get_key_value(candidates[0])
+                .expect("parsed parent")
+                .0
+                .as_str(),
+        ))
     } else {
-        Ok(None)
+        let mut diagnostic = items::ChainDiagnostic::boundary(
+            &request.crate_root,
+            &request.source_path,
+            items::ChainRole::DeclarationParent,
+            if candidates.is_empty() {
+                items::ChainReason::NoOrdinarySiblingParent
+            } else {
+                items::ChainReason::AmbiguousParent
+            },
+        );
+        diagnostic.evidenced_prefix_paths = contexts[&request.source_path].filesystem_paths.clone();
+        diagnostic.at_file_path = request.source_path.clone();
+        diagnostic.parent_candidates = candidates.into_iter().map(str::to_owned).collect();
+        Ok(ParentOutcome::Unsupported(vec![diagnostic]))
     }
 }
 fn filename(request: &SuggestSplitRequest, prefix: Option<&str>) -> String {
@@ -423,6 +454,7 @@ fn choose_destination(
         parsed,
         contexts,
         controls,
+        ..
     } = *layout;
     let data = &parsed[parent];
     let source = &files[parent].source;
@@ -653,7 +685,7 @@ fn make_draft(
                 id: String::new(), category: "scope_dependency".into(), anchors: signal.evidence.iter().map(|span| AdviceAnchor { path: request.source_path.clone(), span: span.clone() }).collect(),
                 item_ids: signal.item_ids, evidence: signal.evidence,
                 unresolved_consequence: consequence.into(), next_action: "submit the edited explicit batch to move_item and inspect its defaults/anchored supported alternatives; unsupported needs still require changing the request".into(),
-                resolution: "choice_available".into(), supported_choices: vec!["review_move_item_defaults".into(), "submit_supported_anchored_rewrite_alternative".into()], selected_choice: None, blocks_applicability: true,
+                resolution: "choice_available".into(), supported_choices: vec!["review_move_item_defaults".into(), "submit_supported_anchored_rewrite_alternative".into()], selected_choice: None, blocks_applicability: true, chain_diagnostic_ids: Vec::new(),
             };
             result.account(descriptor_bytes(&decision)?)?;
             result.decisions.push(decision);
@@ -669,7 +701,7 @@ pub(super) fn build(
     request: &SuggestSplitRequest,
     files: &BTreeMap<String, FileSnapshot>,
     parsed: &BTreeMap<String, ParsedFile>,
-    contexts: &BTreeMap<String, items::ModuleEvidence>,
+    analysis: &items::ModuleAnalysis,
     controls: Controls<'_>,
     result: &mut SuggestSplitEnvelope,
 ) -> Result<(), DomainError> {
@@ -678,15 +710,48 @@ pub(super) fn build(
         request,
         files,
         parsed,
-        contexts,
+        contexts: &analysis.contexts,
+        analysis,
         controls,
     };
-    let Some(parent) = supported_parent(&layout)? else {
-        result
-            .draft_eligibility
-            .reasons
-            .push("unsupported_or_uncertain_ordinary_layout".into());
-        return Ok(());
+    let parent = match supported_parent(&layout)? {
+        ParentOutcome::Supported(parent) => parent,
+        ParentOutcome::Unsupported(diagnostics) => {
+            result
+                .draft_eligibility
+                .reasons
+                .push("unsupported_or_uncertain_ordinary_layout".into());
+            for mut diagnostic in diagnostics {
+                controls.check()?;
+                diagnostic.id = format!("chain/{}", result.chain_diagnostics.len());
+                let anchor = diagnostic
+                    .declaration
+                    .as_ref()
+                    .map(|d| AdviceAnchor {
+                        path: d.path.clone(),
+                        span: Lines::new(&files[&d.path].source).slice(
+                            d.range.start_byte,
+                            d.range.end_byte,
+                            request.limits.text_bytes,
+                        ),
+                    })
+                    .unwrap_or_else(|| AdviceAnchor {
+                        path: request.source_path.clone(),
+                        span: result.inventory[0].span.clone(),
+                    });
+                let decision = AdviceDecision {
+                    id: String::new(), category: "module_context".into(), anchors: vec![anchor], item_ids: Vec::new(), evidence: Vec::new(),
+                    unresolved_consequence: format!("ordinary chain from supplied root {} cannot prove {}: {:?}", diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason),
+                    next_action: "admit the evidenced ordinary chain or supply a provable root/parent; no Cargo target or cfg resolution is inferred".into(),
+                    resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true,
+                    chain_diagnostic_ids: vec![diagnostic.id.clone()],
+                };
+                result.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
+                result.chain_diagnostics.push(diagnostic);
+                result.decisions.push(decision);
+            }
+            return Ok(());
+        }
     };
     let (a, fallback) = primary(result, controls)?;
     let b = balanced(result, controls)?;
@@ -704,7 +769,20 @@ pub(super) fn build(
         result.drafts.push(second);
     }
     result.counts.drafts = result.drafts.len();
+    result.draft_eligibility.state = "drafted".into();
+    Ok(())
+}
+pub(super) fn finalize(
+    result: &mut SuggestSplitEnvelope,
+    controls: Controls<'_>,
+) -> Result<(), DomainError> {
     controls.check()?;
+    let links = items::finalize_chain(&mut result.chain_diagnostics);
+    for decision in &mut result.decisions {
+        for id in &mut decision.chain_diagnostic_ids {
+            *id = links[id].clone();
+        }
+    }
     result.decisions.sort_by(|a, b| {
         (
             &a.category,
@@ -742,6 +820,5 @@ pub(super) fn build(
             }
         }
     }
-    result.draft_eligibility.state = "drafted".into();
     Ok(())
 }
