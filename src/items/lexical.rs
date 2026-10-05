@@ -168,6 +168,39 @@ fn pattern_proof<'a>(
                     }
                 }
             }
+            "captured_pattern" => {
+                let Some(capture) = node.named_child(0).filter(|c| c.kind() == "identifier") else {
+                    unknown.get_or_insert((LexicalReason::UnsupportedPattern, node));
+                    continue;
+                };
+                // The capture is a written binder, but its subpattern can still be unknown.
+                children.push((capture, true));
+                for i in 1..node.named_child_count() {
+                    check(controls.0, controls.1)?;
+                    let child = node.named_child(i as u32).expect("capture subpattern");
+                    children.push((child, false));
+                }
+            }
+            "or_pattern" => {
+                // Admit only non-binding literal alternatives, never a binder from one arm.
+                for i in 0..node.named_child_count() {
+                    check(controls.0, controls.1)?;
+                    let child = node.named_child(i as u32).expect("alternative pattern");
+                    if matches!(
+                        child.kind(),
+                        "or_pattern"
+                            | "string_literal"
+                            | "raw_string_literal"
+                            | "integer_literal"
+                            | "line_comment"
+                            | "block_comment"
+                    ) {
+                        children.push((child, false));
+                    } else {
+                        unknown.get_or_insert((LexicalReason::UnsupportedPattern, child));
+                    }
+                }
+            }
             "tuple_pattern" | "slice_pattern" | "tuple_struct_pattern" | "struct_pattern" => {
                 let constructor = node.child_by_field_name("type");
                 for i in 0..node.named_child_count() {
