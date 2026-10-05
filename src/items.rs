@@ -1,10 +1,15 @@
 //! Written top-level inventory and ordinary module evidence. No manifest or semantic resolver.
+mod chain;
 use crate::{
     matching::Lines,
     result::{ByteRange, DomainError, SourceSlice, SyntaxFlags},
     scope::{FileSnapshot, Scope},
     trivia,
 };
+pub use chain::{
+    ChainDiagnostic, ChainLocation, ChainOrigin, ChainReason, ChainRole, ModuleAnalysis,
+};
+pub(crate) use chain::{declaration_reasons, finalize_chain};
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 use std::{
@@ -314,29 +319,48 @@ pub fn modules(
     parsed: &BTreeMap<String, ParsedFile>,
     deadline: Instant,
     cancelled: &AtomicBool,
-) -> Result<BTreeMap<String, ModuleEvidence>, DomainError> {
-    let mut out = BTreeMap::new();
+    descriptor_bytes: &mut usize,
+) -> Result<ModuleAnalysis, DomainError> {
+    let mut analysis = ModuleAnalysis::default();
     let mut queue = vec![(root.to_owned(), ModuleEvidence {
         crate_root: root.into(), module_segments: Vec::new(), declaration_anchors: Vec::new(), filesystem_paths: vec![root.into()],
         assumptions: vec!["caller-selected root; not an active Cargo target; admitted-scope references only; build configuration/macros unexamined".into()], unresolved: Vec::new(),
     })];
     while let Some((path, mut evidence)) = queue.pop() {
         check(deadline, cancelled)?;
-        if let Some(prior) = out.get_mut(&path) {
-            let prior: &mut ModuleEvidence = prior;
+        if let Some(prior) = analysis.contexts.get_mut(&path) {
             prior
                 .unresolved
                 .push("multiple inclusion contexts/cycle".into());
+            let mut failure = ChainDiagnostic::boundary(
+                root,
+                "",
+                ChainRole::Source,
+                ChainReason::InheritedUncertainty,
+            );
+            failure.evidenced_prefix_paths = evidence.filesystem_paths.clone();
+            failure.at_file_path = path.clone();
+            failure.declaration = evidence.declaration_anchors.last().map(|a| ChainLocation {
+                path: a.path.clone(),
+                range: a.range.clone(),
+            });
+            failure.candidate_paths.push(path.clone());
+            failure
+                .origin_reasons
+                .push(ChainOrigin::MultipleInclusionContexts);
+            analysis.record(failure, descriptor_bytes)?;
             continue;
         }
         let Some(data) = parsed.get(&path) else {
             continue;
         };
         let file = &files[&path];
+        let mut origins = Vec::new();
         if data.tree.root_node().has_error() {
             evidence
                 .unresolved
                 .push("module evidence contains syntax recovery".into());
+            origins.push(ChainOrigin::SyntaxRecovery);
         }
         if data.trivia.iter().any(|t| {
             t.is_attribute()
@@ -346,6 +370,20 @@ pub fn modules(
             evidence
                 .unresolved
                 .push("inherited scope attributes require an explicit context choice".into());
+            origins.push(ChainOrigin::ScopeAttributes);
+        }
+        if !origins.is_empty() {
+            let mut failure = ChainDiagnostic::boundary(
+                root,
+                "",
+                ChainRole::Source,
+                ChainReason::InheritedUncertainty,
+            );
+            failure.at_file_path = path.clone();
+            failure.evidenced_prefix_paths = evidence.filesystem_paths.clone();
+            failure.candidate_paths.push(path.clone());
+            failure.origin_reasons = origins;
+            analysis.record(failure, descriptor_bytes)?;
         }
         let mut declarations: BTreeMap<String, Vec<&Item>> = BTreeMap::new();
         for item in &data.items {
@@ -359,23 +397,32 @@ pub fn modules(
         for (name, declarations) in declarations {
             check(deadline, cancelled)?;
             let item = declarations[0];
-            let node = data
-                .tree
-                .root_node()
-                .named_descendant_for_byte_range(
-                    item.span.range.start_byte,
-                    item.span.range.end_byte,
-                )
-                .expect("item");
-            if declarations.len() != 1
-                || !item.attributes.is_empty()
-                || node.child_by_field_name("body").is_some()
-            {
-                // Localized: unrelated attributed/inline modules don't veto other ordinary chains.
-                continue;
-            }
             let flat = child_path(&path, root, name.trim_start_matches("r#"));
             let legacy = format!("{}/mod.rs", flat.trim_end_matches(".rs"));
+            let mut reasons = declaration_reasons(data, file, item);
+            if declarations.len() != 1 {
+                reasons.push(ChainReason::CompetingDeclarations);
+            }
+            let mut failure = ChainDiagnostic::boundary(
+                root,
+                "",
+                ChainRole::Source,
+                ChainReason::ChainFileMissing,
+            );
+            failure.at_file_path = path.clone();
+            failure.evidenced_prefix_paths = evidence.filesystem_paths.clone();
+            failure.declaration = Some(ChainLocation {
+                path: path.clone(),
+                range: item.span.range.clone(),
+            });
+            failure.candidate_paths = vec![flat.clone(), legacy.clone()];
+            if !reasons.is_empty() {
+                for reason in reasons {
+                    failure.reason = reason;
+                    analysis.record(failure.clone(), descriptor_bytes)?;
+                }
+                continue;
+            }
             let a = present(scope, &flat)?;
             let b = present(scope, &legacy)?;
             let child = if a && !b {
@@ -383,9 +430,17 @@ pub fn modules(
             } else if b && !a {
                 legacy
             } else {
+                failure.reason = if a {
+                    ChainReason::CompetingFileLayout
+                } else {
+                    ChainReason::ChainFileMissing
+                };
+                analysis.record(failure, descriptor_bytes)?;
                 continue;
             };
             if !files.contains_key(&child) {
+                failure.reason = ChainReason::ChainFileUnadmitted;
+                analysis.record(failure, descriptor_bytes)?;
                 continue;
             }
             let mut next = evidence.clone();
@@ -399,15 +454,16 @@ pub fn modules(
             next.filesystem_paths.push(child.clone());
             queue.push((child, next));
         }
-        out.insert(path, evidence);
+        analysis.contexts.insert(path, evidence);
     }
     // Propagate observed competing contexts to descendants already traversed.
-    let uncertain: Vec<_> = out
+    let uncertain: Vec<_> = analysis
+        .contexts
         .iter()
         .filter(|(_, e)| !e.unresolved.is_empty())
         .map(|(p, _)| p.clone())
         .collect();
-    for evidence in out.values_mut() {
+    for evidence in analysis.contexts.values_mut() {
         check(deadline, cancelled)?;
         if evidence
             .filesystem_paths
@@ -420,7 +476,7 @@ pub fn modules(
                 .push("ancestor has competing/recovered context".into());
         }
     }
-    Ok(out)
+    Ok(analysis)
 }
 
 pub(crate) fn use_facts(

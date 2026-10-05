@@ -1,7 +1,13 @@
+#[path = "support/chain_fixture.rs"]
+mod chain_fixture;
+#[path = "support/move_chain_tests.rs"]
+mod chain_tests;
 #[path = "support/fixture_gen.rs"]
 mod fixture_gen;
 #[path = "support/move_artifacts.rs"]
 mod move_artifacts;
+#[path = "support/stdio_client.rs"]
+mod stdio_client;
 use fixture_gen::{Fixture, observe};
 use move_artifacts::{anchor, apply};
 use rust_sitter_mcp::{engine::Engine, move_plan::MoveRequest};
@@ -360,6 +366,8 @@ fn definite_selection_errors_limits_noop_and_whole_batch_refusal() {
     assert_eq!(noop["plan"]["edits"], json!([]));
     assert_eq!(noop["plan"]["created_files"], json!([]));
     assert_eq!(noop["plan"]["patch"], "");
+    assert_eq!(noop["plan"]["chain_diagnostics"], json!([]));
+    assert_eq!(noop["plan"]["decisions"], json!([]));
     let mut capped = args.clone();
     capped["moves"].as_array_mut().unwrap().push(entry(
         &repo,
@@ -387,6 +395,8 @@ fn definite_selection_errors_limits_noop_and_whole_batch_refusal() {
         &AtomicBool::new(true),
     );
     assert_eq!(cancelled.error.unwrap().code, "CANCELLED");
+    assert!(cancelled.plan.chain_diagnostics.is_empty());
+    assert!(cancelled.plan.decisions.is_empty());
     assert!(
         cancelled.plan.edits.is_none()
             && cancelled.plan.created_files.is_none()

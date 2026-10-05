@@ -158,6 +158,53 @@ A new destination must be an absent literal `.rs` sibling of every assigned sour
 
 Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching unconditioned declaration is reused without a parent edit unless a necessary visibility repair is separately linked. Relative/re-scoped restrictions, unverified access and public exposure requiring an API decision remain blockers. Incompatible layouts cannot be acknowledged away.
 
+### Diagnosing an unproved module chain
+
+Both tools expose additive `chain_diagnostics[]`: at the top level of `suggest_split`,
+and inside `move_item`'s `plan`. A related `module_context` decision links them through
+`chain_diagnostic_ids[]`. These mandatory explanations are independent of the displayed
+`diagnostic_count` cap. Schema version 1, legacy no-draft reasons, blocker codes and
+bad-request error codes are unchanged.
+
+Each diagnostic echoes the caller's `crate_root`, `requested_path` and `role`
+(`source`, `destination` or `declaration_parent`). `at_file_path` names the observed
+failure boundary; optional `declaration:{path,range}` uses original half-open byte
+coordinates. `evidenced_prefix_paths`, ordinary `candidate_paths`, typed
+`origin_reasons` and `parent_candidates` disclose only observed context. Locations
+contain no source text and are **not execution freshness anchors**. IDs such as
+`chain/0` are deterministic within the response, not persistent handles.
+
+The snake_case `reason` distinguishes:
+
+- `source_not_in_root_chain`: no relevant failed hop was evidenced under this root.
+- `chain_file_missing` or `chain_file_unadmitted`: neither ordinary file exists,
+  or the existing candidate was not admitted (without guessing why it was excluded).
+- `conditional_declaration`, `path_attribute`, `competing_declarations`,
+  `competing_file_layout`, `inline_module_layout` or
+  `unexamined_declaration_attributes`: the evidenced declaration/layout is not an
+  ordinary unique unconditioned edge.
+- `inherited_uncertainty`: recovery, scope attributes or competing inclusion at a
+  named origin also affects the traversed descendant.
+- `ambiguous_parent`, `no_ordinary_sibling_parent` or `ordinary_layout_mismatch`:
+  candidate parent evidence does not prove the requested ordinary sibling layout.
+
+Read `relation` before interpreting a hop. `direct` associates an observed edge or
+inherited origin with the request; `possible_ancestor` only locates a possible
+obstruction by ordinary candidate-directory prefix, not proof of an untraversed
+chain. `root_search_exhausted` names the supplied root when no relevant failed
+edge is evidenced. For example, a binary `main.rs` that only imports its library
+cannot prove the library's scheduler tree: the boundary is `main.rs`, not an
+invented scheduler declaration. Repeating the request with an admitted library
+root that actually declares that tree can produce drafts or an applicable move.
+No alternate Cargo target, cfg outcome or root recommendation is inferred.
+
+An unadmitted root still fails `STALE_SELECTION`; invalid new-file parents and
+conflicting declarations still fail with their existing error and field. A
+validated creation reusing a dangling declaration is not a missing-chain failure,
+and unrelated failed edges do not veto a provable chain. If mandatory diagnostics
+and decision links cannot fit, the response becomes incomplete, withholds drafts
+or all move artifacts, and records omissions while removing linked arrays together.
+
 ### Trivia, synthesis and replay
 
 Moves carry internal bytes, associated outer attributes/docs, contiguous owned leading comments and same-line trailing comments. Entire internal scopes travel intact, including their inner forms. File/module prologues, inner docs/attributes outside the item, ordinary first-scope headers and ambiguous banners/blank-separated blocks stay in place by default. No header, formatter, dedent, newline normalization or blank-line cleanup is invented. Each original interval has path-qualified, exact-once retained/carried provenance, including protected owner checks after reparsing.
@@ -201,7 +248,7 @@ Place that object in `rewrite_overrides:[…]`, not in a separate apply call. Th
 
 For decision field meanings and display-only labels, see [Consuming decisions and member labels](#consuming-decisions-and-member-labels).
 
-`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
+`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
 
 Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. `declaration_visibility_rewrite_id`, when present, resolves to the separately audited required visibility repair on either a synthesized or reused declaration. Root-private modules ordinarily already admit descendant consumers and are not blanket-widened. Source files remain present even when emptied.
 
@@ -219,7 +266,7 @@ Definite bad requests use `INVALID_ITEM_SELECTION`, `DUPLICATE_MOVE`, `STALE_SEL
 
 This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no cursor, saved plan, execution handle, or implicit selection. Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
 
-The result has `advisory:true`, `source`, `inventory[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
+The result has `advisory:true`, `source`, `inventory[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `chain_diagnostics[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
 
 - Inventory is in original source order and includes every significant top-level written unit. Anonymous impl blocks have IDs and written type/optional trait spans in `impl_contexts`; they do not disappear because `name` is null. Outer attributes/docs are associated spans, not extra units. Each unit reports full original coordinates, kind/name, raw visibility, byte/line sizes, syntax flags, unit-kind eligibility/reasons and `signal_ids`.
 - `supported_unit` means the unit kind is supported, **not** that a move is dependency-free or safe. Modules, uses, extern/foreign and macro constructs remain inventoried with context-sensitive reasons and are retained in complete partitions.
