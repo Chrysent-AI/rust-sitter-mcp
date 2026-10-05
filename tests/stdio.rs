@@ -45,7 +45,7 @@ fn real_stdio_query() {
         initialized["result"]["serverInfo"]["version"]
             .as_str()
             .unwrap()
-            .contains("0.1.0 (")
+            .contains(&format!("{} (", env!("CARGO_PKG_VERSION")))
     );
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));

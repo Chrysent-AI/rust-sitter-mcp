@@ -227,7 +227,7 @@ mod quoted;
 pub fn entry(x: Option<u8>) -> u8 { inventory::take(x) + rewrite::caller() }
 "#,
     ),
-// Inventory: every supported top-level unit kind; nested/member lookalikes are not top-level units.
+    // Inventory: every supported top-level unit kind; nested/member lookalikes aren't top-level units.
     (
         "src/inventory.rs",
         r#"//! Scope-owned prologue.
@@ -257,7 +257,7 @@ macro_rules! fixture_macro { () => { const GENERATED: u8 = 2; }; }
 fixture_macro!();
 "#,
     ),
-// Bytes/trivia corpus: ordinary carry vs protected refusal across encodings and line endings.
+    // Bytes/trivia corpus: ordinary carry vs protected refusal across encodings and line endings.
     (
         "src/trivia.rs",
         r#"//! Inner docs stay with this file.
@@ -278,7 +278,7 @@ pub fn with_body(x: Option<u8>) -> u8 {
 pub(self) fn restricted() {}
 "#,
     ),
-// Module layouts: existing matching declarations, new siblings, and a legacy mod.rs tree.
+    // Module layouts: existing matching declarations, new siblings, and a legacy mod.rs tree.
     (
         "src/destination.rs",
         "//! Existing destination prologue.\nuse crate::rewrite::helper as reused;\nfn destination_keep() {}\n",
@@ -292,7 +292,7 @@ pub(self) fn restricted() {}
     ("src/legacy/destination.rs", "fn legacy_destination() {}\n"),
     ("cases/layout/lib.rs", "mod source;\nmod reused;\n"), // reused.rs intentionally absent
     ("cases/layout/source.rs", "fn clean() {}\n"),
-// Mechanical rewrites: aliases/groups/relative paths,
+    // Mechanical rewrites: aliases/groups/relative paths,
     // private remaining caller, deduplicated binding reuse, batch co-location, descendant access.
     (
         "src/rewrite.rs",
@@ -309,7 +309,7 @@ fn together_b() -> u8 { 2 }
 mod child { fn descendant() -> u8 { super::private() } }
 "#,
     ),
-// Advisory split + edited two-sibling execution flow.
+    // Advisory split + edited two-sibling execution flow.
     // Retain const/use/impl; choose alpha/beta groups, then edit membership outside server.
     (
         "src/rich.rs",
@@ -331,7 +331,7 @@ impl Default for Marker { fn default() -> Self { Marker } }
         "fn apple() {}\nfn zebra() {}\nfn mountain() {}\nfn river() {}\n",
     ),
     ("src/single.rs", "fn only() {}\n"),
-// Isolated ambiguity areas (one concern per file): use EACH file as its own explicit crate_root,
+    // Isolated ambiguity areas (one concern per file): use EACH file as its own explicit crate_root,
     // not src/lib.rs. Ordinary sibling declarations give dependencies real context.
     (
         "cases/ambiguity/binding_collision.rs",
@@ -410,7 +410,7 @@ impl Default for Marker { fn default() -> Self { Marker } }
         "cases/ambiguity/unrelated_controls.rs",
         "mod bindings;\nuse crate::bindings::*;\nmacro_rules! unrelated { () => { 1 }; }\nfn independent() {}\n",
     ),
-// New-path adversaries: occupied/competing/symlink/case-collision targets; request names/escapes are in the smoke map.
+    // New-path adversaries: occupied/competing/symlink/case-collision targets; request names/escapes are in the smoke map.
     ("cases/paths/lib.rs", "mod source;\n"),
     ("cases/paths/source.rs", "fn selected() {}\n"),
     ("cases/paths/occupied.rs", "fn occupied() {}\n"),
@@ -422,7 +422,7 @@ impl Default for Marker { fn default() -> Self { Marker } }
         "cases/paths/nested/source.rs",
         "fn nested_repository() {}\n",
     ),
-// Limits/lifecycle controls plus the full tool-flow smoke.
+    // Limits/lifecycle controls plus the full tool-flow smoke.
     (
         "cases/limits/trivia_loss.rs",
         "fn loss(x: Option<u8>) { x.unwrap(/* must preserve */); }\n",
