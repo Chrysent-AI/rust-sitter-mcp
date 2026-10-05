@@ -743,6 +743,48 @@ fn conditional_dependencies_and_external_prefix_collisions_are_not_guessed() {
     );
 }
 #[test]
+fn category_summaries_coalesce_without_hiding_rejected_needs() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "fn first() {}\nfn second() {}\nfn caller() { first(); second(); }\n",
+    );
+    let destination = json!({"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"});
+    let mut args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn first() {}"),"destination":destination},{"item":anchor(&repo,"cases/layout/source.rs","fn second() {}"),"destination":destination}]});
+    let base = run(&repo, args.clone());
+    args["rewrite_overrides"] = json!(
+        base["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["kind"] == "import_insert")
+            .map(|r| json!({"target":r["target"],"action":"retain"}))
+            .collect::<Vec<_>>()
+    );
+    let blocked = run(&repo, args);
+    withheld(&blocked);
+    assert_eq!(
+        blocked["plan"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["code"] == "UNSUPPORTED_DEPENDENCY_FORM")
+            .count(),
+        1
+    );
+    assert_eq!(
+        blocked["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["selected_choice"] == "retain"
+                && !d["anchors"].as_array().unwrap().is_empty())
+            .count(),
+        2
+    );
+}
+#[test]
 fn private_remaining_caller_vertical_slice() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\n");

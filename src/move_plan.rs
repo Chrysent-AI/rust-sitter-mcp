@@ -374,6 +374,22 @@ impl MoveEnvelope {
     }
     fn blocker(&mut self, code: &str, message: &str, path: Option<&str>, range: Option<ByteRange>) {
         self.withhold();
+        // Category summaries coalesce; decisions retain every original anchor and consequence.
+        if matches!(
+            code,
+            "BINDING_COLLISION"
+                | "GLOB_DEPENDENCY"
+                | "MACRO_DEPENDENCY"
+                | "REEXPORT_DEPENDENCY"
+                | "MODULE_CONTEXT"
+                | "VISIBILITY_CONTEXT"
+                | "SCOPE_DEPENDENCY"
+                | "TRIVIA_OWNERSHIP"
+                | "UNSUPPORTED_DEPENDENCY_FORM"
+        ) && self.plan.blockers.iter().any(|b| b.code == code)
+        {
+            return;
+        }
         if self.plan.blockers.len() < self.limits.diagnostic_count.max(1) {
             self.plan.blockers.push(Blocker {
                 code: code.into(),
