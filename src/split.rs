@@ -5,9 +5,9 @@ mod signals;
 mod tests;
 
 use crate::{
-    items::{self, Item, ParsedFile},
+    items::{self, DecisionReason, Item, ParsedFile},
     matching::Lines,
-    move_plan::Confidence,
+    move_plan::{Confidence, DecisionAction, DecisionGroup, decision_groups},
     plan::Integrity,
     result::*,
     scope::{self, FileSnapshot, Scope},
@@ -112,6 +112,8 @@ pub struct Signal {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct AdviceDecision {
+    pub reason: DecisionReason,
+    pub action: DecisionAction,
     pub id: String,
     pub category: String,
     /// Display descriptors, not shortened execution freshness anchors.
@@ -227,6 +229,7 @@ pub struct SuggestSplitEnvelope {
     pub impl_contexts: Vec<ImplContext>,
     pub signals: Vec<Signal>,
     pub decisions: Vec<AdviceDecision>,
+    pub decision_groups: Vec<DecisionGroup>,
     pub drafts: Vec<Draft>,
     pub draft_eligibility: DraftEligibility,
     pub integrity: Integrity,
@@ -264,6 +267,7 @@ impl SuggestSplitEnvelope {
             impl_contexts: Vec::new(),
             signals: Vec::new(),
             decisions: Vec::new(),
+            decision_groups: Vec::new(),
             drafts: Vec::new(),
             draft_eligibility: DraftEligibility {
                 state: "no_draft".into(),
@@ -445,6 +449,15 @@ impl SuggestSplitEnvelope {
         self.incomplete("response_bytes");
         self.omit("signals", self.signals.len());
         self.omit("decisions", self.decisions.len());
+        self.omit("decision_groups", self.decision_groups.len());
+        self.omit(
+            "decision_group_references",
+            self.decision_groups
+                .iter()
+                .map(|g| g.decision_ids.len())
+                .sum(),
+        );
+        self.decision_groups.clear();
         self.omit("chain_diagnostics", self.chain_diagnostics.len());
         self.omit(
             "chain_diagnostic_references",
@@ -619,6 +632,16 @@ fn run_with_recheck(
         result.counts.drafts = result.counts.drafts.max(result.drafts.len());
         result.omit("signals", result.signals.len());
         result.omit("decisions", result.decisions.len());
+        result.omit("decision_groups", result.decision_groups.len());
+        result.omit(
+            "decision_group_references",
+            result
+                .decision_groups
+                .iter()
+                .map(|g| g.decision_ids.len())
+                .sum(),
+        );
+        result.decision_groups.clear();
         result.omit(
             "item_signal_references",
             result.inventory.iter().map(|i| i.signal_ids.len()).sum(),

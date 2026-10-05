@@ -628,16 +628,49 @@ pub(crate) fn use_leaves(
     }
     Ok(out)
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionReason {
+    ModuleChainFailure,
+    RequiredRewriteRetained,
+    OrdinaryTriviaChoice,
+    CrossGroupReferenceReview,
+    DestinationBindingConflict,
+    SourceBindingAmbiguous,
+    FinalAliasConflict,
+    LexicalContextUnproved,
+    PublicPathChange,
+    MemberOrConstructorUnproved,
+    VisibilityScopeUnproved,
+    ConditionalOrInheritedContext,
+    MacroContextUnexamined,
+    GlobBindingUnproved,
+    ExternalOrMissingBinding,
+    UnsupportedUnitKind,
+    UnsupportedConstruct,
+    TriviaPreservationUnproved,
+}
 #[derive(Clone, Serialize)]
 pub struct Need {
+    pub reason: DecisionReason,
+    pub choice_target: Option<crate::move_plan::RewriteTarget>,
     pub category: &'static str,
     pub path: String,
     pub range: ByteRange,
     pub message: String,
     pub item_ids: Vec<String>,
 }
-fn need(category: &'static str, path: &str, node: Node<'_>, message: &str) -> Need {
+fn need(
+    reason: DecisionReason,
+    category: &'static str,
+    path: &str,
+    node: Node<'_>,
+    message: &str,
+) -> Need {
     Need {
+        reason,
+        choice_target: None,
         category,
         path: path.into(),
         range: ByteRange {
@@ -931,6 +964,7 @@ pub fn dependencies(
                         )
                         .expect("item");
                     let mut collision = need(
+                        DecisionReason::DestinationBindingConflict,
                         "binding_collision",
                         path,
                         node,
@@ -954,6 +988,7 @@ pub fn dependencies(
             .expect("item");
         if let Some(category) = category(&item.kind) {
             needs.push(need(
+                DecisionReason::UnsupportedUnitKind,
                 category,
                 source_path,
                 node,
@@ -978,6 +1013,7 @@ pub fn dependencies(
                 > 1
         {
             needs.push(need(
+                DecisionReason::SourceBindingAmbiguous,
                 "binding_collision",
                 source_path,
                 node,
@@ -985,14 +1021,14 @@ pub fn dependencies(
             ));
         }
         if item.visibility_key == "restricted" {
-            needs.push(need("visibility_context", source_path, node, "restricted visibility changes lexical scope; explicit repair is outside dependency-free moves"));
+            needs.push(need(DecisionReason::VisibilityScopeUnproved, "visibility_context", source_path, node, "restricted visibility changes lexical scope; explicit repair is outside dependency-free moves"));
         }
         let publicly_exposed = item.visibility_key == "pub"
             && contexts
                 .get(source_path)
                 .is_some_and(|e| public_chain(e, parsed));
         if publicly_exposed {
-            needs.push(need("reexport_dependency", source_path, node, "observed public path changes; choose a non-exposed item or an explicit API decision"));
+            needs.push(need(DecisionReason::PublicPathChange, "reexport_dependency", source_path, node, "observed public path changes; choose a non-exposed item or an explicit API decision"));
         }
         for t in &data.trivia {
             check(deadline, cancelled)?;
@@ -1010,7 +1046,7 @@ pub fn dependencies(
                     || text == "#[inline(never)]"
                     || text.starts_with("#[repr("))
                 {
-                    needs.push(need("scope_dependency", source_path, node, "conditional, inherited or unexamined attribute context requires a supported explicit choice"));
+                    needs.push(need(DecisionReason::ConditionalOrInheritedContext, "scope_dependency", source_path, node, "conditional, inherited or unexamined attribute context requires a supported explicit choice"));
                 }
             }
         }
@@ -1071,7 +1107,7 @@ pub fn dependencies(
                 } else {
                     "macro_dependency"
                 };
-                needs.push(need(category, source_path, current, "macro expansion or file-relative include context is unexamined; no token-tree rewrite"));
+                needs.push(need(DecisionReason::MacroContextUnexamined, category, source_path, current, "macro expansion or file-relative include context is unexamined; no token-tree rewrite"));
                 continue;
             }
             if matches!(
@@ -1082,6 +1118,7 @@ pub fn dependencies(
                     | "use_declaration"
             ) {
                 needs.push(need(
+                    DecisionReason::UnsupportedConstruct,
                     "unsupported_dependency_form",
                     source_path,
                     current,
@@ -1090,7 +1127,7 @@ pub fn dependencies(
                 continue;
             }
             if kind == "field_expression" {
-                needs.push(need("visibility_context", source_path, current, "member/method access and trait-import context are not established syntactically"));
+                needs.push(need(DecisionReason::MemberOrConstructorUnproved, "visibility_context", source_path, current, "member/method access and trait-import context are not established syntactically"));
             }
             let is_pattern = current
                 .parent()
@@ -1135,7 +1172,7 @@ pub fn dependencies(
                             .any(|leaf| leaf.binding == name);
                     }
                     let glob = glob && !explicit;
-                    needs.push(need(if glob { "glob_dependency" } else { "unsupported_dependency_form" }, source_path, current, "written bare dependency is not retained in the final scope; explicit import/path repair required"));
+                    needs.push(need(if glob { DecisionReason::GlobBindingUnproved } else { DecisionReason::ExternalOrMissingBinding }, if glob { "glob_dependency" } else { "unsupported_dependency_form" }, source_path, current, "written bare dependency is not retained in the final scope; explicit import/path repair required"));
                 }
             }
             for i in (0..current.named_child_count()).rev() {
@@ -1163,6 +1200,7 @@ pub fn dependencies(
                         .0
                     {
                         needs.push(need(
+                            DecisionReason::GlobBindingUnproved,
                             "glob_dependency",
                             destination,
                             dest.tree
@@ -1191,6 +1229,7 @@ pub fn dependencies(
                         .any(|leaf| leaf.binding == name)
                     {
                         needs.push(need(
+                            DecisionReason::DestinationBindingConflict,
                             "binding_collision",
                             destination,
                             dest.tree
@@ -1209,6 +1248,7 @@ pub fn dependencies(
                             .any(|(p, i, _)| p == destination && i.id == other.id)
                     {
                         needs.push(need(
+                            DecisionReason::DestinationBindingConflict,
                             "binding_collision",
                             destination,
                             dest.tree
@@ -1293,10 +1333,17 @@ pub fn dependencies(
                         && (names.iter().any(|s| s == name)
                             || (*glob && names.iter().any(|s| module_spellings.contains(s))))
                     {
+                        let public = visibility_key(current, other_source, deadline, cancelled)?
+                            != "private";
                         needs.push(need(
-                            if visibility_key(current, other_source, deadline, cancelled)?
-                                != "private"
-                            {
+                            if public {
+                                DecisionReason::PublicPathChange
+                            } else if *glob {
+                                DecisionReason::GlobBindingUnproved
+                            } else {
+                                DecisionReason::UnsupportedConstruct
+                            },
+                            if public {
                                 "reexport_dependency"
                             } else if *glob {
                                 "glob_dependency"
@@ -1312,6 +1359,7 @@ pub fn dependencies(
                     if matches!(current.kind(), "macro_invocation" | "macro_definition") {
                         if token_candidate(current, other_source, name, deadline, cancelled)? {
                             needs.push(need(
+                                DecisionReason::MacroContextUnexamined,
                                 "macro_dependency",
                                 path,
                                 current,
@@ -1344,8 +1392,8 @@ pub fn dependencies(
                             };
                             match lexical {
                                 LexicalBinding::Independent => {}
-                                LexicalBinding::Uncertain => needs.push(need("binding_collision", path, current, "containing lexical binding context is uncertain; no file-level reference proof")),
-                                LexicalBinding::Absent => needs.push(need("unsupported_dependency_form", path, current, "remaining written consumer requires explicit repair/evidence")),
+                                LexicalBinding::Uncertain => needs.push(need(DecisionReason::LexicalContextUnproved, "binding_collision", path, current, "containing lexical binding context is uncertain; no file-level reference proof")),
+                                LexicalBinding::Absent => needs.push(need(DecisionReason::ExternalOrMissingBinding, "unsupported_dependency_form", path, current, "remaining written consumer requires explicit repair/evidence")),
                             }
                         }
                     }

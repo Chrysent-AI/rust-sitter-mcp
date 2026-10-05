@@ -1,7 +1,8 @@
 //! One simultaneous, read-only relocation plan with itemized written-binding repairs.
+mod actions;
 use crate::{
     edit::{self, Edit},
-    items::{self, Item, ModuleEvidence, ParsedFile},
+    items::{self, DecisionReason, Item, ModuleEvidence, ParsedFile},
     matching::Lines,
     patch,
     plan::{BaseFile, Blocker, Integrity, SourceAnchor},
@@ -10,6 +11,7 @@ use crate::{
     scope::{self, FileSnapshot, Scope},
     trivia::{self, MoveOrigin},
 };
+pub(crate) use actions::decision_groups;
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -162,6 +164,8 @@ pub struct MoveTriviaDecision {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct Decision {
+    pub reason: DecisionReason,
+    pub action: DecisionAction,
     pub id: String,
     pub category: String,
     pub anchors: Vec<SourceAnchor>,
@@ -174,6 +178,54 @@ pub struct Decision {
     pub selected_choice: Option<String>,
     pub blocks_applicability: bool,
     pub chain_diagnostic_ids: Vec<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionPurpose {
+    ResolveDecision,
+    ReviewDefault,
+    SubmitForAnalysis,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRoute {
+    RequestField,
+    SelectionChangeRequired,
+    UnsupportedInEngine,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(tag = "route", rename_all = "snake_case")]
+pub enum DecisionAction {
+    RequestField {
+        tool: String,
+        field: String,
+        target: Option<Box<RewriteTarget>>,
+        trivia: Option<SourceAnchor>,
+        target_item: Option<SourceAnchor>,
+        choices: Vec<String>,
+        purpose: DecisionPurpose,
+    },
+    SelectionChangeRequired {
+        fields: Vec<String>,
+        instruction: String,
+    },
+    UnsupportedInEngine {
+        construct: String,
+        instruction: String,
+    },
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DecisionGroup {
+    pub category: String,
+    pub reason: DecisionReason,
+    pub route: DecisionRoute,
+    pub blocks_applicability: bool,
+    pub decision_ids: Vec<String>,
+    pub count: usize,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -271,6 +323,7 @@ pub struct MovePlan {
     pub moves: Vec<MoveRecord>,
     pub trivia_decisions: Vec<MoveTriviaDecision>,
     pub decisions: Vec<Decision>,
+    pub decision_groups: Vec<DecisionGroup>,
     pub chain_diagnostics: Vec<items::ChainDiagnostic>,
     pub rewrites: Vec<Rewrite>,
     pub base_files: Vec<BaseFile>,
@@ -335,6 +388,7 @@ impl MoveEnvelope {
                 moves: Vec::new(),
                 trivia_decisions: Vec::new(),
                 decisions: Vec::new(),
+                decision_groups: Vec::new(),
                 chain_diagnostics: Vec::new(),
                 rewrites: Vec::new(),
                 base_files: Vec::new(),
@@ -377,16 +431,27 @@ impl MoveEnvelope {
     ) -> Result<(), DomainError> {
         for mut diagnostic in diagnostics {
             diagnostic.id.clear();
-            if self.plan.chain_diagnostics.iter().any(|d| {
+            if let Some(prior) = self.plan.chain_diagnostics.iter().position(|d| {
                 let mut prior = d.clone();
                 prior.id.clear();
                 prior == diagnostic
             }) {
+                let id = &self.plan.chain_diagnostics[prior].id;
+                let index = self
+                    .plan
+                    .decisions
+                    .iter()
+                    .position(|d| d.chain_diagnostic_ids.contains(id))
+                    .expect("chain decision");
+                if !self.plan.decisions[index].anchors.contains(fallback) {
+                    self.account(descriptor_bytes(fallback)?)?;
+                    self.plan.decisions[index].anchors.push(fallback.clone());
+                }
                 continue;
             }
             diagnostic.id = format!("chain/{}", self.plan.chain_diagnostics.len());
             let location = diagnostic.declaration.as_ref();
-            let anchors = location
+            let mut anchors = location
                 .and_then(|d| {
                     files
                         .get(&d.path)
@@ -394,17 +459,62 @@ impl MoveEnvelope {
                 })
                 .map(|a| vec![a])
                 .unwrap_or_else(|| vec![fallback.clone()]);
+            if !anchors.contains(fallback) {
+                anchors.push(fallback.clone());
+            }
+            let action = DecisionAction::chain(&diagnostic, "move_item");
             let decision = Decision {
-                id: format!("d/{}", self.plan.decisions.len()), category: "module_context".into(), anchors, item_ids: Vec::new(), evidence: Vec::new(),
-                unresolved_consequence: format!("ordinary chain from supplied root {} cannot prove {}: {:?}", diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason),
-                next_action: "admit the evidenced ordinary chain or supply a provable root/parent; no Cargo target or cfg resolution is inferred".into(),
-                resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true,
+                reason: DecisionReason::ModuleChainFailure,
+                next_action: action.next_action(),
+                action,
+                id: format!("d/{}", self.plan.decisions.len()),
+                category: "module_context".into(),
+                anchors,
+                item_ids: Vec::new(),
+                evidence: Vec::new(),
+                unresolved_consequence: format!(
+                    "ordinary chain from supplied root {} cannot prove {}: {:?}",
+                    diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason
+                ),
+                resolution: "request_change_required".into(),
+                supported_choices: Vec::new(),
+                selected_choice: None,
+                blocks_applicability: true,
                 chain_diagnostic_ids: vec![diagnostic.id.clone()],
             };
             self.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
             self.plan.chain_diagnostics.push(diagnostic);
             self.plan.decisions.push(decision);
         }
+        Ok(())
+    }
+    fn structural_decision(
+        &mut self,
+        category: &str,
+        reason: DecisionReason,
+        anchors: Vec<SourceAnchor>,
+        item_ids: Vec<String>,
+        message: &str,
+    ) -> Result<(), DomainError> {
+        let action = DecisionAction::cause(reason);
+        let decision = Decision {
+            reason,
+            next_action: action.next_action(),
+            action,
+            id: format!("d/{}", self.plan.decisions.len()),
+            category: category.into(),
+            anchors,
+            item_ids,
+            evidence: Vec::new(),
+            unresolved_consequence: message.into(),
+            resolution: "request_change_required".into(),
+            supported_choices: Vec::new(),
+            selected_choice: None,
+            blocks_applicability: true,
+            chain_diagnostic_ids: Vec::new(),
+        };
+        self.account(descriptor_bytes(&decision)?)?;
+        self.plan.decisions.push(decision);
         Ok(())
     }
     fn withhold(&mut self) {
@@ -468,6 +578,15 @@ impl MoveEnvelope {
             ("moves", self.plan.moves.len()),
             ("trivia_decisions", self.plan.trivia_decisions.len()),
             ("decisions", self.plan.decisions.len()),
+            ("decision_groups", self.plan.decision_groups.len()),
+            (
+                "decision_group_references",
+                self.plan
+                    .decision_groups
+                    .iter()
+                    .map(|g| g.decision_ids.len())
+                    .sum(),
+            ),
             ("chain_diagnostics", self.plan.chain_diagnostics.len()),
             (
                 "chain_diagnostic_references",
@@ -487,6 +606,7 @@ impl MoveEnvelope {
         self.plan.moves.clear();
         self.plan.trivia_decisions.clear();
         self.plan.decisions.clear();
+        self.plan.decision_groups.clear();
         self.plan.chain_diagnostics.clear();
         self.plan.rewrites.clear();
         self.plan.base_files.clear();
@@ -578,6 +698,27 @@ fn run_with_recheck(
     for decision in &mut result.plan.decisions {
         for id in &mut decision.chain_diagnostic_ids {
             *id = links[id].clone();
+        }
+    }
+    match decision_groups(
+        result.plan.decisions.iter().map(|d| {
+            (
+                d.category.as_str(),
+                d.reason,
+                &d.action,
+                d.blocks_applicability,
+                d.id.as_str(),
+            )
+        }),
+        &mut result.counts.analysis_descriptor_bytes,
+        (
+            started + Duration::from_millis(request.limits.time_budget_ms.min(300_000)),
+            cancelled,
+        ),
+    ) {
+        Ok(groups) => result.plan.decision_groups = groups,
+        Err(error) => {
+            result.incomplete(&error.code);
         }
     }
     result.fit();
@@ -1029,6 +1170,26 @@ fn build(
                 Some(&creation.parent),
                 None,
             );
+            let arrivals: Vec<_> = selected
+                .iter()
+                .filter(|s| {
+                    s.destination.path() == creation.parent
+                        && s.item
+                            .name
+                            .as_deref()
+                            .is_some_and(|n| n.trim_start_matches("r#") == name)
+                })
+                .collect();
+            result.structural_decision(
+                "binding_collision",
+                DecisionReason::DestinationBindingConflict,
+                arrivals
+                    .iter()
+                    .map(|s| anchor(&s.source, &files[&s.source].source, &s.item.span.range))
+                    .collect(),
+                arrivals.iter().map(|s| s.item.id.clone()).collect(),
+                "incoming item collides with the proposed parent module declaration",
+            )?;
         }
         if !matches.is_empty() {
             let declaration = matches[0];
@@ -1095,6 +1256,9 @@ fn build(
                 .is_none()
             {
                 result.blocker("VISIBILITY_CONTEXT", "reused restricted declaration needs verified absolute access context; no visibility repair is performed", Some(&creation.parent), Some(declaration.span.range.clone()));
+                result.structural_decision("visibility_context", DecisionReason::VisibilityScopeUnproved,
+                    vec![anchor(&creation.parent, &files[&creation.parent].source, &declaration.span.range)],
+                    creation.selections.iter().map(|i| selected[*i].item.id.clone()).collect(), "reused restricted declaration needs verified absolute access context; no visibility repair is performed")?;
             }
             creation.link = Some(DeclarationLink::Reused {
                 path: creation.parent.clone(),
@@ -1134,6 +1298,17 @@ fn build(
                 Some(&selection.source),
                 Some(selection.item.span.range.clone()),
             );
+            result.structural_decision(
+                "reexport_dependency",
+                DecisionReason::PublicPathChange,
+                vec![anchor(
+                    &selection.source,
+                    &files[&selection.source].source,
+                    &selection.item.span.range,
+                )],
+                vec![selection.item.id.clone()],
+                "destination would expose a changed public path; explicit API decision required",
+            )?;
         }
         if old.is_none_or(|e| !e.unresolved.is_empty())
             || new.is_none_or(|e| !e.unresolved.is_empty())
@@ -1212,37 +1387,39 @@ fn build(
             Some(&need.path),
             Some(need.range.clone()),
         );
-        result.plan.decisions.push(Decision { id, category: need.category.into(), anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)], item_ids: need.item_ids, evidence: vec![Lines::new(&files[&need.path].source).slice(need.range.start_byte, need.range.end_byte, request.limits.text_bytes)], unresolved_consequence: need.message, next_action: "supply supported written binding/context evidence or change/narrow the selection; acknowledgments cannot clear uncertainty".into(), resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true, chain_diagnostic_ids: Vec::new() });
-        result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
-    }
-    // Structural context blockers need the same actionable decision shape as dependency needs.
-    for blocker in result.plan.blockers.clone() {
-        // Chain decisions were recorded at detection, independent of capped summary blockers.
-        if blocker.code == "CRATE_IDENTITY_UNCERTAIN" {
-            continue;
-        }
-        let category = blocker.code.to_lowercase();
-        if !matches!(
-            category.as_str(),
-            "binding_collision" | "reexport_dependency" | "visibility_context" | "module_context"
-        ) || result.plan.decisions.iter().any(|d| {
-            d.category == category
-                && d.anchors
-                    .iter()
-                    .any(|a| Some(&a.path) == blocker.path.as_ref())
-        }) {
-            continue;
-        }
-        items::check(deadline, cancelled)?;
-        let anchors = match (&blocker.path, &blocker.range) {
-            (Some(path), Some(span)) => vec![anchor(path, &files[path].source, span)],
-            _ => request.moves.iter().map(|m| m.item.clone()).collect(),
+        let action = need
+            .choice_target
+            .map(DecisionAction::rewrite)
+            .unwrap_or_else(|| DecisionAction::cause(need.reason));
+        let supported_choices = match &action {
+            DecisionAction::RequestField { choices, .. } => choices.clone(),
+            _ => Vec::new(),
         };
-        let decision = Decision { id: format!("d/{}", result.plan.decisions.len()), category, anchors,
-            item_ids: selected.iter().map(|s| s.item.id.clone()).collect(), evidence: Vec::new(),
-            unresolved_consequence: blocker.message,
-            next_action: "admit unique ordinary context or change selection/destination; no API/visibility repair is performed".into(),
-            resolution: "request_change_required".into(), supported_choices: Vec::new(), selected_choice: None, blocks_applicability: true, chain_diagnostic_ids: Vec::new() };
+        let decision = Decision {
+            reason: need.reason,
+            next_action: action.next_action(),
+            action,
+            id,
+            category: need.category.into(),
+            anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)],
+            item_ids: need.item_ids,
+            evidence: vec![Lines::new(&files[&need.path].source).slice(
+                need.range.start_byte,
+                need.range.end_byte,
+                request.limits.text_bytes,
+            )],
+            unresolved_consequence: need.message,
+            resolution: if supported_choices.is_empty() {
+                "request_change_required"
+            } else {
+                "choice_available"
+            }
+            .into(),
+            supported_choices,
+            selected_choice: None,
+            blocks_applicability: true,
+            chain_diagnostic_ids: Vec::new(),
+        };
         result.account(descriptor_bytes(&decision)?)?;
         result.plan.decisions.push(decision);
     }
@@ -1274,6 +1451,23 @@ fn build(
         (deadline, cancelled),
         result,
     )?;
+    for decision in &mut result.plan.decisions {
+        if decision.reason == DecisionReason::ModuleChainFailure {
+            for s in &selected {
+                items::check(deadline, cancelled)?;
+                if decision
+                    .anchors
+                    .iter()
+                    .any(|a| a.path == s.source && a.range == s.item.span.range)
+                    && !decision.item_ids.contains(&s.item.id)
+                {
+                    result.counts.analysis_descriptor_bytes += s.item.id.len() + 32;
+                    decision.item_ids.push(s.item.id.clone());
+                }
+            }
+        }
+    }
+    result.account(0)?;
     for s in &selected {
         items::check(deadline, cancelled)?;
         result.plan.moves.push(MoveRecord {
@@ -1556,7 +1750,26 @@ fn collect_trivia(
             });
             result.account(descriptor_bytes(&result.plan.trivia_decisions.last())?)?;
             if t.classification == "ambiguous" {
-                result.plan.decisions.push(Decision { id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), next_action: "keep default or replay an anchored ordinary-comment carry choice".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new() });
+                let action = DecisionAction::RequestField {
+                    tool: "move_item".into(),
+                    field: "trivia_overrides[]".into(),
+                    target: None,
+                    trivia: Some(original_anchor.clone()),
+                    target_item: target.map(|i| request.moves[i].item.clone()).or_else(|| {
+                        request
+                            .moves
+                            .iter()
+                            .find(|m| m.item.path == *path)
+                            .map(|m| m.item.clone())
+                    }),
+                    choices: if choice_relevant {
+                        vec!["keep_in_place".into(), "carry_with_item".into()]
+                    } else {
+                        vec!["keep_in_place".into()]
+                    },
+                    purpose: DecisionPurpose::ReviewDefault,
+                };
+                result.plan.decisions.push(Decision { reason: DecisionReason::OrdinaryTriviaChoice, next_action: action.next_action(), action, id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new() });
                 result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
             }
         }
@@ -1733,7 +1946,10 @@ fn rewrite(
             anchors.first().map(|a| a.path.as_str()),
             anchors.first().map(|a| a.range.clone()),
         );
-        result.plan.decisions.push(Decision { id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), next_action:"accept the default or replay a supported same-target alternative".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new() });
+        let route = DecisionAction::rewrite(target.clone());
+        let decision = Decision { reason: DecisionReason::RequiredRewriteRetained, next_action: route.next_action(), action: route, id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new() };
+        result.account(descriptor_bytes(&decision)?)?;
+        result.plan.decisions.push(decision);
         decision_ids.push(id);
     }
     let id = format!("r/{}", result.plan.rewrites.len());
