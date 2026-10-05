@@ -199,6 +199,8 @@ Place that object in `rewrite_overrides:[…]`, not in a separate apply call. Th
 
 ### Complete artifacts and typed failures
 
+For decision field meanings and display-only labels, see [Consuming decisions and member labels](#consuming-decisions-and-member-labels).
+
 `plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
 
 Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. `declaration_visibility_rewrite_id`, when present, resolves to the separately audited required visibility repair on either a synthesized or reused declaration. Root-private modules ordinarily already admit descendant consumers and are not blanket-widened. Source files remain present even when emptied.
@@ -235,6 +237,75 @@ Group `facts`, rationale and confidence expose integer organization evidence, no
 Every `unresolved_decision_ids[]` entry resolves to a same-response `decisions[]` record with anchored display descriptors, evidence, unresolved consequence and next action. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
 
 Empty/singleton/recovered or unsupported-layout files return inventory and an explicit no-draft reason. A work, discovery, membership, freshness or mandatory evidence/output limit gives incomplete advice and withholds **all complete drafts**. Counts distinguish observed inventory/descriptors/candidates from returned items; `counts.omissions` records suppressed arrays and membership/decision links. Dropping only source/context display text preserves complete drafts when full coordinates and required evidence links fit. `span.text:null` is not a shortened `expected_text`: obtain the complete current original bytes before execution. Integrity is input-only (`input_checked`, `input_recovered` or `not_checked`), always `semantic:"not_performed"`.
+
+### Consuming decisions and member labels
+
+These decision fields apply to both `move_item`'s `plan.decisions[]` and
+`suggest_split`'s `decisions[]`:
+
+- `unresolved_consequence` describes the consequence of leaving the concern
+  unresolved. This is the actual wire field; there is no `consequence` alias.
+- `next_action` gives caller guidance, not an executable request or proof that a
+  repair is supported. Review the related anchors and supported choices.
+- `resolution:"choice_available"` means a supported review/anchored choice is
+  available; `resolution:"request_change_required"` cannot be cleared by acknowledgment.
+- `selected_choice` is the current choice, or `null` when none is selected. A
+  reviewable default such as `keep_in_place` does not clear a separate blocker.
+- `blocks_applicability` says whether the concern blocks a move (or represents a
+  prospective execution concern in advice). Neither a choice nor a complete
+  advice envelope implies an applicable move. Require `plan.applicable:true` and
+  non-null `edits`, `created_files` and `patch` before treating a move as applicable.
+
+Draft groups carry `item_ids`, not member-name strings. Join every ID to
+`inventory[].id`, including the retain group and context-sensitive units. Count
+membership by IDs: every inventoried unit appears exactly once per complete draft.
+A valid unnamed unit has `name:null`, not an empty-string name. Display its `kind`,
+`path` and `span` coordinates instead of filtering it out or substituting an empty
+wire-level name. Names can repeat; they are not membership keys.
+
+For example, this **caller-side** Python displays every group from a saved advice
+JSON response, preserving unnamed members:
+
+```python
+import json, pathlib, sys
+advice = json.loads(pathlib.Path(sys.argv[1]).read_text())
+by_id = {unit["id"]: unit for unit in advice["inventory"]}
+impl_by_id = {record["item_id"]: record for record in advice["impl_contexts"]}
+
+def label(unit):
+    span = unit["span"]
+    r = span["range"]
+    location = (f'{unit["path"]}:{span["start"]["line"]}-{span["end"]["line"]}'
+                f' bytes {r["start_byte"]}..{r["end_byte"]}')
+    if unit["name"] is not None:
+        return unit["name"]
+    impl = impl_by_id.get(unit["id"], {})
+    type_text = (impl.get("written_type") or {}).get("text")
+    trait_text = (impl.get("written_trait") or {}).get("text")
+    heading = unit["kind"]
+    if type_text:
+        heading += f' {trait_text} for {type_text}' if trait_text else f' {type_text}'
+    return f'{heading} @ {location}'
+
+for draft in advice["drafts"]:
+    seen = set()
+    for group in draft["groups"]:
+        print(group["kind"])
+        for item_id in group["item_ids"]:
+            assert item_id not in seen
+            seen.add(item_id)
+            print("  " + label(by_id[item_id]))
+    assert seen == set(by_id)
+```
+
+`impl_contexts[].item_id` links optional `written_type`/`written_trait` spans to
+inventory units. Their text is written syntax, **not semantic impl identity**.
+Null spans or omitted text still leave a nonempty kind/location label. Display
+text can be omitted (`text:null`, `text_omitted:true`) while membership,
+coordinates and required evidence remain complete; check status and omission
+counts rather than treating a missing display string as missing membership.
+Neither IDs nor labels/snippets are `SourceAnchor.expected_text`. Obtain complete
+current original bytes for execution anchors, even after a complete advice result.
 
 ### Explicit edited-batch flow
 

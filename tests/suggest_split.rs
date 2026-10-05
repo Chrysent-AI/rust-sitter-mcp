@@ -9,7 +9,11 @@ mod stdio_client;
 use fixture_gen::{Fixture, observe};
 use rust_sitter_mcp::{engine::Engine, split::SuggestSplitRequest};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, fs, sync::atomic::AtomicBool};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    sync::atomic::AtomicBool,
+};
 use stdio_client::Client;
 
 fn args(repo: &Fixture, source: &str) -> Value {
@@ -41,12 +45,54 @@ fn edge<'a>(result: &'a Value, from: &str, to: &str) -> Option<&'a Value> {
         .iter()
         .find(|s| s["from_item_id"] == *a && s["to_item_id"] == *b)
 }
+// Mirrors the caller-side ID join and display fallback documented in docs/tools.md.
+fn member_label(unit: &Value, impl_context: Option<&Value>) -> String {
+    if let Some(name) = unit["name"].as_str() {
+        return name.to_owned();
+    }
+    let span = &unit["span"];
+    let range = &span["range"];
+    let mut heading = unit["kind"].as_str().unwrap().to_owned();
+    if let Some(type_text) = impl_context.and_then(|c| c["written_type"]["text"].as_str()) {
+        if let Some(trait_text) = impl_context.and_then(|c| c["written_trait"]["text"].as_str()) {
+            heading.push_str(&format!(" {trait_text} for {type_text}"));
+        } else {
+            heading.push_str(&format!(" {type_text}"));
+        }
+    }
+    format!(
+        "{heading} @ {}:{}-{} bytes {}..{}",
+        unit["path"].as_str().unwrap(),
+        span["start"]["line"],
+        span["end"]["line"],
+        range["start_byte"],
+        range["end_byte"]
+    )
+}
+
+fn decision_fields(decisions: &Value) {
+    for decision in decisions.as_array().unwrap() {
+        assert!(
+            !decision["unresolved_consequence"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(decision.get("consequence").is_none());
+        assert!(!decision["next_action"].as_str().unwrap().is_empty());
+    }
+}
+
 #[test]
 fn all_written_units_and_display_omission_preserve_complete_drafts() {
     let repo = Fixture::generate();
     let before = observe(&repo.0);
-    let result = run(&repo, args(&repo, "src/inventory.rs"));
+    let mut client = Client::new();
+    // Client::call also checks identical structured and JSON text-fallback responses.
+    let result = client.call("suggest_split", args(&repo, "src/inventory.rs"));
     advice_flow::complete(&result);
+    assert!(!result["decisions"].as_array().unwrap().is_empty());
+    decision_fields(&result["decisions"]);
     let inventory = result["inventory"].as_array().unwrap();
     assert_eq!(inventory.len(), 18);
     assert_eq!(
@@ -121,13 +167,52 @@ fn all_written_units_and_display_omission_preserve_complete_drafts() {
     );
     assert!(!result["scope_trivia"].as_array().unwrap().is_empty());
     assert!(!result["drafts"].as_array().unwrap().is_empty());
+    let by_id: BTreeMap<_, _> = inventory
+        .iter()
+        .map(|unit| (unit["id"].as_str().unwrap(), unit))
+        .collect();
+    let impl_by_id: BTreeMap<_, _> = impls
+        .iter()
+        .map(|record| (record["item_id"].as_str().unwrap(), record))
+        .collect();
     for draft in result["drafts"].as_array().unwrap() {
+        let mut seen = BTreeSet::new();
+        for group in draft["groups"].as_array().unwrap() {
+            for id in group["item_ids"].as_array().unwrap() {
+                let id = id.as_str().unwrap();
+                assert!(seen.insert(id));
+                let unit = by_id[id];
+                assert_ne!(unit["name"], "");
+                let label = member_label(unit, impl_by_id.get(id).copied());
+                assert!(!label.is_empty());
+                if unit["name"].is_null() {
+                    // Omitted impl text and absent optional context both fall back to location.
+                    assert_eq!(label, member_label(unit, None));
+                    assert!(label.starts_with(unit["kind"].as_str().unwrap()));
+                    assert!(label.contains("src/inventory.rs:"));
+                    assert!(label.contains(" bytes "));
+                }
+            }
+        }
+        assert_eq!(seen, by_id.keys().copied().collect());
         let retain = &draft["groups"][0]["item_ids"];
         for unit in inventory
             .iter()
             .filter(|i| i["eligibility"] != "supported_unit")
         {
             assert!(retain.as_array().unwrap().contains(&unit["id"]));
+        }
+    }
+    let mut with_text = args(&repo, "src/inventory.rs");
+    with_text["limits"]["text_bytes"] = json!(8192);
+    let displayed = client.call("suggest_split", with_text);
+    advice_flow::complete(&displayed);
+    for record in displayed["impl_contexts"].as_array().unwrap() {
+        let unit = &by_id[record["item_id"].as_str().unwrap()];
+        let label = member_label(unit, Some(record));
+        assert!(label.contains(record["written_type"]["text"].as_str().unwrap()));
+        if let Some(trait_text) = record["written_trait"]["text"].as_str() {
+            assert!(label.contains(&format!("{trait_text} for ")));
         }
     }
     assert_eq!(observe(&repo.0), before);
@@ -628,11 +713,13 @@ fn edited_membership_flow_and_staleness_use_only_explicit_moves() {
     let advice = run(&repo, args(&repo, "src/rich.rs"));
     let batch = advice_flow::edited_batch(&repo, &advice);
     let engine = Engine::new(repo.0.clone()).unwrap();
-    let result = serde_json::to_value(engine.move_item(
-        serde_json::from_value(batch.clone()).unwrap(),
-        &AtomicBool::new(false),
-    ))
-    .unwrap();
+    let mut client = Client::new();
+    let result = client.call("move_item", batch.clone());
+    decision_fields(&result["plan"]["decisions"]);
+    assert_eq!(result["plan"]["applicable"], true);
+    assert!(result["plan"]["edits"].is_array());
+    assert!(result["plan"]["created_files"].is_array());
+    assert!(result["plan"]["patch"].is_string());
     let copy = move_artifacts::apply(&repo, &result);
     assert!(
         fs::read_to_string(copy.0.join("src/edited_a.rs"))

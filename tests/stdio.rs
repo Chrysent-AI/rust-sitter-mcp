@@ -72,6 +72,34 @@ fn real_stdio_query() {
             .unwrap()
             .contains(&json!("moves"))
     );
+    assert!(
+        move_tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("crate_root"))
+    );
+    let description = move_tool["description"].as_str().unwrap();
+    for phrase in [
+        "Read-only simultaneous plan",
+        "Unique ordinary module and written-binding evidence",
+        "itemized import/path repairs",
+        "necessary pub(crate) access repairs",
+        "replayable anchored alternatives",
+        "Required crate_root is caller-selected",
+        "not an inferred Cargo target",
+        "unsupported or uncertain dependencies block the entire batch",
+        "blocked previews are not applicable artifacts",
+        "published together or withheld",
+        "Semantic checking is not_performed",
+        "never writes, formats, compiles or applies changes",
+    ] {
+        assert!(
+            description.contains(phrase),
+            "missing {phrase}: {description}"
+        );
+    }
+    assert!(!description.contains("dependency-free"));
+    assert!(!description.contains("repair needs are blockers"));
     let invalid_move = exchange(
         json!({"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"move_item","arguments":{"repo_path":root,"crate_root":"sample.rs","moves":[],"apply":true}}}),
     );
