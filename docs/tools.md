@@ -297,9 +297,12 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
 - `lexical_uncertainty`, when present, explains an unproved lexical context with
   `spelling`, typed `reason`, `scope:{path,range,kind}`, and optional
   `pattern:{path,range,kind}`. Its reasons are `unsupported_pattern`,
-  `identifier_pattern_binding_or_constant`, `relevant_local_import`,
-  `conditional_local_context` and `syntax_recovery`. The main decision retains
-  the original occurrence anchor. These witness coordinates locate evidence;
+  `identifier_pattern_binding_or_constant`, `value_binding_in_type_position`,
+  `relevant_local_import`, `conditional_local_context` and `syntax_recovery`.
+  A same-spelled value binding does not prove a type reference independent;
+  that namespace uncertainty remains blocked rather than silently discarding
+  the type dependency. The main decision retains the original occurrence
+  anchor. These witness coordinates locate evidence;
   they are not replay targets or new request fields. Legacy
   `category:"binding_collision"`/`BINDING_COLLISION` can still accompany
   `reason:"lexical_context_unproved"`: that means uncertainty, not a proven
