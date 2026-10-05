@@ -430,14 +430,21 @@ fn references(
                         (text, Some(node))
                     };
                 if let Some(targets) = index.get(name.trim_start_matches("r#")) {
-                    let lexical = binding_node.map_or(items::LexicalBinding::Absent, |n| {
-                        items::lexical_binding(
-                            n,
-                            &source.source,
-                            name.trim_start_matches("r#"),
-                            (controls.deadline, controls.cancelled),
-                        )
-                    });
+                    let assessment = binding_node
+                        .map(|n| {
+                            items::lexical_assessment(
+                                &source.path,
+                                n,
+                                &source.source,
+                                name,
+                                (controls.deadline, controls.cancelled),
+                                false,
+                            )
+                        })
+                        .transpose()?;
+                    let lexical = assessment
+                        .as_ref()
+                        .map_or(items::LexicalBinding::Absent, |a| a.binding);
                     controls.check()?;
                     if lexical == items::LexicalBinding::Uncertain {
                         let id = result.inventory[owner].id.clone();
@@ -457,6 +464,19 @@ fn references(
                             ),
                             false,
                         )?;
+                        let witness = assessment.expect("uncertain assessment").uncertainty;
+                        result.account(descriptor_bytes(&witness)?)?;
+                        let decision = result
+                            .decisions
+                            .iter_mut()
+                            .find(|d| {
+                                d.reason == DecisionReason::LexicalContextUnproved
+                                    && d.anchors.first().is_some_and(|a| {
+                                        a.path == source.path && a.span.range == range(node)
+                                    })
+                            })
+                            .expect("lexical decision");
+                        decision.lexical_uncertainty = witness;
                     } else if lexical == items::LexicalBinding::Absent {
                         for target in targets {
                             controls.check()?;
@@ -669,6 +689,7 @@ pub(super) fn add_decision(
         selected_choice: banner.then(|| "keep_in_place".into()),
         blocks_applicability: !banner,
         chain_diagnostic_ids: Vec::new(),
+        lexical_uncertainty: None,
     };
     result.account(descriptor_bytes(&value)?)?;
     result.decisions.push(value);

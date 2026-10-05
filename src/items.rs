@@ -1,5 +1,6 @@
 //! Written top-level inventory and ordinary module evidence. No manifest or semantic resolver.
 mod chain;
+mod lexical;
 use crate::{
     matching::Lines,
     result::{ByteRange, DomainError, SourceSlice, SyntaxFlags},
@@ -10,6 +11,10 @@ pub use chain::{
     ChainDiagnostic, ChainLocation, ChainOrigin, ChainReason, ChainRole, ModuleAnalysis,
 };
 pub(crate) use chain::{declaration_reasons, finalize_chain};
+pub use lexical::LexicalUncertainty;
+pub(crate) use lexical::{
+    LexicalBinding, lexical_assessment, lexical_binding, lexical_with_import_proof,
+};
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 use std::{
@@ -655,6 +660,7 @@ pub enum DecisionReason {
 pub struct Need {
     pub reason: DecisionReason,
     pub choice_target: Option<crate::move_plan::RewriteTarget>,
+    pub lexical_uncertainty: Option<LexicalUncertainty>,
     pub category: &'static str,
     pub path: String,
     pub range: ByteRange,
@@ -671,6 +677,7 @@ fn need(
     Need {
         reason,
         choice_target: None,
+        lexical_uncertainty: None,
         category,
         path: path.into(),
         range: ByteRange {
@@ -703,213 +710,6 @@ fn declaration_name(node: Node<'_>) -> bool {
                     | "extern_crate_declaration"
             )
     })
-}
-fn binding_pattern(node: Node<'_>, source: &str, name: &str) -> bool {
-    if node.kind() == "identifier" {
-        return source[node.byte_range()].trim_start_matches("r#") == name;
-    }
-    if matches!(node.kind(), "mut_pattern" | "reference_pattern") {
-        return (0..node.named_child_count())
-            .filter_map(|i| node.named_child(i as u32))
-            .any(|n| binding_pattern(n, source, name));
-    }
-    false
-}
-/// Resolve only written lexical bindings in containing scopes, never a same-spelled name elsewhere.
-pub(crate) fn local(
-    node: Node<'_>,
-    item: Node<'_>,
-    source: &str,
-    name: &str,
-    deadline: Instant,
-    cancelled: &AtomicBool,
-) -> bool {
-    let mut child = node;
-    while let Some(parent) = child.parent() {
-        if check(deadline, cancelled).is_err() {
-            return false;
-        }
-        if let Some(params) = parent.child_by_field_name("parameters") {
-            for i in 0..params.named_child_count() {
-                if check(deadline, cancelled).is_err() {
-                    return false;
-                }
-                let parameter = params.named_child(i as u32).expect("parameter");
-                if let Some(p) = parameter
-                    .child_by_field_name("pattern")
-                    .or_else(|| (parent.kind() == "closure_expression").then_some(parameter))
-                    && binding_pattern(p, source, name)
-                {
-                    return true;
-                }
-            }
-        }
-        if let Some(params) = parent.child_by_field_name("type_parameters") {
-            for i in 0..params.named_child_count() {
-                if check(deadline, cancelled).is_err() {
-                    return false;
-                }
-                if params
-                    .named_child(i as u32)
-                    .and_then(|p| p.child_by_field_name("name"))
-                    .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
-                {
-                    return true;
-                }
-            }
-        }
-        if parent.kind() == "block" {
-            for i in 0..parent.named_child_count() {
-                if check(deadline, cancelled).is_err() {
-                    return false;
-                }
-                let statement = parent.named_child(i as u32).expect("child");
-                if statement.end_byte() <= child.start_byte()
-                    && statement.kind() == "let_declaration"
-                    && statement
-                        .child_by_field_name("pattern")
-                        .is_some_and(|p| binding_pattern(p, source, name))
-                {
-                    return true;
-                }
-                if statement.kind() == "function_item"
-                    && statement
-                        .child_by_field_name("name")
-                        .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
-                {
-                    return true;
-                }
-            }
-        }
-        if parent == item {
-            break;
-        }
-        child = parent;
-    }
-    false
-}
-/// A spelling is not binding evidence. Unsupported containing patterns/uses are uncertainty,
-/// while recognized locals are demonstrably independent of file-level declarations.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LexicalBinding {
-    Independent,
-    Uncertain,
-    Absent,
-}
-pub(crate) fn lexical_binding(
-    node: Node<'_>,
-    source: &str,
-    name: &str,
-    controls: (Instant, &AtomicBool),
-) -> LexicalBinding {
-    lexical_context(node, source, name, controls, false)
-}
-pub(crate) fn lexical_with_import_proof(
-    node: Node<'_>,
-    source: &str,
-    name: &str,
-    controls: (Instant, &AtomicBool),
-) -> LexicalBinding {
-    lexical_context(node, source, name, controls, true)
-}
-fn lexical_context(
-    node: Node<'_>,
-    source: &str,
-    name: &str,
-    controls: (Instant, &AtomicBool),
-    proven_import: bool,
-) -> LexicalBinding {
-    let mut owner = node;
-    while let Some(parent) = owner.parent() {
-        if parent.kind() == "source_file" {
-            break;
-        }
-        owner = parent;
-    }
-    if local(node, owner, source, name, controls.0, controls.1) {
-        return LexicalBinding::Independent;
-    }
-    let mut child = node;
-    while let Some(parent) = child.parent() {
-        if check(controls.0, controls.1).is_err() {
-            return LexicalBinding::Uncertain;
-        }
-        if matches!(
-            parent.kind(),
-            "for_expression" | "match_arm" | "if_let_expression" | "while_let_expression"
-        ) {
-            return LexicalBinding::Uncertain;
-        }
-        if parent.kind() == "closure_expression"
-            && parent.child_by_field_name("parameters").is_some_and(|p| {
-                (0..p.named_child_count())
-                    .filter_map(|i| p.named_child(i as u32))
-                    .any(|n| {
-                        !matches!(
-                            n.kind(),
-                            "identifier" | "mut_pattern" | "reference_pattern" | "parameter"
-                        )
-                    })
-            })
-        {
-            return LexicalBinding::Uncertain;
-        }
-        if let Some(params) = parent.child_by_field_name("parameters") {
-            for i in 0..params.named_child_count() {
-                if let Some(pattern) = params
-                    .named_child(i as u32)
-                    .and_then(|p| p.child_by_field_name("pattern"))
-                    && !matches!(
-                        pattern.kind(),
-                        "identifier" | "mut_pattern" | "reference_pattern" | "self_parameter"
-                    )
-                {
-                    return LexicalBinding::Uncertain;
-                }
-            }
-        }
-        if parent.kind() == "block" {
-            for i in 0..parent.named_child_count() {
-                let statement = parent.named_child(i as u32).expect("child");
-                let relevant_use = if statement.kind() == "use_declaration" {
-                    use_facts(statement, source, controls)
-                        .map(|f| f.0)
-                        .unwrap_or(true)
-                        || use_leaves(statement, source, controls)
-                            .map(|leaves| leaves.iter().any(|leaf| leaf.binding == name))
-                            .unwrap_or(true)
-                } else {
-                    false
-                };
-                if (relevant_use && !proven_import)
-                    || (statement.kind() == "let_declaration"
-                        && statement.end_byte() <= child.start_byte()
-                        && statement.child_by_field_name("pattern").is_some_and(|p| {
-                            !matches!(
-                                p.kind(),
-                                "identifier" | "mut_pattern" | "reference_pattern" | "_"
-                            )
-                        }))
-                {
-                    return LexicalBinding::Uncertain;
-                }
-                if matches!(
-                    statement.kind(),
-                    "struct_item" | "enum_item" | "type_item" | "const_item" | "static_item"
-                ) && statement
-                    .child_by_field_name("name")
-                    .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
-                {
-                    return LexicalBinding::Independent;
-                }
-            }
-        }
-        if parent == owner {
-            break;
-        }
-        child = parent;
-    }
-    LexicalBinding::Absent
 }
 pub(crate) fn reference_role(node: Node<'_>) -> bool {
     if declaration_name(node) {
@@ -1053,15 +853,13 @@ pub fn dependencies(
         // A linear absence check avoids searching every lexical block for names that
         // cannot be local. A positive spelling still goes through the scoped checker.
         let mut possible_locals = std::collections::BTreeSet::new();
-        let mut stack = vec![node];
-        while let Some(current) = stack.pop() {
+        let mut stack = vec![(node, false)];
+        while let Some((current, in_pattern)) = stack.pop() {
             check(deadline, cancelled)?;
-            if matches!(current.kind(), "identifier" | "type_identifier")
-                && (declaration_name(current)
-                    || current.parent().is_some_and(|p| {
-                        p.child_by_field_name("pattern") == Some(current)
-                            || matches!(p.kind(), "mut_pattern" | "reference_pattern")
-                    }))
+            if matches!(
+                current.kind(),
+                "identifier" | "type_identifier" | "shorthand_field_identifier"
+            ) && (in_pattern || declaration_name(current))
             {
                 possible_locals.insert(source[current.byte_range()].trim_start_matches("r#"));
             }
@@ -1076,7 +874,12 @@ pub fn dependencies(
                 continue;
             }
             for i in (0..current.named_child_count()).rev() {
-                stack.push(current.named_child(i as u32).expect("child"));
+                check(deadline, cancelled)?;
+                let child = current.named_child(i as u32).expect("child");
+                let binding_position = in_pattern
+                    || current.child_by_field_name("pattern") == Some(child)
+                    || current.kind() == "closure_parameters";
+                stack.push((child, binding_position));
             }
         }
         *analysis_bytes += possible_locals.iter().map(|s| s.len() + 64).sum::<usize>();
@@ -1148,7 +951,7 @@ pub fn dependencies(
                     name == "Self" && matches!(item.kind.as_str(), "impl_item" | "trait_item");
                 let own = item.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name);
                 let bound = possible_locals.contains(name)
-                    && local(current, node, source, name, deadline, cancelled);
+                    && lexical::local(current, node, source, name, deadline, cancelled);
                 let co_moved = selected.iter().any(|(p, other, dest)| {
                     p == source_path
                         && dest == destination
@@ -1385,15 +1188,41 @@ pub fn dependencies(
                             matches!(p.kind(), "scoped_identifier" | "scoped_type_identifier")
                         });
                         if path == source_path || path_reference {
-                            let lexical = if path_reference {
-                                LexicalBinding::Absent
+                            let assessment = if path_reference {
+                                None
                             } else {
-                                lexical_binding(current, other_source, name, controls)
+                                Some(lexical_assessment(
+                                    path,
+                                    current,
+                                    other_source,
+                                    name,
+                                    controls,
+                                    false,
+                                )?)
                             };
-                            match lexical {
+                            match assessment
+                                .as_ref()
+                                .map_or(LexicalBinding::Absent, |a| a.binding)
+                            {
                                 LexicalBinding::Independent => {}
-                                LexicalBinding::Uncertain => needs.push(need(DecisionReason::LexicalContextUnproved, "binding_collision", path, current, "containing lexical binding context is uncertain; no file-level reference proof")),
-                                LexicalBinding::Absent => needs.push(need(DecisionReason::ExternalOrMissingBinding, "unsupported_dependency_form", path, current, "remaining written consumer requires explicit repair/evidence")),
+                                LexicalBinding::Uncertain => {
+                                    let mut value = need(
+                                        DecisionReason::LexicalContextUnproved,
+                                        "binding_collision",
+                                        path,
+                                        current,
+                                        "containing lexical binding context is unproved; no file-level reference proof",
+                                    );
+                                    value.lexical(assessment.expect("uncertain assessment"));
+                                    needs.push(value);
+                                }
+                                LexicalBinding::Absent => needs.push(need(
+                                    DecisionReason::ExternalOrMissingBinding,
+                                    "unsupported_dependency_form",
+                                    path,
+                                    current,
+                                    "remaining written consumer requires explicit repair/evidence",
+                                )),
                             }
                         }
                     }
