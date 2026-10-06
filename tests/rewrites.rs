@@ -762,6 +762,10 @@ fn category_summaries_coalesce_without_hiding_rejected_needs() {
             .map(|r| json!({"target":r["target"],"action":"retain"}))
             .collect::<Vec<_>>()
     );
+    let preview = run(&repo, args.clone());
+    assert_eq!(preview["plan"]["decision_groups"][0]["count"], 2);
+    assert_eq!(preview["counts"]["omissions"]["decisions"], 1);
+    args["limits"] = json!({"diagnostic_count":64});
     let blocked = run(&repo, args);
     withheld(&blocked);
     assert_eq!(

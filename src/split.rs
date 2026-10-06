@@ -172,6 +172,21 @@ pub struct Draft {
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct DraftMembership {
+    pub id: String,
+    pub source_snapshot_id: String,
+    pub groups: Vec<GroupMembership>,
+    pub unresolved_decision_ids: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GroupMembership {
+    pub kind: String,
+    pub destination_path: Option<String>,
+    pub item_ids: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct DraftEligibility {
     pub state: String,
     pub reasons: Vec<String>,
@@ -233,6 +248,8 @@ pub struct SuggestSplitEnvelope {
     pub decisions: Vec<AdviceDecision>,
     pub decision_groups: Vec<DecisionGroup>,
     pub drafts: Vec<Draft>,
+    /// Non-executable membership summaries when output fitting withholds full drafts.
+    pub draft_summaries: Vec<DraftMembership>,
     pub draft_eligibility: DraftEligibility,
     pub integrity: Integrity,
 }
@@ -271,6 +288,7 @@ impl SuggestSplitEnvelope {
             decisions: Vec::new(),
             decision_groups: Vec::new(),
             drafts: Vec::new(),
+            draft_summaries: Vec::new(),
             draft_eligibility: DraftEligibility {
                 state: "no_draft".into(),
                 reasons: Vec::new(),
@@ -448,18 +466,29 @@ impl SuggestSplitEnvelope {
         if self.wire_bytes() <= self.limits.response_bytes {
             return Ok(());
         }
+        if !self.drafts.is_empty() {
+            self.draft_summaries = self
+                .drafts
+                .iter()
+                .map(|draft| DraftMembership {
+                    id: draft.id.clone(),
+                    source_snapshot_id: draft.source_snapshot_id.clone(),
+                    groups: draft
+                        .groups
+                        .iter()
+                        .map(|group| GroupMembership {
+                            kind: group.kind.clone(),
+                            destination_path: group.destination.as_ref().map(|d| d.path.clone()),
+                            item_ids: group.item_ids.clone(),
+                        })
+                        .collect(),
+                    unresolved_decision_ids: draft.unresolved_decision_ids.clone(),
+                })
+                .collect();
+        }
         self.incomplete("response_bytes");
         self.omit("signals", self.signals.len());
         self.omit("decisions", self.decisions.len());
-        self.omit("decision_groups", self.decision_groups.len());
-        self.omit(
-            "decision_group_references",
-            self.decision_groups
-                .iter()
-                .map(|g| g.decision_ids.len())
-                .sum(),
-        );
-        self.decision_groups.clear();
         self.omit("chain_diagnostics", self.chain_diagnostics.len());
         self.omit(
             "chain_diagnostic_references",
@@ -486,11 +515,6 @@ impl SuggestSplitEnvelope {
         for skipped in self.skipped.values_mut() {
             skipped.examples_omitted += skipped.examples.len() as u64;
             skipped.examples.clear();
-        }
-        if self.wire_bytes() > self.limits.response_bytes {
-            self.source = None;
-            self.omit("source", 1);
-            self.root = None;
         }
         // A logarithmic number of projections rather than quadratic pop/serialize fitting.
         if self.wire_bytes() > self.limits.response_bytes {
@@ -520,6 +544,41 @@ impl SuggestSplitEnvelope {
             self.counts.returned_items = self.inventory.len();
             self.omit("inventory_items", 1);
             self.draft_eligibility.membership_complete = false;
+        }
+        if self.wire_bytes() > self.limits.response_bytes && self.source.take().is_some() {
+            self.omit("source", 1);
+        }
+        // Complete membership outlives display inventory and source descriptions.
+        // Discard it only at the final tier, with exact reference omissions.
+        if self.wire_bytes() > self.limits.response_bytes {
+            self.omit("draft_summaries", self.draft_summaries.len());
+            self.omit(
+                "draft_summary_membership_references",
+                self.draft_summaries
+                    .iter()
+                    .flat_map(|d| &d.groups)
+                    .map(|g| g.item_ids.len())
+                    .sum(),
+            );
+            self.omit(
+                "draft_summary_decision_references",
+                self.draft_summaries
+                    .iter()
+                    .map(|d| d.unresolved_decision_ids.len())
+                    .sum(),
+            );
+            self.draft_summaries.clear();
+        }
+        if self.wire_bytes() > self.limits.response_bytes {
+            self.omit("decision_groups", self.decision_groups.len());
+            self.omit(
+                "decision_group_references",
+                self.decision_groups
+                    .iter()
+                    .map(|g| g.decision_ids.len())
+                    .sum(),
+            );
+            self.decision_groups.clear();
         }
         Ok(())
     }
@@ -693,7 +752,13 @@ fn run_with_recheck(
         if result.fit(terminal).is_err() {
             let error = result.error.take();
             let counts = std::mem::take(&mut result.counts);
+            let root = result.root.take();
+            let snapshot = result.snapshot_id.take();
+            let coverage = std::mem::take(&mut result.coverage);
             result = SuggestSplitEnvelope::empty(request.limits.clone());
+            result.root = root;
+            result.snapshot_id = snapshot;
+            result.coverage = coverage;
             result.counts = counts;
             result.error = error;
             result.incomplete("response_fit_stopped");

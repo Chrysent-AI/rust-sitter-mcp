@@ -26,11 +26,30 @@ fn groups(value: &Value) {
     let decisions = value["decisions"].as_array().unwrap();
     let mut seen = BTreeSet::new();
     for group in value["decision_groups"].as_array().unwrap() {
-        let ids = group["decision_ids"].as_array().unwrap();
+        let ids: Vec<String> = group["decision_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|id| {
+                if let Some(id) = id.as_str() {
+                    return vec![id.to_owned()];
+                }
+                let first = id["first_id"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("d/")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+                (first..first + id["count"].as_u64().unwrap() as usize)
+                    .map(|n| format!("d/{n}"))
+                    .collect()
+            })
+            .collect();
         assert_eq!(group["count"].as_u64().unwrap() as usize, ids.len());
         for id in ids {
-            assert!(seen.insert(id.as_str().unwrap()));
-            let d = decisions.iter().find(|d| d["id"] == *id).unwrap();
+            assert!(seen.insert(id.clone()));
+            let d = decisions.iter().find(|d| d["id"] == id).unwrap();
             for field in ["category", "reason", "blocks_applicability"] {
                 assert_eq!(group[field], d[field]);
             }
@@ -261,7 +280,7 @@ fn banners_root_scope_and_cross_group_routes_are_honest_analysis_or_review() {
 }
 
 #[test]
-fn overflow_clears_groups_and_links_and_schemas_publish_all_routes() {
+fn overflow_preserves_complete_membership_and_root_and_schemas_publish_all_routes() {
     let schema = serde_json::to_value(rmcp::schemars::schema_for!(
         rust_sitter_mcp::move_plan::MoveEnvelope
     ))
@@ -285,41 +304,34 @@ fn overflow_clears_groups_and_links_and_schemas_publish_all_routes() {
     let selected: Vec<_> = source.lines().collect();
     let mut args = request(&repo, &selected);
     args["limits"]["response_bytes"] = json!(65536);
+    args["limits"]["diagnostic_count"] = json!(100_000);
     let result = client.call("move_item", args);
     assert_eq!(result["status"], "partial");
     assert!(result["plan"]["decisions"].as_array().unwrap().is_empty());
-    assert!(
-        result["plan"]["decision_groups"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert!(result["root"].is_string() && result["snapshot_id"].is_string());
+    assert_eq!(result["plan"]["decision_groups"][0]["count"], 360);
+    assert_eq!(
+        result["plan"]["decision_groups"][0]["decision_ids"],
+        json!([{"first_id":"d/0","count":360}])
     );
-    assert!(
-        result["counts"]["omissions"]["decision_groups"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
-    assert!(
-        result["counts"]["omissions"]["decision_group_references"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
+    assert!(result["counts"]["omissions"]["decision_groups"].is_null());
+    assert_eq!(result["counts"]["omissions"]["decisions"], 360);
     let advice = client.call("suggest_split", json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","source_path":"cases/layout/source.rs","paths":["cases/layout"],"limits":{"text_bytes":0,"response_bytes":65536}}));
     assert_eq!(advice["status"], "partial");
     assert!(advice["decisions"].as_array().unwrap().is_empty());
-    assert!(advice["decision_groups"].as_array().unwrap().is_empty());
-    assert!(
-        advice["counts"]["omissions"]["decision_groups"]
-            .as_u64()
+    assert!(advice["root"].is_string() && advice["snapshot_id"].is_string());
+    assert!(advice["counts"]["omissions"]["decision_groups"].is_null());
+    assert_eq!(advice["decision_groups"][0]["count"], 360);
+    assert!(advice["drafts"].as_array().unwrap().is_empty());
+    assert!(!advice["draft_summaries"].as_array().unwrap().is_empty());
+    for summary in advice["draft_summaries"].as_array().unwrap() {
+        let members: BTreeSet<_> = summary["groups"]
+            .as_array()
             .unwrap()
-            > 0
-    );
-    assert!(
-        advice["counts"]["omissions"]["decision_group_references"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
+            .iter()
+            .flat_map(|g| g["item_ids"].as_array().unwrap())
+            .map(|id| id.as_str().unwrap())
+            .collect();
+        assert_eq!(members.len(), 180);
+    }
 }

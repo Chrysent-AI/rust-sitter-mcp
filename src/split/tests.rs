@@ -140,6 +140,41 @@ fn injected_small_candidate_cap_stops_at_its_first_excess() {
     assert!(result.drafts.is_empty());
 }
 #[test]
+fn final_fit_tier_accounts_membership_without_losing_root_or_snapshot() {
+    let repo = Fixture::new();
+    let source = (0..1500)
+        .map(|i| format!("fn unit_{i}() {{}}\n"))
+        .collect::<String>();
+    fs::write(repo.0.join("lib.rs"), source).unwrap();
+    let mut request = repo.request();
+    request.max_items = 1500;
+    request.limits.response_bytes = 16 * 1024 * 1024;
+    let mut result = run(&repo.0, request, &AtomicBool::new(false));
+    assert_eq!(result.status, "complete");
+    let root = result.root.clone();
+    let snapshot = result.snapshot_id.clone();
+    let drafts = result.drafts.len();
+    assert!(drafts > 0);
+    result.limits.response_bytes = 65536;
+    result
+        .fit(Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &AtomicBool::new(false),
+        })
+        .unwrap();
+    assert_eq!(result.root, root);
+    assert_eq!(result.snapshot_id, snapshot);
+    assert_eq!(result.status, "partial");
+    assert!(result.drafts.is_empty());
+    assert_eq!(result.counts.omissions["draft_summaries"], drafts);
+    assert_eq!(
+        result.counts.omissions["draft_summary_membership_references"],
+        drafts * 1500
+    );
+    assert!(result.wire_bytes() <= result.limits.response_bytes);
+}
+
+#[test]
 fn descriptor_and_expired_work_checks_are_not_passing_evidence() {
     let mut result = SuggestSplitEnvelope::empty(Limits::default());
     assert!(result.account(128 * 1024 * 1024 + 1).is_err());
