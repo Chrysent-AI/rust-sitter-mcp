@@ -176,6 +176,9 @@ pub struct MoveRequest {
     /// Assume stable prelude types and unshadowed compiler-built-in derives.
     #[serde(default)]
     pub assume_standard_prelude: bool,
+    /// Disclose exact same-file cfg(test) consumer risks instead of blocking on them.
+    #[serde(default)]
+    pub acknowledge_test_consumers: bool,
     /// Resolve a bounded set of written occurrences under an explicit configuration.
     #[serde(default)]
     pub resolve_semantic: bool,
@@ -429,6 +432,8 @@ pub struct MovePlan {
     pub binding_proofs: Vec<BindingProof>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution_coverage: Option<semantic::ResolutionCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_consumer_disclosure: Option<String>,
     pub rewrites: Vec<Rewrite>,
     pub base_files: Vec<BaseFile>,
     pub blockers: Vec<Blocker>,
@@ -496,6 +501,7 @@ impl MoveEnvelope {
                 chain_diagnostics: Vec::new(),
                 binding_proofs: Vec::new(),
                 resolution_coverage: None,
+                test_consumer_disclosure: None,
                 rewrites: Vec::new(),
                 base_files: Vec::new(),
                 blockers: Vec::new(),
@@ -808,9 +814,15 @@ impl MoveEnvelope {
                 .take(self.limits.diagnostic_count)
                 .map(|g| g.decision_ids[0].first_id.clone())
                 .collect();
-            self.plan.decisions.retain(|d| exemplars.contains(&d.id));
+            self.plan.decisions.retain(|d| {
+                exemplars.contains(&d.id) || d.reason == DecisionReason::TestConsumerAcknowledged
+            });
         } else {
-            self.plan.decisions.truncate(preview_count);
+            let mut index = 0;
+            self.plan.decisions.retain(|d| {
+                index += 1;
+                index <= preview_count || d.reason == DecisionReason::TestConsumerAcknowledged
+            });
         }
         let omitted = before - self.plan.decisions.len();
         let chain_links = chain_links
@@ -1831,6 +1843,34 @@ fn build(
             result.account(descriptor_bytes(&result.plan.binding_proofs)?)?;
         }
     }
+    if request.acknowledge_test_consumers {
+        let routes =
+            items::GlobRoutes::new(&files, &parsed, &request.crate_root, (deadline, cancelled))?;
+        for need in &mut analysis.needs {
+            if items::test_consumer(
+                need,
+                &parsed[&need.path],
+                &files[&need.path].source,
+                &tuples,
+                (deadline, cancelled),
+                &routes,
+            )? {
+                need.reason = DecisionReason::TestConsumerAcknowledged;
+                need.message = format!(
+                    "test consumer acknowledged by the caller; binding/expansion is not proved or repaired: {}",
+                    need.message
+                );
+                result.coverage.test_consumers_acknowledged += 1;
+            }
+        }
+        let count = result.coverage.test_consumers_acknowledged;
+        if count > 0 {
+            result.plan.test_consumer_disclosure = Some(format!(
+                "{count} consumers under cfg(test) acknowledged by the caller; behavior under test is validated by the caller's test run, not by this engine"
+            ));
+            result.account(descriptor_bytes(&result.plan.test_consumer_disclosure)?)?;
+        }
+    }
     let mut semantic_needs = Vec::new();
     if request.resolve_semantic {
         let (candidates, other): (Vec<_>, Vec<_>) =
@@ -1847,12 +1887,15 @@ fn build(
             ));
         }
         let id = format!("d/{}", result.plan.decisions.len());
-        result.blocker(
-            &need.category.to_uppercase(),
-            &need.message,
-            Some(&need.path),
-            Some(need.range.clone()),
-        );
+        let acknowledged = need.reason == DecisionReason::TestConsumerAcknowledged;
+        if !acknowledged {
+            result.blocker(
+                &need.category.to_uppercase(),
+                &need.message,
+                Some(&need.path),
+                Some(need.range.clone()),
+            );
+        }
         let action = need
             .choice_target
             .map(DecisionAction::rewrite)
@@ -1875,15 +1918,17 @@ fn build(
                 request.limits.text_bytes,
             )],
             unresolved_consequence: need.message,
-            resolution: if supported_choices.is_empty() {
+            resolution: if acknowledged {
+                "risk_acknowledged"
+            } else if supported_choices.is_empty() {
                 "request_change_required"
             } else {
                 "choice_available"
             }
             .into(),
             supported_choices,
-            selected_choice: None,
-            blocks_applicability: true,
+            selected_choice: acknowledged.then(|| "acknowledge_test_consumers".into()),
+            blocks_applicability: !acknowledged,
             chain_diagnostic_ids: Vec::new(),
             lexical_uncertainty: need.lexical_uncertainty,
             removal_gap: None,

@@ -36,6 +36,9 @@ pub struct MoveCoverage {
     /// Occurrences discharged by pure RA resolution, independent of caller assumptions.
     #[serde(skip_serializing_if = "is_zero")]
     pub ra_resolved: usize,
+    /// Residual test-consumer decisions acknowledged as risks, not binding proofs.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub test_consumers_acknowledged: usize,
     /// Excluded item/glob pairs by written-route reason, not semantic absence proof.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub glob_exclusions: BTreeMap<String, usize>,

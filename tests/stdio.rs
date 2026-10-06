@@ -159,6 +159,16 @@ fn real_stdio_query() {
             .unwrap()
             .contains(&json!("resolve_semantic"))
     );
+    assert_eq!(
+        move_tool["inputSchema"]["properties"]["acknowledge_test_consumers"]["type"],
+        "boolean"
+    );
+    assert!(
+        !move_tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("acknowledge_test_consumers"))
+    );
     assert!(move_tool["inputSchema"]["properties"]["semantic_configuration"].is_object());
     let description = move_tool["description"].as_str().unwrap();
     for phrase in [
@@ -174,6 +184,9 @@ fn real_stdio_query() {
         "published together or withheld",
         "Default semantic checking is not_performed",
         "resolve_semantic defaults to false",
+        "acknowledge_test_consumers defaults to false",
+        "test_consumer_acknowledged",
+        "caller's test run as the validator",
         "class ra_resolved",
         "compilation/equivalence not performed",
         "No Cargo/project discovery",

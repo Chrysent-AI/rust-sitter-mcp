@@ -4,6 +4,7 @@ mod chain;
 pub(crate) use attributes::{BUILTIN_DERIVES, context_independent_attribute, derive_names};
 mod globs;
 mod lexical;
+mod test_consumers;
 use crate::{
     matching::Lines,
     result::{ByteRange, DomainError, SourceSlice, SyntaxFlags},
@@ -28,6 +29,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
+pub(crate) use test_consumers::{test_consumer, test_scope};
 use tree_sitter::{Node, Tree};
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -680,6 +682,7 @@ pub enum DecisionReason {
     MemberOrConstructorUnproved,
     VisibilityScopeUnproved,
     ConditionalOrInheritedContext,
+    TestConsumerAcknowledged,
     MacroContextUnexamined,
     GlobBindingUnproved,
     ExternalOrMissingBinding,

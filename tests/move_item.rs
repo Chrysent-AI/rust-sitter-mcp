@@ -12,6 +12,8 @@ mod move_artifacts;
 mod prelude_tests;
 #[path = "support/stdio_client.rs"]
 mod stdio_client;
+#[path = "support/test_consumers.rs"]
+mod test_consumers;
 use fixture_gen::{Fixture, observe};
 use move_artifacts::{anchor, apply};
 use rust_sitter_mcp::{engine::Engine, move_plan::MoveRequest};

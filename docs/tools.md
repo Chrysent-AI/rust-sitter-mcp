@@ -310,6 +310,39 @@ Oversized proofs/coverage withhold all artifacts and account for omitted
 `binding_proofs`/`resolution_coverage`; the occurrence count survives. The
 unmodified default path performs no resolution and gains no new output fields.
 
+### Opt-in test-consumer acknowledgment
+
+`move_item.acknowledge_test_consumers` defaults to `false`. Omission and explicit
+`false` retain the existing serialized response bytes. With `true`, residual
+consumer decisions whose only uncertainty is within the moved items' own file's
+directly inventoried exact inline `#[cfg(test)]` module become **disclosed risks**,
+not applicability blockers. The exact attribute accepts whitespace variations;
+this is written evidence, not cfg evaluation. Detection shares the test-module
+and super-import/glob classifier used by split advice; move acknowledgment also
+covers macro-argument candidates such as `assert!` and `assert_eq!` without
+expanding or rewriting their tokens.
+
+Each risk stays in `plan.decisions` with reason `test_consumer_acknowledged`,
+`resolution:"risk_acknowledged"`, `blocks_applicability:false`, its complete
+original source anchor and affected item IDs. Nonblocking decision groups retain
+the IDs/counts. `coverage.test_consumers_acknowledged` counts acknowledged
+consumer decisions (an import and an invocation can be separate decisions).
+`plan.test_consumer_disclosure` states: "N consumers under cfg(test) acknowledged
+by the caller; behavior under test is validated by the caller's test run, not by
+this engine". Both fields are absent when no consumers were acknowledged. No
+binding proof or test-result claim is added, and `semantic:"not_performed"`
+remains unchanged on the syntactic path.
+
+The engine does **not** repair these consumers. Review their anchors and run the
+appropriate tests yourself after external patch application. The flag never
+acknowledges cfg(feature), cfg(unix), other unexamined attributes, nested-module
+uncertainty, macros outside this test module, lexical/binding ambiguity,
+member/constructor blockers, selected-item context, or module/root-chain vetoes.
+A mixed batch still withholds every artifact for its non-test residue. All
+acknowledged risk records survive diagnostic-count preview caps even in blocked
+plans; response-byte fitting can still omit counted detail and withhold artifacts.
+Patch/edit/creation shapes and read-only behavior are unchanged.
+
 ### Supported units and ordinary layout
 
 Functions, structs, enums, unions, traits, whole impls (including anonymous impls), type aliases, consts and statics have `supported_unit` inventory eligibility. Their dependencies may still block relocation. Whole modules have `module_context` eligibility reasons; use/extern/foreign constructs have `scope_dependency`; macro definitions/invocations have `macro_dependency`; other significant units are explicitly unsupported. Attributes/docs are associated constituents, not independently selectable inventory units. Nested/body/member/partial selections are rejected.
@@ -602,8 +635,10 @@ and module declarations are excluded. No macro expansion, nested-module inferenc
 external test-file scan or cfg evaluation is performed; absence is not proof of no
 test coupling. Duplicate target spellings remain labeled ambiguous candidates.
 These signals project the existing conditional-consumer decision reason;
-**execution behavior is unchanged**: same-file cfg(test) consumers still block
-relocation in `move_item`. No cfg override or safe relocation mode is introduced.
+**default execution behavior is unchanged**: same-file cfg(test) consumers still
+block relocation in `move_item`. The separate explicit `acknowledge_test_consumers`
+option above discloses supported consumer risks instead; advice itself never
+acknowledges them. No cfg evaluation or safe-relocation guarantee is introduced.
 
 Risk fields and signal kinds are unchanged by counts-first response shaping;
 `semantic:"not_performed"` is unchanged. `suggest_split` publishes schema version 2
