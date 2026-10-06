@@ -108,7 +108,7 @@ Destination rules:
 
 Check:
 - `binding_proofs[]` and coverage: review `standard_prelude`, `standard_builtin_derive`, or `ra_resolved` evidence; `integrity.semantic: "resolution_performed"` means bounded resolution only, never compilation/equivalence.
-- `decisions[]` / `blockers[]`: inspect routes, fields, purposes, and choices. A `test_consumer_acknowledged` decision is visible but nonblocking, not proof tests pass; run relevant tests.
+- `decisions[]` / `blockers[]`: inspect routes, fields, purposes, and choices. A `test_consumer_acknowledged` decision is visible but nonblocking, not proof tests pass; run relevant tests. `lexical_uncertainty.witness_relation: "hoist_possibility"` marks a positional same-block statement-macro witness, not a pattern containing the anchor (it may occur later). The existing test-consumer opt-in can acknowledge that risk for a bare reference with a written super import and no other written binding uncertainty; the witness stays visible. Other lexical uncertainties, known binding conflicts, stale anchors, and structural failures still block.
 - `rewrites[]`: review every import/path/visibility repair (`before_text`/`after_text`).
 - `removal_gap` decisions: bytes stay as-is by default; collapse only via the explicit supported override after reviewing the exact whitespace.
 - `trivia_decisions[]`: review comment/banner ownership.

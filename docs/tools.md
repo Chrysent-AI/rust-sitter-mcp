@@ -313,14 +313,20 @@ unmodified default path performs no resolution and gains no new output fields.
 ### Opt-in test-consumer acknowledgment
 
 `move_item.acknowledge_test_consumers` defaults to `false`. Omission and explicit
-`false` retain the existing serialized response bytes. With `true`, residual
+`false` have identical serialized responses and retain the blocking policy.
+With `true`, residual
 consumer decisions whose only uncertainty is within the moved items' own file's
 directly inventoried exact inline `#[cfg(test)]` module become **disclosed risks**,
 not applicability blockers. The exact attribute accepts whitespace variations;
 this is written evidence, not cfg evaluation. Detection shares the test-module
 and super-import/glob classifier used by split advice; move acknowledgment also
 covers macro-argument candidates such as `assert!` and `assert_eq!` without
-expanding or rewriting their tokens.
+expanding or rewriting their tokens. It also covers bare test references carrying
+a same-block statement-macro `hoist_possibility` witness, including a later macro
+statement, when the written super import reaches the selected file and a separate
+written-binding audit finds no competing local or other lexical uncertainty.
+The witness remains disclosed on the acknowledged decision; this is acceptance
+of expansion risk, not a proof that the macro cannot introduce bindings.
 
 Each risk stays in `plan.decisions` with reason `test_consumer_acknowledged`,
 `resolution:"risk_acknowledged"`, `blocks_applicability:false`, its complete
@@ -336,8 +342,10 @@ remains unchanged on the syntactic path.
 The engine does **not** repair these consumers. Review their anchors and run the
 appropriate tests yourself after external patch application. The flag never
 acknowledges cfg(feature), cfg(unix), other unexamined attributes, nested-module
-uncertainty, macros outside this test module, lexical/binding ambiguity,
+uncertainty, macros outside this test module, other lexical/binding ambiguity,
+known competing written bindings, namespace mismatches, syntax recovery,
 member/constructor blockers, selected-item context, or module/root-chain vetoes.
+Stale anchors and structural failures still block.
 A mixed batch still withholds every artifact for its non-test residue. All
 acknowledged risk records survive diagnostic-count preview caps even in blocked
 plans; response-byte fitting can still omit counted detail and withhold artifacts.
@@ -695,9 +703,13 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   A same-spelled value binding does not prove a type reference independent;
   that namespace uncertainty remains blocked rather than silently discarding
   the type dependency. The main decision retains the original occurrence
-  anchor. These witness coordinates locate evidence;
-  they are not replay targets or new request fields. Legacy
-  `category:"binding_collision"`/`BINDING_COLLISION` can still accompany
+  anchor. For a same-block statement macro, additive
+  `witness_relation:"hoist_possibility"` explicitly identifies `pattern` as a
+  positional witness within `scope`, not the anchor's containing pattern; its
+  range may precede or follow the anchor. The scan remains conservative in both
+  source orders. Other witnesses omit `witness_relation`. These witness
+  coordinates locate evidence; they are not replay targets or new request fields.
+  Legacy `category:"binding_collision"`/`BINDING_COLLISION` can still accompany
   `reason:"lexical_context_unproved"`: that means uncertainty, not a proven
   collision. Witnesses survive `text_bytes:0`; if mandatory evidence cannot fit,
   the result is incomplete and decisions/artifacts are withheld with omissions.

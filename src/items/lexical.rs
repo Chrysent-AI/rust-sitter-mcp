@@ -26,6 +26,12 @@ pub struct LexicalLocation {
     pub range: ByteRange,
     pub kind: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+pub enum WitnessRelation {
+    HoistPossibility,
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct LexicalUncertainty {
@@ -33,6 +39,8 @@ pub struct LexicalUncertainty {
     pub reason: LexicalReason,
     pub scope: LexicalLocation,
     pub pattern: Option<LexicalLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub witness_relation: Option<WitnessRelation>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LexicalBinding {
@@ -86,6 +94,7 @@ fn uncertain(
             reason,
             scope: location(path, scope),
             pattern: pattern.map(|p| location(path, p)),
+            witness_relation: None,
         }),
     }
 }
@@ -300,8 +309,31 @@ pub(crate) fn lexical_assessment(
         controls,
         proven_import,
         None,
+        true,
     )
 }
+/// Audit written bindings only for test-risk acknowledgment, never as a binding proof.
+/// The ordinary assessment still reports every same-block statement macro.
+pub(crate) fn test_consumer_binding(
+    path: &str,
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+) -> Result<LexicalBinding, DomainError> {
+    lexical_context(
+        path,
+        node,
+        source,
+        name.trim_start_matches("r#"),
+        controls,
+        false,
+        None,
+        false,
+    )
+    .map(|a| a.binding)
+}
+#[allow(clippy::too_many_arguments)] // Explicit audit mode cannot change ordinary scan policy.
 fn lexical_context(
     path: &str,
     node: Node<'_>,
@@ -310,6 +342,7 @@ fn lexical_context(
     controls: (Instant, &AtomicBool),
     proven_import: bool,
     boundary: Option<Node<'_>>,
+    statement_macros: bool,
 ) -> Result<LexicalAssessment, DomainError> {
     let mut child = node;
     while let Some(parent) = child.parent() {
@@ -439,19 +472,26 @@ fn lexical_context(
             for i in 0..parent.named_child_count() {
                 check(controls.0, controls.1)?;
                 let statement = parent.named_child(i as u32).expect("statement");
-                if statement.kind() == "macro_invocation"
-                    || (statement.kind() == "expression_statement"
-                        && statement
-                            .named_child(0)
-                            .is_some_and(|n| n.kind() == "macro_invocation"))
+                if statement_macros
+                    && (statement.kind() == "macro_invocation"
+                        || (statement.kind() == "expression_statement"
+                            && statement
+                                .named_child(0)
+                                .is_some_and(|n| n.kind() == "macro_invocation")))
                 {
-                    return Ok(uncertain(
+                    let mut assessment = uncertain(
                         path,
                         name,
                         parent,
                         LexicalReason::UnsupportedPattern,
                         Some(statement),
-                    ));
+                    );
+                    assessment
+                        .uncertainty
+                        .as_mut()
+                        .expect("uncertainty")
+                        .witness_relation = Some(WitnessRelation::HoistPossibility);
+                    return Ok(assessment);
                 }
             }
             // Let bindings begin after their initializers. Later and nested patterns do not compete.
@@ -565,6 +605,7 @@ pub(crate) fn local(
         (deadline, cancelled),
         false,
         Some(item),
+        true,
     )
     .is_ok_and(|a| a.binding == LexicalBinding::Independent)
 }

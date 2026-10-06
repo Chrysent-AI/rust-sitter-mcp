@@ -73,12 +73,18 @@ pub(crate) fn test_consumer(
     controls: (Instant, &AtomicBool),
     routes: &GlobRoutes<'_>,
 ) -> Result<bool, DomainError> {
+    let hoist_risk = need.lexical_uncertainty.as_ref().is_some_and(|witness| {
+        witness.reason == lexical::LexicalReason::UnsupportedPattern
+            && witness.witness_relation == Some(lexical::WitnessRelation::HoistPossibility)
+    });
     if need.attribute_range.is_some()
         || need.choice_target.is_some()
-        || need.lexical_uncertainty.is_some()
+        || (need.lexical_uncertainty.is_some() && !hoist_risk)
+        || (need.reason == DecisionReason::LexicalContextUnproved && !hoist_risk)
         || !matches!(
             (need.category, need.reason),
-            ("macro_dependency", DecisionReason::MacroContextUnexamined)
+            ("binding_collision", DecisionReason::LexicalContextUnproved)
+                | ("macro_dependency", DecisionReason::MacroContextUnexamined)
                 | ("glob_dependency", DecisionReason::GlobBindingUnproved)
                 | (
                     "module_context",
@@ -240,6 +246,16 @@ pub(crate) fn test_consumer(
                                 .get(spelling)
                                 .is_some_and(|target| target == spelling));
                     if !direct_super && !imported {
+                        return Ok(false);
+                    }
+                    // A hoist witness must not mask a competing written local,
+                    // namespace mismatch, pattern uncertainty, or recovery error.
+                    if hoist_risk
+                        && !direct_super
+                        && lexical::test_consumer_binding(
+                            &need.path, reference, source, spelling, controls,
+                        )? != LexicalBinding::Absent
+                    {
                         return Ok(false);
                     }
                 }
