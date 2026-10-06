@@ -103,7 +103,9 @@ fn real_stdio_query() {
             "replace" => &[
                 "First call search to find matches",
                 "Omitted or null selection means all matches, [] means none",
-                "before selection",
+                "caps selected matches",
+                "does not count unselected scope matches",
+                "exact scope totals after complete bounded matching",
                 "withhold ALL artifacts",
                 "semantic checking is not_performed",
                 "verify unchanged base bytes",
