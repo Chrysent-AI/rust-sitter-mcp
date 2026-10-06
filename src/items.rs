@@ -544,6 +544,80 @@ pub(crate) fn use_facts(
     }
     Ok((glob, names))
 }
+/// Conservative written competitors for a bare pattern argument. This is not
+/// constant resolution: visible unit variants also retain uncertainty, even
+/// when no written import establishes that the variant is a bare binding.
+pub(crate) fn pattern_name_competes(
+    pattern: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+) -> Result<bool, DomainError> {
+    let same_name = |node: Node<'_>| {
+        node.child_by_field_name("name")
+            .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
+    };
+    let mut ancestor = pattern.parent();
+    while let Some(scope) = ancestor {
+        check(controls.0, controls.1)?;
+        let module_body = scope.kind() == "declaration_list"
+            && scope.parent().is_some_and(|p| p.kind() == "mod_item");
+        if matches!(scope.kind(), "block" | "source_file") || module_body {
+            for i in 0..scope.named_child_count() {
+                check(controls.0, controls.1)?;
+                let item = scope.named_child(i as u32).expect("scope item");
+                if matches!(item.kind(), "const_item" | "static_item") && same_name(item) {
+                    return Ok(true);
+                }
+                // Unit structs are written value constructors too. Do not prove
+                // a binder merely because the competitor is not an enum variant.
+                if item.kind() == "struct_item"
+                    && item.child_by_field_name("body").is_none()
+                    && same_name(item)
+                {
+                    return Ok(true);
+                }
+                if item.kind() == "use_declaration"
+                    && (use_facts(item, source, controls)?.0
+                        || use_leaves(item, source, controls)?
+                            .iter()
+                            .any(|l| l.binding.trim_start_matches("r#") == name))
+                {
+                    return Ok(true);
+                }
+                if item.kind() == "enum_item"
+                    && let Some(body) = item.child_by_field_name("body")
+                {
+                    for i in 0..body.named_child_count() {
+                        check(controls.0, controls.1)?;
+                        let variant = body.named_child(i as u32).expect("enum child");
+                        if variant.kind() == "enum_variant"
+                            && variant.child_by_field_name("body").is_none()
+                            && same_name(variant)
+                        {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+            // A child module does not inherit its parent's imports or items.
+            if scope.kind() == "source_file" || module_body {
+                break;
+            }
+        }
+        if let Some(parameters) = scope.child_by_field_name("type_parameters") {
+            for i in 0..parameters.named_child_count() {
+                check(controls.0, controls.1)?;
+                let parameter = parameters.named_child(i as u32).expect("generic parameter");
+                if parameter.kind() == "const_parameter" && same_name(parameter) {
+                    return Ok(true);
+                }
+            }
+        }
+        ancestor = scope.parent();
+    }
+    Ok(false)
+}
 /// Written use leaves retain original ranges; lists are never regenerated.
 #[derive(Clone)]
 pub(crate) struct UseLeaf {

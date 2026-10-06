@@ -135,6 +135,38 @@ fn probe_a_shape_discharges_signature_option_and_discloses_remaining_causes() {
             .any(|d| d["anchors"][0]["expected_text"] == "Option"),
         "{result}"
     );
+    assert!(
+        !result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "lexical_context_unproved"),
+        "{result}"
+    );
+    // Non-binding constructor paths must still be repaired or retained as needs.
+    for text in ["Outcome::Pass", "Effect::RecordTransition"] {
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["anchors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["expected_text"] == text))
+                || result["plan"]["rewrites"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["anchors"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|a| a["expected_text"] == text)),
+            "missing path dependency {text}: {result}"
+        );
+    }
     for decision in result["plan"]["decisions"]
         .as_array()
         .unwrap()

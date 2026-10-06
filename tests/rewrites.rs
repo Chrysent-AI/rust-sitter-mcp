@@ -89,6 +89,7 @@ fn independent_lexical_bindings_do_not_create_access_needs() {
         "fn caller() { fn selected() {} selected(); }",
         "fn caller(selected: fn()) { selected(); }",
         "fn caller() { let selected = || {}; selected(); }",
+        "fn caller(pair: (fn(),)) { let (selected,) = pair; selected(); }",
     ] {
         let repo = Fixture::generate();
         repo.write("cases/layout/lib.rs", "mod source;\n");
@@ -111,26 +112,6 @@ fn independent_lexical_bindings_do_not_create_access_needs() {
                 .any(|r| r["kind"] == "visibility" || r["kind"] == "import_insert")
         );
     }
-    let repo = Fixture::generate();
-    repo.write("cases/layout/lib.rs", "mod source;\n");
-    repo.write(
-        "cases/layout/source.rs",
-        "fn selected() {}\nfn caller(pair: (fn(),)) { let (selected,) = pair; selected(); }\n",
-    );
-    compile_layout(&repo);
-    let result = run(
-        &repo,
-        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
-    );
-    withheld(&result);
-    assert!(
-        result["plan"]["decisions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|d| d["category"] == "binding_collision"
-                && !d["anchors"].as_array().unwrap().is_empty())
-    );
 }
 #[test]
 fn imported_dependencies_reuse_dedup_and_collisions() {
