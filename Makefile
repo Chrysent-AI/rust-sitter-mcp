@@ -21,7 +21,7 @@ install-tools: ## Install pinned Cargo gates and gitleaks (brew/Go; see CONTRIBU
 
 install: ## Install tools/hooks, verify, build and install the binary
 	@for tool in git make bash awk rustup cargo; do command -v "$$tool" >/dev/null || exit 1; done
-	rustup component add --toolchain 1.97.1 rustfmt clippy
+	rustup component add --toolchain 1.98.1 rustfmt clippy
 	$(MAKE) install-tools
 	$(MAKE) check-tools
 	$(MAKE) install-hooks
