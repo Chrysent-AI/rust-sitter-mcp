@@ -172,7 +172,7 @@ pub struct MoveRequest {
     /// Include trivia for unselected items in blocked previews (default false).
     #[serde(default)]
     pub include_unselected_trivia: bool,
-    /// Assume the stable standard prelude for unshadowed type references only.
+    /// Assume stable prelude types and unshadowed compiler-built-in derives.
     #[serde(default)]
     pub assume_standard_prelude: bool,
 }
@@ -1735,7 +1735,18 @@ fn build(
             &mut analysis.needs,
             (deadline, cancelled),
         )?;
-        result.coverage.standard_prelude = result.plan.binding_proofs.len();
+        result.coverage.standard_prelude = result
+            .plan
+            .binding_proofs
+            .iter()
+            .filter(|p| p.class == prelude::BindingProofClass::StandardPrelude)
+            .count();
+        result.coverage.standard_builtin_derive = result
+            .plan
+            .binding_proofs
+            .iter()
+            .filter(|p| p.class == prelude::BindingProofClass::StandardBuiltinDerive)
+            .count();
         if !result.plan.binding_proofs.is_empty() {
             result.account(descriptor_bytes(&result.plan.binding_proofs)?)?;
         }

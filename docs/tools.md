@@ -178,13 +178,42 @@ scope. Selected item bodies are scanned conservatively for same-name generic,
 local and pattern bindings and for conditional/recovered or macro context;
 simultaneous arrivals and planned written-import repairs are also checked.
 Inherited `#![no_implicit_prelude]`, `#![no_std]`, `#![no_core]`, conditional attributes,
-derives and unexamined macros refuse the fallback. Refusal preserves existing typed
-needs; it is not an override. A proven written binding still uses ordinary repair
-logic, including explicit standard-library imports, never a prelude proof.
+non-built-in or shadowed derives and unexamined macros refuse the type fallback.
+Refusal preserves existing typed needs; it is not an override. A proven written
+binding still uses ordinary repair logic, including explicit standard-library
+imports, never a prelude proof.
+
+The same flag also admits **bare, unshadowed compiler-built-in derive names**:
+`Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash` and `Default`.
+Their standard-defined expansion introduces no module-scope bindings. Each name
+must be unshadowed at both ends, including source/destination ancestors, enclosing
+inline scopes, simultaneous arrivals and planned imports. Any same-spelling
+`macro_rules!`, item or explicit use-leaf (including aliases), or any visible glob,
+refuses that derive. Child/sibling scopes do not leak bindings to a parent.
+Path forms such as `#[derive(foo::Debug)]` or `#[derive(serde::Serialize)]` never
+qualify. In `#[derive(Debug, Args)]`, an unshadowed `Debug` is separately discharged,
+but `Args` retains the attribute veto and the whole batch remains blocked.
+`#[serde(...)]`, `#[expect(...)]` and all other non-allowlisted attributes still veto.
+Advice remains strict because it has no prelude flag; advice, move guards and
+required-binding repairs share the existing context-independent attribute predicate.
+Required-binding repairs still refuse inherited inner attribute context and
+unexamined attributed bindings; a derive proof cannot stand in for an unfinished
+import/visibility repair.
+
+Derive evidence is additive: `plan.binding_proofs` uses
+`class:"standard_builtin_derive"` with a complete original-coordinate name anchor,
+contributing `item_ids`, `destination_path`, standard macro `standard_path` and an
+explicit caller-assumption `basis`. `coverage.standard_builtin_derive` counts
+name occurrences separately from the five type names. Contextual derives on
+retained or destination declarations are recorded too when they relieve a veto;
+the same occurrence/destination is counted once and its contributing items are
+merged. Unknown names never receive proof records. Counts survive response fitting;
+`counts.omissions.binding_proofs` discloses omitted records, and oversized audits
+withhold all artifacts. Empty derive proof/count fields are omitted.
 
 No import is synthesized: the destination is assumed to have the same implicit
-prelude. Constructors, associated calls, methods, macros and derives remain outside
-the bridge. All other collisions, missing context and blockers still apply to the
+prelude. Constructors, associated calls, methods and arbitrary macro expansion
+remain outside the bridge. All other collisions, missing context and blockers still apply to the
 entire batch. Original bytes remain lossless, no `Cargo.toml` is read, and
 `semantic:"not_performed"` is unchanged. This option does not make idiomatic Rust
 relocation generally executable.

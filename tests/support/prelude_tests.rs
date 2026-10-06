@@ -393,7 +393,7 @@ fn prelude_batch_parent_arrivals_and_new_module_names_refuse() {
 }
 
 #[test]
-fn prelude_does_not_bridge_constructors_associated_calls_methods_macros_or_derives() {
+fn prelude_does_not_bridge_constructors_associated_calls_methods_macros_or_custom_derives() {
     for (selected, prefix, reason, proofs) in [
         (
             "fn selected(input: Vec<u8>) -> usize { input.len() }",
@@ -427,7 +427,7 @@ fn prelude_does_not_bridge_constructors_associated_calls_methods_macros_or_deriv
         ),
         (
             "struct Record { value: Option<u8> }",
-            "#[derive(Clone)]\n",
+            "#[derive(Args)]\n",
             "conditional_or_inherited_context",
             0,
         ),
@@ -488,6 +488,12 @@ fn prelude_stdio_flag_and_proof_schema_are_additive_and_move_only() {
             .unwrap()
             .contains("class standard_prelude")
     );
+    assert!(
+        move_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("class standard_builtin_derive")
+    );
     let advice = tools.iter().find(|t| t["name"] == "suggest_split").unwrap();
     assert!(
         advice["inputSchema"]["properties"]
@@ -505,6 +511,24 @@ fn prelude_stdio_flag_and_proof_schema_are_additive_and_move_only() {
             ),]),
         )),
     );
+    assert_eq!(result["coverage"]["standard_prelude"], 1);
+    apply(&repo, &result);
+    repo.write(
+        "cases/layout/source.rs",
+        "#[derive(Debug, Clone)]\nstruct Record { value: Option<u8> }\n",
+    );
+    let result = client.call(
+        "move_item",
+        enabled(request(
+            &repo,
+            json!([entry(
+                &repo,
+                "struct Record { value: Option<u8> }",
+                existing()
+            )]),
+        )),
+    );
+    assert_eq!(result["coverage"]["standard_builtin_derive"], 2);
     assert_eq!(result["coverage"]["standard_prelude"], 1);
     apply(&repo, &result);
 }
