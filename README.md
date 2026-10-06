@@ -39,10 +39,11 @@ Or from a checkout:
 ```sh
 git clone https://github.com/sdkks/rust-sitter-mcp.git
 cd rust-sitter-mcp
-make install        # installs hooks + gate tools, verifies, builds and installs the binary
-# or just the binary:
-cargo install --locked --path .
+make install        # builds and installs the release binary (no tests, no gate tools)
 ```
+
+Contributors: run `make setup` instead — it additionally installs the pinned gate
+tools and Git hooks and runs the full verification suite before installing.
 
 The server speaks MCP over stdio and takes no arguments — every tool call names its target via `repo_path`.
 
