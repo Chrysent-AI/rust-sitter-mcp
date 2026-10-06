@@ -102,7 +102,7 @@ pub struct DraftProvenance {
     pub draft_id: String,
     pub source_snapshot_id: String,
 }
-/// Shared limits with an explicit diagnostic count controlling rewrite exemplars.
+/// Shared limits with an explicit diagnostic count expanding blocked-plan detail.
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(transparent)]
@@ -139,7 +139,7 @@ impl From<MoveLimits> for Limits {
     }
 }
 impl MoveLimits {
-    fn rewrite_preview_count(&self) -> usize {
+    fn preview_count(&self) -> usize {
         if self.diagnostic_count_explicit
             || self.diagnostic_count != Limits::default().diagnostic_count
         {
@@ -223,7 +223,9 @@ pub struct Decision {
     pub anchors: Vec<SourceAnchor>,
     pub item_ids: Vec<String>,
     pub evidence: Vec<SourceSlice>,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub unresolved_consequence: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub next_action: String,
     pub resolution: String,
     pub supported_choices: Vec<String>,
@@ -264,33 +266,43 @@ pub enum DecisionAction {
     },
     SelectionChangeRequired {
         fields: Vec<String>,
+        #[serde(skip_serializing_if = "String::is_empty")]
         instruction: String,
     },
     UnsupportedInEngine {
         construct: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
         instruction: String,
     },
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct DecisionGroup {
+pub struct DecisionGroup<Ids = Vec<String>> {
     pub category: String,
     pub reason: DecisionReason,
     pub route: DecisionRoute,
     pub blocks_applicability: bool,
-    pub decision_ids: Vec<String>,
+    pub decision_ids: Ids,
+    pub count: usize,
+}
+/// Exact consecutive IDs, never a bounding range across interleaved causes.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DecisionIdRun {
+    pub first_id: String,
     pub count: usize,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct MoveDecisionGroup {
     #[serde(flatten)]
-    pub summary: DecisionGroup,
-    /// Complete routing guidance, without per-decision replay anchors.
+    pub summary: DecisionGroup<Vec<DecisionIdRun>>,
+    pub unresolved_consequence: String,
+    /// One complete routing summary, without per-decision replay anchors.
     pub actions: Vec<DecisionAction>,
 }
 impl std::ops::Deref for MoveDecisionGroup {
-    type Target = DecisionGroup;
+    type Target = DecisionGroup<Vec<DecisionIdRun>>;
     fn deref(&self) -> &Self::Target {
         &self.summary
     }
@@ -592,9 +604,24 @@ impl MoveEnvelope {
             Ok(groups) => {
                 self.plan.decision_groups = groups
                     .into_iter()
-                    .map(|summary| MoveDecisionGroup {
-                        summary,
-                        actions: Vec::new(),
+                    .map(|summary| {
+                        let decision = &self.plan.decisions[summary.decision_ids[0]
+                            .strip_prefix("d/")
+                            .expect("decision prefix")
+                            .parse::<usize>()
+                            .expect("decision index")];
+                        MoveDecisionGroup {
+                            unresolved_consequence: decision.unresolved_consequence.clone(),
+                            actions: vec![decision.action.summary()],
+                            summary: DecisionGroup {
+                                decision_ids: actions::id_runs(&summary.decision_ids),
+                                category: summary.category,
+                                reason: summary.reason,
+                                route: summary.route,
+                                blocks_applicability: summary.blocks_applicability,
+                                count: summary.count,
+                            },
+                        }
                     })
                     .collect();
             }
@@ -605,11 +632,7 @@ impl MoveEnvelope {
                     ("decision_groups", self.plan.decision_groups.len()),
                     (
                         "decision_group_references",
-                        self.plan
-                            .decision_groups
-                            .iter()
-                            .map(|g| g.decision_ids.len())
-                            .sum(),
+                        self.plan.decision_groups.iter().map(|g| g.count).sum(),
                     ),
                     (
                         "chain_diagnostic_references",
@@ -653,7 +676,7 @@ impl MoveEnvelope {
             }
         }
     }
-    fn shape_diagnostics(&mut self, include_unselected_trivia: bool, rewrite_count: usize) {
+    fn shape_diagnostics(&mut self, include_unselected_trivia: bool, preview_count: usize) {
         // Preserve authoritative anchors; repeated display slices add no source evidence.
         for decision in &mut self.plan.decisions {
             decision.evidence.retain(|evidence| {
@@ -666,20 +689,6 @@ impl MoveEnvelope {
                             .is_none_or(|text| text == &anchor.expected_text)
                 })
             });
-        }
-        for group in &mut self.plan.decision_groups {
-            for decision in &self.plan.decisions {
-                if decision.category == group.category
-                    && decision.reason == group.reason
-                    && decision.action.route() == group.route
-                    && decision.blocks_applicability == group.blocks_applicability
-                {
-                    let action = decision.action.summary();
-                    if !group.actions.contains(&action) {
-                        group.actions.push(action);
-                    }
-                }
-            }
         }
         if self.plan.applicable {
             return;
@@ -699,13 +708,37 @@ impl MoveEnvelope {
                 self.truncation_reasons.push("trivia_scope".into());
             }
         }
-        if self.plan.decisions.len() > self.limits.diagnostic_count {
-            let omitted = self.plan.decisions.len() - self.limits.diagnostic_count;
-            let chain_links: usize = self.plan.decisions[self.limits.diagnostic_count..]
+        let compact = preview_count != self.limits.diagnostic_count;
+        let before = self.plan.decisions.len();
+        let chain_links: usize = self
+            .plan
+            .decisions
+            .iter()
+            .map(|d| d.chain_diagnostic_ids.len())
+            .sum();
+        if compact {
+            // One full anchored exemplar per cause/route/consequence group, bounded
+            // by the existing diagnostic cap, in original decision order.
+            let exemplars: BTreeSet<_> = self
+                .plan
+                .decision_groups
+                .iter()
+                .take(self.limits.diagnostic_count)
+                .map(|g| g.decision_ids[0].first_id.clone())
+                .collect();
+            self.plan.decisions.retain(|d| exemplars.contains(&d.id));
+        } else {
+            self.plan.decisions.truncate(preview_count);
+        }
+        let omitted = before - self.plan.decisions.len();
+        let chain_links = chain_links
+            - self
+                .plan
+                .decisions
                 .iter()
                 .map(|d| d.chain_diagnostic_ids.len())
-                .sum();
-            self.plan.decisions.truncate(self.limits.diagnostic_count);
+                .sum::<usize>();
+        if omitted > 0 {
             *self.counts.omissions.entry("decisions".into()).or_default() += omitted;
             if chain_links > 0 {
                 *self
@@ -719,9 +752,9 @@ impl MoveEnvelope {
         // Interrupted assembly may leave preview rewrites before it records their count.
         self.counts.rewrites =
             self.plan.rewrites.len() + self.counts.omissions.get("rewrites").copied().unwrap_or(0);
-        if self.plan.rewrites.len() > rewrite_count {
-            let omitted = self.plan.rewrites.len() - rewrite_count;
-            self.plan.rewrites.truncate(rewrite_count);
+        if self.plan.rewrites.len() > preview_count {
+            let omitted = self.plan.rewrites.len() - preview_count;
+            self.plan.rewrites.truncate(preview_count);
             *self.counts.omissions.entry("rewrites".into()).or_default() += omitted;
             if !self
                 .truncation_reasons
@@ -731,6 +764,41 @@ impl MoveEnvelope {
                 self.truncation_reasons.push("diagnostic_count".into());
             }
         }
+        // Implicit counts-first projection hoists display guidance. Explicit expansion
+        // keeps today's decision/rewrite bytes, including every replay anchor.
+        if compact {
+            for decision in &mut self.plan.decisions {
+                decision.next_action.clear();
+                decision.unresolved_consequence.clear();
+                match &mut decision.action {
+                    DecisionAction::SelectionChangeRequired { instruction, .. }
+                    | DecisionAction::UnsupportedInEngine { instruction, .. } => {
+                        instruction.clear()
+                    }
+                    DecisionAction::RequestField { .. } => {}
+                }
+            }
+        }
+        for (name, count) in [
+            ("moves", self.plan.moves.len().saturating_sub(preview_count)),
+            (
+                "origins",
+                self.plan.origins.len().saturating_sub(preview_count),
+            ),
+        ] {
+            if count > 0 {
+                *self.counts.omissions.entry(name.into()).or_default() += count;
+                if !self
+                    .truncation_reasons
+                    .iter()
+                    .any(|r| r == "diagnostic_count")
+                {
+                    self.truncation_reasons.push("diagnostic_count".into());
+                }
+            }
+        }
+        self.plan.moves.truncate(preview_count);
+        self.plan.origins.truncate(preview_count);
     }
     fn withhold(&mut self) {
         self.plan.applicable = false;
@@ -788,57 +856,94 @@ impl MoveEnvelope {
             return;
         }
         self.incomplete("response_bytes");
-        // No dangling audit links or reconstructable subset: bound the entire preview together.
-        let arrays = [
-            ("moves", self.plan.moves.len()),
-            ("trivia_decisions", self.plan.trivia_decisions.len()),
-            ("decisions", self.plan.decisions.len()),
-            ("decision_groups", self.plan.decision_groups.len()),
-            (
-                "decision_group_references",
-                self.plan
-                    .decision_groups
-                    .iter()
-                    .map(|g| g.decision_ids.len())
-                    .sum(),
-            ),
-            ("chain_diagnostics", self.plan.chain_diagnostics.len()),
-            (
-                "chain_diagnostic_references",
-                self.plan
-                    .decisions
-                    .iter()
-                    .map(|d| d.chain_diagnostic_ids.len())
-                    .sum(),
-            ),
-            ("rewrites", self.plan.rewrites.len()),
-            ("base_files", self.plan.base_files.len()),
-            ("origins", self.plan.origins.len()),
-        ];
-        for (name, count) in arrays {
-            *self.counts.omissions.entry(name.into()).or_default() += count;
-        }
-        self.plan.moves.clear();
-        self.plan.trivia_decisions.clear();
-        self.plan.decisions.clear();
-        self.plan.decision_groups.clear();
-        self.plan.chain_diagnostics.clear();
-        self.plan.rewrites.clear();
-        self.plan.base_files.clear();
-        self.plan.origins.clear();
+        // Display-only material first. Never shorten a surviving replay anchor.
         self.diagnostics_omitted += self.diagnostics.len();
         self.diagnostics.clear();
         for skipped in self.skipped.values_mut() {
             skipped.examples_omitted += skipped.examples.len() as u64;
             skipped.examples.clear();
         }
+        let mut text_fields = 0;
+        for record in &mut self.plan.moves {
+            for span in std::iter::once(&mut record.item.span)
+                .chain(&mut record.item.attributes)
+                .chain(&mut record.item.trivia)
+                .chain(record.carried_spans.iter_mut().map(|c| &mut c.span))
+            {
+                text_fields += usize::from(span.text.take().is_some());
+                span.text_omitted = span.text_bytes != 0;
+            }
+        }
+        for trivia in &mut self.plan.trivia_decisions {
+            text_fields += usize::from(trivia.span.text.take().is_some());
+            trivia.span.text_omitted = trivia.span.text_bytes != 0;
+        }
+        if text_fields > 0 {
+            *self
+                .counts
+                .omissions
+                .entry("display_text_fields".into())
+                .or_default() += text_fields;
+        }
+        if self.wire_bytes() <= self.limits.response_bytes {
+            return;
+        }
+        // Groups still name the complete analyzed set when detail is withheld.
+        macro_rules! drop_preview {
+            ($field:ident) => {
+                let count = self.plan.$field.len();
+                if count > 0 {
+                    *self
+                        .counts
+                        .omissions
+                        .entry(stringify!($field).into())
+                        .or_default() += count;
+                    self.plan.$field.clear();
+                }
+                if self.wire_bytes() <= self.limits.response_bytes {
+                    return;
+                }
+            };
+        }
+        drop_preview!(moves);
+        drop_preview!(origins);
+        drop_preview!(trivia_decisions);
+        drop_preview!(rewrites);
+        drop_preview!(base_files);
+        let links = self
+            .plan
+            .decisions
+            .iter()
+            .map(|d| d.chain_diagnostic_ids.len())
+            .sum::<usize>();
+        if links > 0 {
+            *self
+                .counts
+                .omissions
+                .entry("chain_diagnostic_references".into())
+                .or_default() += links;
+        }
+        drop_preview!(decisions);
+        drop_preview!(chain_diagnostics);
         while self.wire_bytes() > self.limits.response_bytes && self.plan.blockers.len() > 1 {
             self.plan.blockers.pop();
             *self.counts.omissions.entry("blockers".into()).or_default() += 1;
         }
+        // Only the final tier may discard membership. Root/snapshot/coverage/counts
+        // remain usable even if the complete summary itself cannot fit.
         if self.wire_bytes() > self.limits.response_bytes {
-            self.root = None;
-            self.draft_provenance = None;
+            let links = self
+                .plan
+                .decision_groups
+                .iter()
+                .map(|g| g.count)
+                .sum::<usize>();
+            *self
+                .counts
+                .omissions
+                .entry("decision_group_references".into())
+                .or_default() += links;
+            drop_preview!(decision_groups);
         }
     }
 }
@@ -923,6 +1028,7 @@ fn run_with_recheck(
                 &d.action,
                 d.blocks_applicability,
                 d.id.as_str(),
+                Some(d.unresolved_consequence.as_str()),
             )
         }),
         &mut result.counts.analysis_descriptor_bytes,
@@ -934,7 +1040,7 @@ fn run_with_recheck(
     result.finish_decision_groups(groups);
     result.shape_diagnostics(
         request.include_unselected_trivia,
-        request.limits.rewrite_preview_count(),
+        request.limits.preview_count(),
     );
     result.fit();
     if result.plan.applicable
@@ -953,7 +1059,7 @@ fn run_with_recheck(
         }
         result.shape_diagnostics(
             request.include_unselected_trivia,
-            request.limits.rewrite_preview_count(),
+            request.limits.preview_count(),
         );
         result.fit();
     }

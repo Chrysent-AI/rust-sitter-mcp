@@ -81,8 +81,10 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
         assert!(result["plan"][artifact].is_null());
     }
     let decisions = result["plan"]["decisions"].as_array().unwrap();
-    assert_eq!(decisions.len(), 64);
-    assert_eq!(result["counts"]["omissions"]["decisions"], 360 - 64);
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(result["counts"]["omissions"]["decisions"], 360 - 1);
+    assert_eq!(result["counts"]["omissions"]["moves"], 30 - 4);
+    assert_eq!(result["plan"]["moves"].as_array().unwrap().len(), 4);
     assert_eq!(result["truncation_reasons"], json!(["diagnostic_count"]));
     for decision in decisions {
         assert!(
@@ -96,7 +98,10 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
     let groups = &result["plan"]["decision_groups"];
     assert_eq!(groups.as_array().unwrap().len(), 1);
     assert_eq!(groups[0]["count"], 360);
-    assert_eq!(groups[0]["decision_ids"].as_array().unwrap().len(), 360);
+    assert_eq!(
+        groups[0]["decision_ids"],
+        json!([{"first_id":"d/0","count":360}])
+    );
     assert_eq!(groups[0]["blocks_applicability"], true);
     assert_eq!(groups[0]["reason"], "member_or_constructor_unproved");
     assert_eq!(groups[0]["route"], "unsupported_in_engine");
@@ -112,10 +117,28 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
     assert_eq!(full["plan"]["decisions"].as_array().unwrap().len(), 360);
     assert!(full["counts"]["omissions"]["decisions"].is_null());
     assert_eq!(full["plan"]["decision_groups"], *groups);
-    assert_eq!(
-        &full["plan"]["decisions"].as_array().unwrap()[..64],
-        decisions
-    );
+    for (compact, expanded) in decisions
+        .iter()
+        .zip(full["plan"]["decisions"].as_array().unwrap())
+    {
+        assert_eq!(compact["anchors"], expanded["anchors"]);
+        assert!(compact.get("next_action").is_none());
+        assert!(compact["action"].get("instruction").is_none());
+        assert_eq!(groups[0]["actions"][0], expanded["action"]);
+        assert_eq!(
+            groups[0]["unresolved_consequence"],
+            expanded["unresolved_consequence"]
+        );
+    }
+    for count in [4, 64, 100_000] {
+        let mut explicit = args.clone();
+        explicit["limits"] = json!({"diagnostic_count":count});
+        let explicit = run(&repo, explicit);
+        assert_eq!(
+            explicit["plan"]["decisions"],
+            json!(full["plan"]["decisions"].as_array().unwrap()[..count.min(360)])
+        );
+    }
     let mut zero = args;
     zero["limits"] = json!({"diagnostic_count":0});
     let zero = run(&repo, zero);
@@ -134,7 +157,7 @@ fn blocked_rewrite_previews_are_counted_capped_and_explicitly_expandable() {
     assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
     let rewrites = result["plan"]["rewrites"].as_array().unwrap();
     assert_eq!(rewrites.len(), 4);
-    assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 64);
+    assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 1);
     let total = result["counts"]["rewrites"].as_u64().unwrap() as usize;
     assert!(total > 64);
     assert_eq!(result["counts"]["omissions"]["rewrites"], total - 4);
@@ -152,8 +175,14 @@ fn blocked_rewrite_previews_are_counted_capped_and_explicitly_expandable() {
     assert_eq!(expanded["counts"]["rewrites"], total);
     assert!(expanded["counts"]["omissions"]["rewrites"].is_null());
     assert_eq!(expanded["truncation_reasons"], json!([]));
-    for field in ["moves", "origins", "decision_groups"] {
-        assert_eq!(expanded["plan"][field], result["plan"][field]);
+    assert_eq!(
+        expanded["plan"]["decision_groups"],
+        result["plan"]["decision_groups"]
+    );
+    for field in ["moves", "origins"] {
+        let all = expanded["plan"][field].as_array().unwrap();
+        assert_eq!(result["plan"][field], json!(all[..4]));
+        assert_eq!(result["counts"]["omissions"][field], all.len() - 4);
     }
     for count in [0, 4, 5, 8, 63, 64, 65, 512, 100_000] {
         let mut limited = args.clone();
@@ -176,7 +205,7 @@ fn blocked_rewrite_previews_are_counted_capped_and_explicitly_expandable() {
     implicit["limits"] = json!({"text_bytes":0});
     let implicit = run(&repo, implicit);
     assert_eq!(implicit["plan"]["rewrites"].as_array().unwrap().len(), 4);
-    assert_eq!(implicit["plan"]["decisions"].as_array().unwrap().len(), 64);
+    assert_eq!(implicit["plan"]["decisions"].as_array().unwrap().len(), 1);
     let mut zero = args;
     zero["limits"] = json!({"diagnostic_count":0});
     let zero = run(&repo, zero);
@@ -331,6 +360,50 @@ fn applicable_artifacts_and_full_trivia_survive_zero_display_limits() {
     let copy = apply(&repo, &limited);
     let content = std::fs::read_to_string(copy.0.join("cases/layout/new_file.rs")).unwrap();
     assert!(content.contains(text) && content.contains("#[inline]"));
+}
+
+#[test]
+fn advice_and_execution_share_the_exact_attribute_allowlist() {
+    for (attribute, blocked) in [
+        ("#[derive(Clone)]", true),
+        ("#[derive(custom::Derive)]", true),
+        ("#[repr(C)]", false),
+        ("#[allow(cfg)]", false),
+        ("#[inline]", false),
+        ("#[inline(always)]", false),
+        ("#[inline_custom]", true),
+        ("#[cfg(any())]", true),
+    ] {
+        let selected = "struct Selected;";
+        let repo = fixture(&format!("{attribute}\n{selected}\nfn retained() {{}}\n"));
+        let before = observe(&repo.0);
+        let engine = Engine::new(repo.0.clone()).unwrap();
+        let advice = engine.suggest_split(
+            serde_json::from_value(json!({
+                "repo_path":repo.0,"crate_root":"cases/layout/lib.rs",
+                "source_path":"cases/layout/source.rs","paths":["cases/layout"],
+                "limits":{"text_bytes":0}
+            }))
+            .unwrap(),
+            &AtomicBool::new(false),
+        );
+        let advice = serde_json::to_value(advice).unwrap();
+        let advice_risk = advice["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "conditional_or_inherited_context");
+        let moved = run(&repo, request(&repo, &[selected]));
+        let execution_risk = moved["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "conditional_or_inherited_context");
+        assert_eq!(advice_risk, blocked, "advice: {attribute}");
+        assert_eq!(execution_risk, blocked, "execution: {attribute}");
+        assert_eq!(moved["plan"]["applicable"], !blocked, "{attribute}");
+        assert_eq!(observe(&repo.0), before);
+    }
 }
 
 #[test]

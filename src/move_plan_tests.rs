@@ -131,6 +131,7 @@ fn stopped_decision_grouping_clears_decisions_and_links_with_accounted_omissions
                     &d.action,
                     d.blocks_applicability,
                     d.id.as_str(),
+                    Some(d.unresolved_consequence.as_str()),
                 )
             }),
             &mut result.counts.analysis_descriptor_bytes,
@@ -229,6 +230,7 @@ fn blocked_multi_thousand_line_batch_caps_details_and_reports_scoped_omissions()
                 &d.action,
                 d.blocks_applicability,
                 d.id.as_str(),
+                Some(d.unresolved_consequence.as_str()),
             )
         }),
         &mut result.counts.analysis_descriptor_bytes,
@@ -239,7 +241,7 @@ fn blocked_multi_thousand_line_batch_caps_details_and_reports_scoped_omissions()
     assert_eq!(result.plan.decisions.len(), 360);
     assert_eq!(result.plan.trivia_decisions.len(), 300);
     let legacy_bytes = result.wire_bytes();
-    result.shape_diagnostics(false, request.limits.rewrite_preview_count());
+    result.shape_diagnostics(false, request.limits.preview_count());
     let lean_bytes = result.wire_bytes();
     eprintln!(
         "30 moves / 6535 lines: legacy wire {legacy_bytes} bytes; lean wire {lean_bytes} bytes"
@@ -248,13 +250,98 @@ fn blocked_multi_thousand_line_batch_caps_details_and_reports_scoped_omissions()
         lean_bytes < legacy_bytes,
         "legacy={legacy_bytes}, lean={lean_bytes}"
     );
-    assert_eq!(result.plan.decisions.len(), 64);
-    assert_eq!(result.counts.omissions["decisions"], 296);
+    assert_eq!(result.plan.decisions.len(), 1);
+    assert_eq!(result.counts.omissions["decisions"], 359);
     assert_eq!(result.counts.omissions["trivia_decisions"], 300);
     assert_eq!(result.plan.decision_groups[0].count, 360);
     result.fit();
     assert_eq!(result.status, "complete");
+    let root = result.root.clone();
+    let snapshot = result.snapshot_id.clone();
+    result.plan.decision_groups[0].unresolved_consequence = "x".repeat(100_000);
+    result.limits.response_bytes = 65536;
+    result.fit();
+    assert_eq!(result.status, "partial");
+    assert_eq!(result.root, root);
+    assert_eq!(result.snapshot_id, snapshot);
+    assert!(!result.coverage.scope_exhaustive);
+    assert_eq!(result.counts.omissions["decisions"], 360);
+    assert_eq!(result.counts.omissions["decision_groups"], 1);
+    assert_eq!(result.counts.omissions["decision_group_references"], 360);
+    assert!(result.wire_bytes() <= result.limits.response_bytes);
     assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
+fn exact_runs_do_not_absorb_interleaved_decisions_or_decimal_boundaries() {
+    let ids = ["d/0", "d/1", "d/3", "d/9", "d/10", "d/12"].map(str::to_owned);
+    assert_eq!(
+        serde_json::to_value(actions::id_runs(&ids)).unwrap(),
+        json!([
+            {"first_id":"d/0","count":2}, {"first_id":"d/3","count":1},
+            {"first_id":"d/9","count":2}, {"first_id":"d/12","count":1}
+        ])
+    );
+}
+
+#[test]
+fn collapse_requires_identical_route_and_consequence_not_just_cause() {
+    let reason = DecisionReason::ModuleChainFailure;
+    let unsupported = DecisionAction::cause(reason);
+    let other_construct = DecisionAction::UnsupportedInEngine {
+        construct: "different_chain_failure".into(),
+        instruction: "different routing".into(),
+    };
+    let groups = decision_groups(
+        [
+            (
+                "module_context",
+                reason,
+                &unsupported,
+                true,
+                "d/0",
+                Some("first consequence"),
+            ),
+            (
+                "module_context",
+                reason,
+                &unsupported,
+                true,
+                "d/1",
+                Some("second consequence"),
+            ),
+            (
+                "module_context",
+                reason,
+                &unsupported,
+                true,
+                "d/2",
+                Some("first consequence"),
+            ),
+            (
+                "module_context",
+                reason,
+                &other_construct,
+                true,
+                "d/3",
+                Some("first consequence"),
+            ),
+        ]
+        .into_iter(),
+        &mut 0,
+        (
+            Instant::now() + Duration::from_secs(30),
+            &AtomicBool::new(false),
+        ),
+    )
+    .unwrap();
+    assert_eq!(groups.len(), 3);
+    let duplicate = groups.iter().find(|g| g.count == 2).unwrap();
+    assert_eq!(duplicate.decision_ids, ["d/0", "d/2"]);
+    assert_eq!(
+        serde_json::to_value(actions::id_runs(&duplicate.decision_ids)).unwrap(),
+        json!([{"first_id":"d/0","count":1},{"first_id":"d/2","count":1}])
+    );
 }
 
 #[test]

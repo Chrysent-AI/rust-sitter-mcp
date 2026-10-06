@@ -64,6 +64,17 @@ pub fn check(deadline: Instant, cancelled: &AtomicBool) -> Result<(), DomainErro
         Ok(())
     }
 }
+/// The execution allowlist is also used by advice; derive/proc/cfg context is
+/// unexamined, while these existing built-in forms require no relaxed proof.
+pub(crate) fn context_independent_attribute(text: &str) -> bool {
+    text.starts_with("#[allow(")
+        || text.starts_with("#![allow(")
+        || text == "#[inline]"
+        || text == "#[inline(always)]"
+        || text == "#[inline(never)]"
+        || text.starts_with("#[repr(")
+}
+
 pub fn category(kind: &str) -> Option<&'static str> {
     match kind {
         "function_item" | "struct_item" | "enum_item" | "union_item" | "trait_item"
@@ -853,14 +864,7 @@ pub fn dependencies(
                     || node.byte_range().contains(&t.range.start))
             {
                 let text = &source[t.range.clone()];
-                // Only built-in context-independent attributes are admitted; proc attributes/cfg block.
-                if !(text.starts_with("#[allow(")
-                    || text.starts_with("#![allow(")
-                    || text == "#[inline]"
-                    || text == "#[inline(always)]"
-                    || text == "#[inline(never)]"
-                    || text.starts_with("#[repr("))
-                {
+                if !context_independent_attribute(text) {
                     needs.push(need(DecisionReason::ConditionalOrInheritedContext, "scope_dependency", source_path, node, "conditional, inherited or unexamined attribute context requires a supported explicit choice"));
                 }
             }

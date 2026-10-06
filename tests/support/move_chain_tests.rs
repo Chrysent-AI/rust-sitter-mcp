@@ -220,9 +220,12 @@ fn chain_failure_decisions_survive_capped_blockers_and_preserve_error_boundaries
     );
     linked_move(&result);
     assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 1);
-    let actions = result["plan"]["decision_groups"][0]["actions"]
+    let actions: Vec<_> = result["plan"]["decision_groups"]
         .as_array()
-        .unwrap();
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["actions"].as_array().unwrap())
+        .collect();
     for construct in ["conditional_declaration", "path_attribute"] {
         assert!(actions.iter().any(|a| a["construct"] == construct));
     }
@@ -303,7 +306,7 @@ fn missing_unadmitted_and_inherited_source_hops_do_not_blame_a_clean_destination
 }
 
 #[test]
-fn chain_diagnostic_links_are_omitted_together_on_move_overflow() {
+fn move_overflow_retains_chain_summary_when_anchored_detail_cannot_fit() {
     use chain_fixture::*;
     let repo = Fixture::generate();
     install(&repo);
@@ -320,18 +323,15 @@ fn chain_diagnostic_links_are_omitted_together_on_move_overflow() {
     code(&result, "response_bytes");
     assert_eq!(result["status"], "partial");
     assert!(
-        result["plan"]["chain_diagnostics"]
+        !result["plan"]["chain_diagnostics"]
             .as_array()
             .unwrap()
             .is_empty()
     );
     assert!(result["plan"]["decisions"].as_array().unwrap().is_empty());
-    assert!(
-        result["counts"]["omissions"]["chain_diagnostics"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
+    assert!(result["counts"]["omissions"]["chain_diagnostics"].is_null());
+    assert_eq!(result["plan"]["decision_groups"][0]["count"], 1);
+    assert!(result["root"].is_string() && result["snapshot_id"].is_string());
     assert!(
         result["counts"]["omissions"]["chain_diagnostic_references"]
             .as_u64()

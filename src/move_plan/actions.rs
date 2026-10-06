@@ -116,12 +116,21 @@ impl DecisionAction {
 }
 
 pub(crate) fn decision_groups<'a>(
-    decisions: impl Iterator<Item = (&'a str, DecisionReason, &'a DecisionAction, bool, &'a str)>,
+    decisions: impl Iterator<
+        Item = (
+            &'a str,
+            DecisionReason,
+            &'a DecisionAction,
+            bool,
+            &'a str,
+            Option<&'a str>,
+        ),
+    >,
     bytes: &mut usize,
     controls: (Instant, &AtomicBool),
 ) -> Result<Vec<DecisionGroup>, DomainError> {
     let mut groups: BTreeMap<_, DecisionGroup> = BTreeMap::new();
-    for (category, reason, action, blocks, id) in decisions {
+    for (category, reason, action, blocks, id, consequence) in decisions {
         items::check(controls.0, controls.1)?;
         let record = DecisionGroup {
             category: category.into(),
@@ -131,15 +140,30 @@ pub(crate) fn decision_groups<'a>(
             decision_ids: vec![id.into()],
             count: 1,
         };
-        // Reserve each linked record before growing; this conservatively overaccounts shared keys.
-        *bytes = bytes.saturating_add(descriptor_bytes(&record)?);
+        // Advice retains its cause-only summaries. Move groups collapse only identical
+        // causes, routing summaries and consequences; replay targets stay in decisions.
+        let detail = consequence.map(|text| {
+            (
+                serde_json::to_string(&action.summary()).expect("action JSON"),
+                text.to_owned(),
+            )
+        });
+        // Reserve keys and linked records before growing; shared keys are
+        // conservatively counted again for each decision.
+        *bytes = bytes.saturating_add(descriptor_bytes(&(&record, &detail))?);
         if *bytes > 128 * 1024 * 1024 {
             return Err(DomainError::new(
                 "analysis_descriptor_bytes",
                 "decision group descriptor guard reached",
             ));
         }
-        let key = (record.category.clone(), reason, record.route, blocks);
+        let key = (
+            record.category.clone(),
+            reason,
+            record.route,
+            blocks,
+            detail,
+        );
         if let Some(group) = groups.get_mut(&key) {
             group.decision_ids.push(id.into());
             group.count += 1;
@@ -148,4 +172,26 @@ pub(crate) fn decision_groups<'a>(
         }
     }
     Ok(groups.into_values().collect())
+}
+
+pub(super) fn id_runs(ids: &[String]) -> Vec<DecisionIdRun> {
+    let mut runs: Vec<DecisionIdRun> = Vec::new();
+    let mut previous = None;
+    for id in ids {
+        let ordinal = id
+            .strip_prefix("d/")
+            .expect("decision prefix")
+            .parse::<usize>()
+            .expect("decision index");
+        if previous.is_some_and(|prior| ordinal == prior + 1) {
+            runs.last_mut().expect("preceding run").count += 1;
+        } else {
+            runs.push(DecisionIdRun {
+                first_id: id.clone(),
+                count: 1,
+            });
+        }
+        previous = Some(ordinal);
+    }
+    runs
 }

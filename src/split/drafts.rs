@@ -847,6 +847,7 @@ pub(super) fn finalize(
                 &d.action,
                 d.blocks_applicability,
                 d.id.as_str(),
+                None,
             )
         }),
         &mut result.counts.analysis_descriptor_bytes,

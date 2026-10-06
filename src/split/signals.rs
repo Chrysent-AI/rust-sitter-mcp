@@ -722,8 +722,9 @@ pub(super) fn risks(
             && record.reason == "scope_prologue"
             && source.source[record.span.range.start_byte..record.span.range.end_byte]
                 .starts_with("#![")
-            && !source.source[record.span.range.start_byte..record.span.range.end_byte]
-                .starts_with("#![allow(")
+            && !items::context_independent_attribute(
+                &source.source[record.span.range.start_byte..record.span.range.end_byte],
+            )
         {
             add_decision(
                 result,
@@ -775,11 +776,7 @@ pub(super) fn risks(
                 continue;
             }
             let text = &source.source[attribute.range.start_byte..attribute.range.end_byte];
-            if text.contains("cfg")
-                || !text.starts_with("#[inline")
-                    && !text.starts_with("#[allow")
-                    && !text.starts_with("#[derive")
-            {
+            if !items::context_independent_attribute(text) {
                 risks
                     .entry((
                         "scope_dependency",
