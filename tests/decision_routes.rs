@@ -84,7 +84,7 @@ fn blocked_batch_exposes_three_routes_and_choice_replay_clears_only_its_cause() 
     rejected["limits"]["diagnostic_count"] = json!(64);
     rejected["rewrite_overrides"] = json!([{"target":import["target"],"action":"retain"}]);
     let result = client.call("move_item", rejected.clone());
-    assert_eq!(result["schema_version"], 1);
+    assert_eq!(result["schema_version"], 2);
     let plan = &result["plan"];
     assert_eq!(plan["applicable"], false);
     for field in ["edits", "created_files", "patch"] {

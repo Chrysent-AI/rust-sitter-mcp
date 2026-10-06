@@ -437,7 +437,7 @@ pub struct MoveEnvelope {
 impl MoveEnvelope {
     pub fn empty(limits: Limits) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             tool: "move_item".into(),
             root: None,
             snapshot_id: None,
