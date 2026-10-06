@@ -345,6 +345,71 @@ The primary proposal seeds clusters from prefixes/sections/outer-text adjacency,
 
 Group `facts`, rationale and confidence expose integer organization evidence, not a probability of compiler correctness. High confidence requires at least two independent signal families and complete layout/membership; execution risks remain unresolved. Sizes count written item bytes/lines, not a prediction of generated file size. The 64-KiB/256-line group aim is **soft advice**: whole oversized items remain indivisible and get warnings. Cross-group candidate IDs and warnings identify import/path/visibility review needs.
 
+Every group, including retain groups and groups with zero observed risks, also has:
+
+```json
+{
+  "expected_to_block": {
+    "lower_bound": true,
+    "counts": {
+      "member_call": 2,
+      "macro_context": 1,
+      "external_binding": 1,
+      "conditional_or_derive": 0,
+      "cfg_test_consumer": 1,
+      "other_local": 0
+    },
+    "decision_ids": ["d/0", "d/1", "d/2", "d/3", "d/4"],
+    "note": "observed lower bound, not a move plan or safe-move verdict; move_item adds consumer/destination/batch/module-chain/trivia checks and may deduplicate or repair written dependencies"
+  },
+  "test_coupled": true,
+  "assessment_scope": {
+    "assessed": "local_only",
+    "not_assessed": ["other_consumers", "destination", "batch", "module_chain", "trivia_ownership"],
+    "note": "only written source-local risks and observed same-file cfg(test) consumers; zero counts mean no observed local risks, not a safe move"
+  }
+}
+```
+
+The counts are **observed advice decision records**, counted once per cause per
+participating group, not guesses at dependencies or the number of blocked items.
+All five named causes and `other_local` are present even at zero; their sum equals
+`decision_ids.length`, and every ID resolves to a same-response decision. Item-free
+inherited source concerns apply to every group. Nonblocking trivia choices and
+batch-dependent cross-group reference reviews are excluded. `member_call` includes
+written field/member access; `external_binding` covers bare references with no
+inventoried declaration/import and a lexical assessment of absence. Qualified
+unknown paths, impl `Self` and unknown bare spellings with uncertain lexical
+context are not counted as external bindings by this local projection; existing
+uncertainty decisions for inventoried candidate bindings are preserved.
+Conditional/derive classification uses the same attribute predicate as `move_item`.
+
+The lower bound describes **risk coverage**, not a guaranteed minimum count of
+final move blockers: `move_item` can repair or deduplicate written dependencies and
+adds destination, module-chain, other-consumer, batch and trivia checks. Proposed
+sibling paths/parent evidence are layout advice, not destination applicability
+analysis. No planner is run per draft. Even a high-cohesion, zero-local-risk group
+explicitly leaves those concerns `not_assessed`; it is never a safe-move verdict.
+
+Per-item `cfg_test_consumer` signals are linked through the target inventory entry's
+`signal_ids`. They have `from_item_id` naming the test module, `to_item_id` naming
+the candidate target, source occurrence evidence and the label
+"test-coupled: consumers in this file's test module will block relocation".
+`item_ids` names only the affected target, so test consumers do not become cohesion
+edges or test-module relocation proposals. Detection is limited to directly
+inventoried inline modules with the written exact `#[cfg(test)]` form (whitespace
+is immaterial), direct `super::name` paths, and observed references through direct
+`super` imports (including aliases and `super::*`). Same-spelled recognized locals
+and module declarations are excluded. No macro expansion, nested-module inference,
+external test-file scan or cfg evaluation is performed; absence is not proof of no
+test coupling. Duplicate target spellings remain labeled ambiguous candidates.
+These signals project the existing conditional-consumer decision reason;
+**execution behavior is unchanged**: same-file cfg(test) consumers still block
+relocation in `move_item`. No cfg override or safe relocation mode is introduced.
+
+These fields and the new signal kind are additive: `suggest_split` stays on schema
+version 1, and `semantic:"not_performed"` is unchanged.
+
 Every `unresolved_decision_ids[]` entry resolves to a same-response `decisions[]` record with anchored display descriptors, evidence, unresolved consequence and next action. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
 
 When output fitting withholds full drafts, `draft_summaries[]` retains each draft's

@@ -59,6 +59,40 @@ pub fn complete(result: &Value) {
         for group in groups {
             assert!(!group["item_ids"].as_array().unwrap().is_empty());
             assert!(!group["rationale"].as_str().unwrap().is_empty());
+            assert_eq!(group["assessment_scope"]["assessed"], "local_only");
+            assert_eq!(
+                group["assessment_scope"]["not_assessed"],
+                json!([
+                    "other_consumers",
+                    "destination",
+                    "batch",
+                    "module_chain",
+                    "trivia_ownership"
+                ])
+            );
+            assert_eq!(group["expected_to_block"]["lower_bound"], true);
+            let count: u64 = group["expected_to_block"]["counts"]
+                .as_object()
+                .unwrap()
+                .values()
+                .map(|n| n.as_u64().unwrap())
+                .sum();
+            assert_eq!(
+                count as usize,
+                group["expected_to_block"]["decision_ids"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+            );
+            for id in group["expected_to_block"]["decision_ids"]
+                .as_array()
+                .unwrap()
+            {
+                assert!(
+                    decisions.contains(id.as_str().unwrap()),
+                    "dangling risk decision"
+                );
+            }
             for id in group["item_ids"].as_array().unwrap() {
                 assert!(accounted.insert(id.as_str().unwrap()), "duplicate member");
             }

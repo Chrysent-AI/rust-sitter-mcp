@@ -101,7 +101,7 @@ pub struct Signal {
     pub basis: String,
     pub item_ids: Vec<String>,
     pub evidence: Vec<SourceSlice>,
-    /// Present only for directed reference candidates.
+    /// Present for directed reference candidates and observed test consumers.
     pub from_item_id: Option<String>,
     pub to_item_id: Option<String>,
     pub count: usize,
@@ -146,6 +146,32 @@ pub struct Sizes {
     pub bytes: usize,
     pub lines: usize,
 }
+/// Observed advice decisions, not a prediction of the final move plan's size.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ExpectedBlockCounts {
+    pub member_call: usize,
+    pub macro_context: usize,
+    pub external_binding: usize,
+    pub conditional_or_derive: usize,
+    pub cfg_test_consumer: usize,
+    pub other_local: usize,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ExpectedBlocks {
+    pub lower_bound: bool,
+    pub counts: ExpectedBlockCounts,
+    pub decision_ids: Vec<String>,
+    pub note: String,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct AssessmentScope {
+    pub assessed: String,
+    pub not_assessed: Vec<String>,
+    pub note: String,
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct Group {
@@ -157,6 +183,9 @@ pub struct Group {
     pub sizes: Sizes,
     pub signal_ids: Vec<String>,
     pub facts: BTreeMap<String, usize>,
+    pub expected_to_block: ExpectedBlocks,
+    pub test_coupled: bool,
+    pub assessment_scope: AssessmentScope,
     pub warnings: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]

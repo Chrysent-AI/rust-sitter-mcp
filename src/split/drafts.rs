@@ -644,6 +644,18 @@ fn make_draft(
             item_ids: members.iter().map(|i| result.inventory[*i].id.clone()).collect(), rationale,
             confidence: Confidence { basis: "syntactic_heuristic".into(), level: if high { "high" } else { "low" }.into(), limitations: vec!["integer organization facts, not probability or move safety; symbols/types/cfg/macros/public API not verified".into()] },
             sizes, signal_ids, facts, warnings,
+            expected_to_block: ExpectedBlocks {
+                lower_bound: true,
+                counts: ExpectedBlockCounts::default(),
+                decision_ids: Vec::new(),
+                note: "observed lower bound, not a move plan or safe-move verdict; move_item adds consumer/destination/batch/module-chain/trivia checks and may deduplicate or repair written dependencies".into(),
+            },
+            test_coupled: false,
+            assessment_scope: AssessmentScope {
+                assessed: "local_only".into(),
+                not_assessed: vec!["other_consumers".into(), "destination".into(), "batch".into(), "module_chain".into(), "trivia_ownership".into()],
+                note: "only written source-local risks and observed same-file cfg(test) consumers; zero counts mean no observed local risks, not a safe move".into(),
+            },
         });
     }
     if seen.len() != result.inventory.len() || groups.len() < 2 {
@@ -869,6 +881,54 @@ pub(super) fn finalize(
                 draft.unresolved_decision_ids.push(decision.id.clone());
             }
         }
+        for group in &mut draft.groups {
+            controls.check()?;
+            let members: BTreeSet<_> = group.item_ids.iter().collect();
+            let mut test_spans = BTreeSet::new();
+            for signal in &result.signals {
+                controls.check()?;
+                if signal.kind == "cfg_test_consumer"
+                    && signal.item_ids.iter().any(|id| members.contains(id))
+                {
+                    test_spans.extend(signal.evidence.iter().map(|e| &e.range));
+                }
+            }
+            group.test_coupled = !test_spans.is_empty();
+            for decision in &result.decisions {
+                controls.check()?;
+                // Cross-group concerns depend on a batch, not a local lower bound.
+                if !decision.blocks_applicability
+                    || decision.reason == DecisionReason::CrossGroupReferenceReview
+                    || !(decision.item_ids.is_empty()
+                        || decision.item_ids.iter().any(|id| members.contains(id)))
+                {
+                    continue;
+                }
+                let counts = &mut group.expected_to_block.counts;
+                if decision
+                    .anchors
+                    .iter()
+                    .any(|a| test_spans.contains(&a.span.range))
+                {
+                    counts.cfg_test_consumer += 1;
+                } else {
+                    match decision.reason {
+                        DecisionReason::MemberOrConstructorUnproved => counts.member_call += 1,
+                        DecisionReason::MacroContextUnexamined => counts.macro_context += 1,
+                        DecisionReason::ExternalOrMissingBinding => counts.external_binding += 1,
+                        DecisionReason::ConditionalOrInheritedContext => {
+                            counts.conditional_or_derive += 1
+                        }
+                        _ => counts.other_local += 1,
+                    }
+                }
+                group
+                    .expected_to_block
+                    .decision_ids
+                    .push(decision.id.clone());
+            }
+        }
     }
+    result.account(descriptor_bytes(&result.drafts)?)?;
     Ok(())
 }
