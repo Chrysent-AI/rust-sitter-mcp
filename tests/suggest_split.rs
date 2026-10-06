@@ -398,6 +398,194 @@ fn common_prefixes_duplicate_names_and_indivisible_size_are_honest() {
     );
 }
 #[test]
+fn expected_block_counts_match_written_risks_and_move_replay() {
+    let repo = Fixture::generate();
+    repo.write(
+        "src/weak.rs",
+        r#"fn retained() {}
+fn risk_member<T>(value: T) { value.first(); value.second(); }
+fn risk_macro() { opaque!(); }
+fn risk_external() { Missing(); }
+#[derive(Debug)]
+struct RiskDerived;
+#[cfg(any())]
+fn risk_conditional() {}
+#[cfg(test)]
+mod tests {
+    fn check() { super::risk_member(0); super::risk_macro(); }
+}
+"#,
+    );
+    let before = observe(&repo.0);
+    let mut client = Client::new();
+    let advice = client.call("suggest_split", args(&repo, "src/weak.rs"));
+    advice_flow::complete(&advice);
+    assert_eq!(advice["schema_version"], 1);
+    let group = advice["drafts"][0]["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| {
+            g["item_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&item(&advice, "risk_member")["id"])
+        })
+        .unwrap();
+    assert_eq!(
+        group["expected_to_block"]["counts"],
+        json!({
+            "member_call":2, "macro_context":1, "external_binding":1,
+            "conditional_or_derive":2, "cfg_test_consumer":2, "other_local":0
+        })
+    );
+    assert_eq!(group["test_coupled"], true);
+    let note = group["expected_to_block"]["note"].as_str().unwrap();
+    assert!(note.contains("lower bound") && note.contains("move_item adds"));
+    assert!(
+        note.contains("destination") && note.contains("module-chain") && note.contains("trivia")
+    );
+    let source = fs::read_to_string(repo.0.join("src/weak.rs")).unwrap();
+    let moves: Vec<_> = [
+        "risk_member",
+        "risk_macro",
+        "risk_external",
+        "RiskDerived",
+        "risk_conditional",
+    ]
+    .iter()
+    .map(|name| {
+        let range = &item(&advice, name)["span"]["range"];
+        let start = range["start_byte"].as_u64().unwrap() as usize;
+        let end = range["end_byte"].as_u64().unwrap() as usize;
+        json!({"item":{"path":"src/weak.rs","range":range,"expected_text":&source[start..end]},
+            "destination":{"kind":"new_sibling","path":"src/probed.rs","parent_path":"src/lib.rs"}})
+    })
+    .collect();
+    let replay = client.call(
+        "move_item",
+        json!({"repo_path":repo.0,"crate_root":"src/lib.rs",
+        "paths":["src"],"moves":moves,"limits":{"diagnostic_count":1000,"text_bytes":0}}),
+    );
+    assert_eq!(replay["plan"]["applicable"], false);
+    for (reason, count) in [
+        ("member_or_constructor_unproved", 2),
+        ("macro_context_unexamined", 1),
+        ("external_or_missing_binding", 1),
+        ("conditional_or_inherited_context", 4),
+    ] {
+        let observed: u64 = replay["plan"]["decision_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|g| g["reason"] == reason && g["blocks_applicability"] == true)
+            .map(|g| g["count"].as_u64().unwrap())
+            .sum();
+        assert_eq!(observed, count, "{reason}: {replay}");
+    }
+    assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
+fn test_coupling_uses_observed_super_consumers_not_same_spelled_locals() {
+    let repo = Fixture::generate();
+    repo.write(
+        "src/weak.rs",
+        r#"fn retained() {}
+fn coupled_direct() {}
+fn coupled_glob() {}
+fn coupled_alias() {}
+fn uncoupled() {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::coupled_alias as alias;
+    fn uncoupled() {}
+    fn check() {
+        super::coupled_direct(); coupled_glob(); alias(); uncoupled();
+        let coupled_glob = || {}; coupled_glob();
+        let _ = "super::uncoupled";
+    }
+    mod nested { fn check() { super::coupled_glob(); } }
+}
+mod ordinary { #[cfg(test)] fn check() { super::uncoupled(); } }
+"#,
+    );
+    let advice = run(&repo, args(&repo, "src/weak.rs"));
+    advice_flow::complete(&advice);
+    let signals: Vec<_> = advice["signals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["kind"] == "cfg_test_consumer")
+        .collect();
+    assert_eq!(signals.len(), 3);
+    for name in ["coupled_direct", "coupled_glob", "coupled_alias"] {
+        let unit = item(&advice, name);
+        let signal = signals
+            .iter()
+            .find(|s| s["to_item_id"] == unit["id"])
+            .unwrap();
+        assert_eq!(signal["item_ids"], json!([unit["id"]]));
+        assert_eq!(signal["count"], 1);
+        assert!(
+            unit["signal_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&signal["id"])
+        );
+        assert!(
+            signal["label"]
+                .as_str()
+                .unwrap()
+                .contains("will block relocation")
+        );
+        assert_eq!(signal["evidence"][0]["text_omitted"], true);
+    }
+    assert!(
+        !signals
+            .iter()
+            .any(|s| s["to_item_id"] == item(&advice, "uncoupled")["id"])
+    );
+    assert!(
+        edge(&advice, "tests", "coupled_direct").is_some_and(|s| s["kind"] == "cfg_test_consumer")
+    );
+    // Test consumers never become cohesion edges or change the supported-unit classifier.
+    assert_eq!(item(&advice, "tests")["eligibility"], "context_sensitive");
+    assert_eq!(advice, run(&repo, args(&repo, "src/weak.rs")));
+}
+
+#[test]
+fn zero_risk_groups_still_explicitly_leave_move_safety_unassessed() {
+    let repo = Fixture::generate();
+    let advice = run(&repo, args(&repo, "src/weak.rs"));
+    advice_flow::complete(&advice);
+    for group in advice["drafts"][0]["groups"].as_array().unwrap() {
+        assert!(
+            group["expected_to_block"]["counts"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|n| n == 0)
+        );
+        assert_eq!(group["test_coupled"], false);
+        assert!(
+            group["assessment_scope"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("not a safe move")
+        );
+        assert!(
+            group["expected_to_block"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("not a move plan or safe-move verdict")
+        );
+        assert!(group.get("safe").is_none() && group.get("applicable").is_none());
+    }
+}
+
+#[test]
 fn word_prefixes_outer_attributes_and_doc_heading_signals() {
     let repo = Fixture::generate();
     repo.write("src/weak.rs", "/// # Parsing\n#[inline]\nfn HttpRead() {}\n/// # Parsing\n#[inline]\nfn HttpWrite() {}\nfn helper() {}\n");

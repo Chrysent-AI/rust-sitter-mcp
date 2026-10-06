@@ -335,6 +335,85 @@ fn index_name(index: &mut BTreeMap<String, Vec<usize>>, name: &str, item: usize)
         values.push(item);
     }
 }
+struct TestScope {
+    aliases: BTreeMap<String, String>,
+    shadowed: BTreeSet<String>,
+    super_glob: bool,
+}
+/// Only a directly inventoried inline module with the written exact cfg(test) form.
+/// This is consumer evidence, not cfg evaluation or inline-module move support.
+fn test_scope(
+    item: &Item,
+    node: Node<'_>,
+    source: &str,
+    controls: Controls<'_>,
+) -> Result<Option<TestScope>, DomainError> {
+    if item.kind != "mod_item"
+        || !item.attributes.iter().any(|a| {
+            a.range.start_byte < item.span.range.start_byte
+                && source[a.range.start_byte..a.range.end_byte]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .eq("#[cfg(test)]".chars())
+        })
+    {
+        return Ok(None);
+    }
+    let Some(body) = node.child_by_field_name("body") else {
+        return Ok(None);
+    };
+    let mut scope = TestScope {
+        aliases: BTreeMap::new(),
+        shadowed: BTreeSet::new(),
+        super_glob: false,
+    };
+    for i in 0..body.named_child_count() {
+        controls.check()?;
+        let child = body.named_child(i as u32).expect("module child");
+        if let Some(name) = child.child_by_field_name("name") {
+            scope
+                .shadowed
+                .insert(source[name.byte_range()].trim_start_matches("r#").into());
+        }
+        if child.kind() != "use_declaration" {
+            continue;
+        }
+        for leaf in items::use_leaves(child, source, (controls.deadline, controls.cancelled))? {
+            let segments: Vec<_> = leaf.path.split("::").collect();
+            let binding = leaf.binding.trim_start_matches("r#").to_owned();
+            if segments.len() == 2 && segments[0] == "super" {
+                let target = segments[1].trim_start_matches("r#").to_owned();
+                if scope.aliases.insert(binding.clone(), target).is_some() {
+                    scope.shadowed.insert(binding);
+                }
+            } else {
+                scope.shadowed.insert(binding);
+            }
+        }
+        let mut stack = vec![child];
+        while let Some(n) = stack.pop() {
+            controls.check()?;
+            if n.kind() == "use_wildcard" {
+                let text: String = source[n.byte_range()]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                let list_path = n
+                    .parent()
+                    .filter(|p| p.kind() == "use_list")
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.child_by_field_name("path"));
+                scope.super_glob |= text == "super::*"
+                    || (text == "*"
+                        && list_path.is_some_and(|p| source[p.byte_range()].trim() == "super"));
+            }
+            for i in 0..n.named_child_count() {
+                stack.push(n.named_child(i as u32).expect("use child"));
+            }
+        }
+    }
+    Ok(Some(scope))
+}
 fn references(
     source: &FileSnapshot,
     data: &ParsedFile,
@@ -363,16 +442,22 @@ fn references(
     // Each occurrence is stored once per candidate target. No dense pairwise substring scans.
     let mut edges: BTreeMap<(usize, usize), Vec<ByteRange>> = BTreeMap::new();
     let mut ambiguous_edges = BTreeSet::new();
+    let mut test_edges = BTreeSet::new();
     for owner in 0..result.inventory.len() {
         controls.check()?;
         let item = &result.inventory[owner];
+        let root = item_node(data, item);
+        let tests = test_scope(item, root, &source.source, controls)?;
         if matches!(
             item.kind.as_str(),
-            "use_declaration" | "extern_crate_declaration" | "macro_definition" | "mod_item"
-        ) {
+            "use_declaration" | "extern_crate_declaration" | "macro_definition"
+        ) || (item.kind == "mod_item" && tests.is_none())
+        {
             continue;
         }
-        let mut stack = vec![item_node(data, item)];
+        let mut stack = vec![tests.as_ref().map_or(root, |_| {
+            root.child_by_field_name("body").expect("test body")
+        })];
         while let Some(node) = stack.pop() {
             controls.check()?;
             if matches!(
@@ -385,6 +470,7 @@ fn references(
                     | "macro_definition"
                     | "macro_invocation"
                     | "mod_item"
+                    | "use_declaration"
             ) {
                 continue;
             }
@@ -395,48 +481,73 @@ fn references(
                 // Explicit self or canonical current-module paths denote candidates in this file.
                 // Other qualified paths may denote a local/import base, never their suffix alone.
                 let segments: Vec<_> = text.split("::").collect();
-                let (name, binding_node) =
-                    if simple && segments.first() == Some(&"self") && segments.len() == 2 {
+                let (name, binding_node) = if let Some(tests) = &tests {
+                    if simple && segments.first() == Some(&"super") && segments.len() >= 2 {
                         (segments[1], None)
-                    } else if simple
-                        && segments.first() == Some(&"crate")
-                        && module.is_some_and(|m| {
-                            m.unresolved.is_empty()
-                                && segments.len() == m.module_segments.len() + 2
-                                && segments[1..segments.len() - 1]
-                                    .iter()
-                                    .zip(&m.module_segments)
-                                    .all(|(a, b)| {
-                                        a.trim_start_matches("r#") == b.trim_start_matches("r#")
-                                    })
-                        })
-                    {
-                        (segments[segments.len() - 1], None)
-                    } else if simple {
-                        let first = segments[0];
-                        // First path segment is the bound name; UFCS/absolute/relative unknowns are not suffix matches.
-                        if matches!(first, "crate" | "super" | "self")
-                            || first.starts_with('<')
-                            || first.is_empty()
-                        {
+                    } else {
+                        let spelling = segments[0].trim_start_matches("r#");
+                        if tests.shadowed.contains(spelling) {
                             continue;
                         }
-                        let mut first_node = node;
-                        while let Some(child) = first_node.child_by_field_name("path") {
-                            first_node = child;
+                        let Some(target) = tests
+                            .aliases
+                            .get(spelling)
+                            .map(String::as_str)
+                            .or_else(|| tests.super_glob.then_some(spelling))
+                        else {
+                            continue;
+                        };
+                        let mut first = node;
+                        while let Some(child) = first.child_by_field_name("path") {
+                            first = child;
                         }
-                        (first, Some(first_node))
-                    } else {
-                        (text, Some(node))
-                    };
-                if let Some(targets) = index.get(name.trim_start_matches("r#")) {
+                        (target, Some(first))
+                    }
+                } else if simple && segments.first() == Some(&"self") && segments.len() == 2 {
+                    (segments[1], None)
+                } else if simple
+                    && segments.first() == Some(&"crate")
+                    && module.is_some_and(|m| {
+                        m.unresolved.is_empty()
+                            && segments.len() == m.module_segments.len() + 2
+                            && segments[1..segments.len() - 1]
+                                .iter()
+                                .zip(&m.module_segments)
+                                .all(|(a, b)| {
+                                    a.trim_start_matches("r#") == b.trim_start_matches("r#")
+                                })
+                    })
+                {
+                    (segments[segments.len() - 1], None)
+                } else if simple {
+                    let first = segments[0];
+                    // First path segment is the bound name; UFCS/absolute/relative unknowns are not suffix matches.
+                    if matches!(first, "crate" | "super" | "self")
+                        || first.starts_with('<')
+                        || first.is_empty()
+                    {
+                        continue;
+                    }
+                    let mut first_node = node;
+                    while let Some(child) = first_node.child_by_field_name("path") {
+                        first_node = child;
+                    }
+                    (first, Some(first_node))
+                } else {
+                    (text, Some(node))
+                };
+                let targets = index.get(name.trim_start_matches("r#"));
+                // No new dependency pass: unknown bare bindings use this same lexical walk.
+                // Qualified unknown paths, impl Self and unknown lexical uncertainties
+                // remain outside this lower bound; preserve existing candidate decisions.
+                if targets.is_some() || (!simple && tests.is_none() && name != "Self") {
                     let assessment = binding_node
                         .map(|n| {
                             items::lexical_assessment(
                                 &source.path,
                                 n,
                                 &source.source,
-                                name,
+                                &source.source[n.byte_range()],
                                 (controls.deadline, controls.cancelled),
                                 false,
                             )
@@ -446,7 +557,7 @@ fn references(
                         .as_ref()
                         .map_or(items::LexicalBinding::Absent, |a| a.binding);
                     controls.check()?;
-                    if lexical == items::LexicalBinding::Uncertain {
+                    if lexical == items::LexicalBinding::Uncertain && targets.is_some() {
                         let id = result.inventory[owner].id.clone();
                         add_decision(
                             result,
@@ -477,8 +588,28 @@ fn references(
                             })
                             .expect("lexical decision");
                         decision.lexical_uncertainty = witness;
+                    } else if lexical == items::LexicalBinding::Absent && targets.is_none() {
+                        add_decision(
+                            result,
+                            (
+                                "unsupported_dependency_form",
+                                DecisionReason::ExternalOrMissingBinding,
+                            ),
+                            &source.path,
+                            lines.slice(
+                                node.start_byte(),
+                                node.end_byte(),
+                                result.limits.text_bytes,
+                            ),
+                            vec![result.inventory[owner].id.clone()],
+                            (
+                                "written bare binding has no inventoried declaration/import or proven local binding; relocation requires binding evidence",
+                                "inspect the binding and submit supported explicit import/path repairs or change the selection",
+                            ),
+                            false,
+                        )?;
                     } else if lexical == items::LexicalBinding::Absent {
-                        for target in targets {
+                        for target in targets.expect("candidate targets") {
                             controls.check()?;
                             result.counts.reference_candidates += 1;
                             if result.counts.reference_candidates
@@ -503,7 +634,10 @@ fn references(
                                     + displayed_bytes,
                             )?;
                             edges.entry((owner, *target)).or_default().push(range(node));
-                            if targets.len() > 1 {
+                            if tests.is_some() {
+                                test_edges.insert((owner, *target));
+                            }
+                            if targets.expect("candidate targets").len() > 1 {
                                 ambiguous_edges.insert((owner, *target));
                             }
                         }
@@ -531,9 +665,16 @@ fn references(
                 result.limits.text_bytes,
             ));
         }
+        let test_consumer = test_edges.contains(&(from, to));
         let mut value = signal(
-            "reference_candidate",
-            if from == to {
+            if test_consumer {
+                "cfg_test_consumer"
+            } else {
+                "reference_candidate"
+            },
+            if test_consumer {
+                vec![result.inventory[to].id.clone()]
+            } else if from == to {
                 vec![result.inventory[from].id.clone()]
             } else {
                 vec![
@@ -552,6 +693,30 @@ fn references(
             .facts
             .insert("ambiguous_binding".into(), usize::from(ambiguous));
         value.limitations.push("written bare/simple-path candidates, not symbol resolution or a call graph; namespaces conflated; no macro expansion or type-directed resolution".into());
+        if test_consumer {
+            value.label = Some(
+                "test-coupled: consumers in this file's test module will block relocation".into(),
+            );
+            value.limitations.push("observed super:: paths or references through direct super imports in a written #[cfg(test)] inline module only; nested modules and macro tokens not assessed; execution semantics unchanged".into());
+            for span in &value.evidence {
+                controls.check()?;
+                add_decision(
+                    result,
+                    (
+                        "module_context",
+                        DecisionReason::ConditionalOrInheritedContext,
+                    ),
+                    &source.path,
+                    span.clone(),
+                    value.item_ids.clone(),
+                    (
+                        "test-coupled: consumers in this file's test module will block relocation; conditional consumer context is not proved by grouping",
+                        "retain the binding or change the explicit move selection; cfg(test) is not evaluated and has no execution override",
+                    ),
+                    false,
+                )?;
+            }
+        }
         if ambiguous {
             value.limitations.push(
                 "several written bindings share this spelling; candidate targets are not resolved"
