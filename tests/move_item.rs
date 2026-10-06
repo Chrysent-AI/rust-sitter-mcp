@@ -8,6 +8,8 @@ mod derive_tests;
 mod fixture_gen;
 #[path = "support/move_artifacts.rs"]
 mod move_artifacts;
+#[path = "support/prelude_scope_tests.rs"]
+mod prelude_scope_tests;
 #[path = "support/prelude_tests.rs"]
 mod prelude_tests;
 #[path = "support/stdio_client.rs"]

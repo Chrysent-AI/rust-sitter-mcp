@@ -98,8 +98,18 @@ fn builtin_derive_macro_identity_refuses_both_chains_and_batch_arrivals() {
                 &repo,
                 enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
             );
-            withheld(&result);
-            assert_eq!(proofs(&result, "Debug"), 0, "{path}: {shadow}: {result}");
+            let veto =
+                path != "lib.rs" || shadow.starts_with("macro_rules!") || shadow.starts_with("#!");
+            assert_eq!(
+                proofs(&result, "Debug"),
+                usize::from(!veto),
+                "{path}: {shadow}: {result}"
+            );
+            if veto {
+                withheld(&result);
+            } else {
+                apply(&repo, &result);
+            }
         }
     }
     let repo = fixture(&format!("#[derive(Debug)]\n{selected}\n"));
@@ -122,8 +132,13 @@ fn builtin_derive_macro_identity_refuses_both_chains_and_batch_arrivals() {
                 ]),
             )),
         );
-        withheld(&result);
-        assert_eq!(proofs(&result, "Debug"), 0, "{result}");
+        let veto = destination == existing();
+        assert_eq!(proofs(&result, "Debug"), usize::from(!veto), "{result}");
+        if veto {
+            withheld(&result);
+        } else {
+            apply(&repo, &result);
+        }
     }
 }
 
@@ -359,7 +374,11 @@ fn builtin_derive_arriving_attributes_audit_their_original_source_identity() {
         );
         let clean = prefix == "#[derive(Debug)]";
         assert_eq!(proofs(&result, "Debug"), usize::from(clean), "{result}");
-        assert_eq!(proofs(&result, "Option"), usize::from(clean), "{result}");
+        assert_eq!(
+            proofs(&result, "Option"),
+            usize::from(!prefix.starts_with("use ")),
+            "{result}"
+        );
         if clean {
             apply(&repo, &result);
         } else {

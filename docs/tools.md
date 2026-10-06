@@ -168,17 +168,28 @@ schema version remains 2 because the fields are additive. The count survives
 response fitting; omitted proof records are disclosed in `counts.omissions.binding_proofs`,
 and a response that cannot carry the full applicable audit withholds all artifacts.
 
-The source **and** destination/batch visible module chains must be complete and
-free of competing explicit use-leaves, relevant globs and same-name written
-declarations. Inline-module evidence is scoped to each reference's enclosing
-module chain: a child or sibling module's imports, declarations and outer
-attributes (including `#[cfg(test)] mod tests { use super::*; }`) do not shadow a
-parent reference. Existing destinations are checked at their top-level insertion
-scope. Selected item bodies are scanned conservatively for same-name generic,
-local and pattern bindings and for conditional/recovered or macro context;
-simultaneous arrivals and planned written-import repairs are also checked.
-Inherited `#![no_implicit_prelude]`, `#![no_std]`, `#![no_core]`, conditional attributes,
-non-built-in or shadowed derives and unexamined macros refuse the type fallback.
+The source **and** destination module identity chains must be complete. Competing
+explicit use-leaves, globs and same-name written declarations are checked in the
+reference's own module, lexically enclosing inline modules and the destination's
+final insertion scope (departures removed, arrivals and planned imports included).
+Filesystem ancestors' imports and declarations do not inherit into child modules.
+An attributed declaration contributes its written name conservatively even when
+its presence is conditional: `#[cfg(test)] mod tests;` shadows `tests`, not `Option`.
+Child/sibling scopes' finite names and derives do not leak to a parent reference.
+Generic/local/pattern bindings are checked at each occurrence. A signature ignores
+body macros; an in-body reference sees only statement macros in its enclosing
+blocks at-or-before that reference, never a later or sibling-block statement.
+This is a written token-tree audit, not expansion or a macro-hygiene proof.
+Chain-wide vetoes remain for `no_implicit_prelude`, `no_std`, `no_core`,
+`prelude_import`, syntax recovery/unparseable attributes, item-position macro
+invocations and unexamined module-declaration attribute macros (including
+`cfg_attr`, whose payload may introduce one). These unbounded vetoes also survive
+sibling inline scopes. A same-spelling textual macro definition remains relevant
+downward through the chain; unrelated definitions do not veto every type.
+Derive-related type refusals are limited to same-spelling competition for a
+contextual built-in derive or its conditional/unexamined companion attributes
+in relevant own/enclosing inline/final scopes, not unrelated filesystem ancestors.
+Unknown derives retain their own attribute blockers, not a blanket type-name veto.
 Refusal preserves existing typed needs; it is not an override. A proven written
 binding still uses ordinary repair logic, including explicit standard-library
 imports, never a prelude proof.
@@ -186,14 +197,17 @@ imports, never a prelude proof.
 The same flag also admits **bare, unshadowed compiler-built-in derive names**:
 `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash` and `Default`.
 Their standard-defined expansion introduces no module-scope bindings. Each name
-must be unshadowed at both ends, including source/destination ancestors, enclosing
-inline scopes, simultaneous arrivals and planned imports. Any same-spelling
+must be unshadowed at both ends in their own/enclosing inline scopes, simultaneous
+arrivals and planned imports; filesystem ancestors contribute textual macros and
+chain controls, not ordinary imports or declarations. Any same-spelling
 `macro_rules!`, item or explicit use-leaf (including aliases), or any visible glob,
 refuses that derive. Child/sibling scopes do not leak bindings to a parent.
 Path forms such as `#[derive(foo::Debug)]` or `#[derive(serde::Serialize)]` never
 qualify. In `#[derive(Debug, Args)]`, an unshadowed `Debug` is separately discharged,
 but `Args` retains the attribute veto and the whole batch remains blocked.
-`#[serde(...)]`, `#[expect(...)]` and all other non-allowlisted attributes still veto.
+`#[serde(...)]`, `#[expect(...)]` and all other non-allowlisted attributes still
+retain their own move/context needs. Unexamined companion attributes, including
+`cfg_attr`, veto an unconditional built-in derive proof on that declaration.
 Advice remains strict because it has no prelude flag; advice, move guards and
 required-binding repairs share the existing context-independent attribute predicate.
 Required-binding repairs still refuse inherited inner attribute context and
@@ -322,8 +336,8 @@ this is written evidence, not cfg evaluation. Detection shares the test-module
 and super-import/glob classifier used by split advice; move acknowledgment also
 covers macro-argument candidates such as `assert!` and `assert_eq!` without
 expanding or rewriting their tokens. It also covers bare test references carrying
-a same-block statement-macro `hoist_possibility` witness, including a later macro
-statement, when the written super import reaches the selected file, the reference's
+a same-block `statement_macro_before_reference` witness at-or-before the
+reference, when the written super import reaches the selected file, the reference's
 written type/value namespace is compatible with the selected item, and a separate
 written-binding audit finds no competing local or other lexical uncertainty.
 The witness remains disclosed on the acknowledged decision; this is acceptance
@@ -705,10 +719,12 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   that namespace uncertainty remains blocked rather than silently discarding
   the type dependency. The main decision retains the original occurrence
   anchor. For a same-block statement macro, additive
-  `witness_relation:"hoist_possibility"` explicitly identifies `pattern` as a
-  positional witness within `scope`, not the anchor's containing pattern; its
-  range may precede or follow the anchor. The scan remains conservative in both
-  source orders. Other witnesses omit `witness_relation`. These witness
+  `witness_relation:"statement_macro_before_reference"` identifies `pattern` as a
+  positional written-token-tree witness within `scope`, not the anchor's containing
+  pattern. Its start is at-or-before the reference; later macros supply no such
+  witness. This replaces the former both-orders `hoist_possibility` relation;
+  neither relation proves expansion or hygiene. Other witnesses omit
+  `witness_relation`. These witness
   coordinates locate evidence; they are not replay targets or new request fields.
   Legacy `category:"binding_collision"`/`BINDING_COLLISION` can still accompany
   `reason:"lexical_context_unproved"`: that means uncertainty, not a proven
@@ -716,8 +732,9 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   the result is incomplete and decisions/artifacts are withheld with omissions.
 - For retained `move_item` needs, refusal basis is disclosed per need in additive
   `refusal_basis:[{class,anchor:{path,range?},name?}]` records. Classes include
-  `chain_macro_statement`, `derive_veto`, `shadow`, `conditional_context`,
-  `glob_import`, `unresolved_chain`, `syntax_recovery`, `lexical_uncertainty`
+  `chain_macro_statement`, `derive_veto`, `shadow`, `macro_shadow`,
+  `conditional_context`, `prelude_disabled`, `module_attribute`,
+  `unparseable_attribute`, `glob_import`, `unresolved_chain`, `syntax_recovery`, `lexical_uncertainty`
   and the occurrence-level fallback `written_binding_unproved`. `name` identifies
   a competing spelling; written witnesses use original half-open byte coordinates,
   while unresolved files and synthesized bindings omit `range` rather than invent

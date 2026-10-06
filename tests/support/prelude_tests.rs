@@ -124,17 +124,23 @@ fn prelude_shadow_refusal_at_source_destination_and_parent() {
     for (path, prefix) in [
         ("source.rs", "use unknown::*;\n"),
         ("destination.rs", "use unknown::*;\n"),
-        ("lib.rs", "use unknown::*;\n"),
+        ("destination.rs", "use unknown as Option;\n"),
         ("destination.rs", "use std::option::Option;\n"),
         ("destination.rs", "struct Option;\n"),
         ("destination.rs", "extern crate external as Option;\n"),
-        ("lib.rs", "struct Option;\n"),
+        (
+            "source.rs",
+            "#[cfg_attr(test, derive(Clone))] struct Option;\n",
+        ),
         ("source.rs", "#![no_implicit_prelude]\n"),
         ("destination.rs", "#![no_implicit_prelude]\n"),
         ("lib.rs", "#![no_implicit_prelude]\n"),
         ("source.rs", "#![no_std]\n"),
         ("destination.rs", "#![no_core]\n"),
-        ("destination.rs", "#[cfg(feature=\"x\")] struct Other;\n"),
+        ("destination.rs", "#[cfg(feature=\"x\")] struct Option;\n"),
+        ("lib.rs", "#![prelude_import]\n"),
+        ("lib.rs", "#[introduce] mod unrelated {}\n"),
+        ("lib.rs", "#[cfg(] mod unrelated;\n"),
         ("source.rs", "introduce!();\n"),
         ("destination.rs", "introduce!();\n"),
         ("lib.rs", "introduce!();\n"),
@@ -284,7 +290,11 @@ fn prelude_batch_child_scopes_stay_disjoint_and_own_contexts_refuse() {
 #[test]
 fn prelude_written_imports_and_declarations_keep_existing_repairs() {
     let selected = "struct Record { option: Option<u8> }";
-    for prefix in ["use std::option::Option;\n", "struct Option;\n"] {
+    for prefix in [
+        "use std::option::Option;\n",
+        "struct Option;\n",
+        "use unknown as Option;\n",
+    ] {
         let repo = fixture(&format!("{prefix}{selected}\n"));
         let args = enabled(request(&repo, json!([entry(&repo, selected, existing())])));
         let on = run(&repo, args.clone());
@@ -383,7 +393,7 @@ fn prelude_planned_import_shadows_and_incomplete_chains_refuse() {
 }
 
 #[test]
-fn prelude_batch_parent_arrivals_and_new_module_names_refuse() {
+fn prelude_batch_parent_arrivals_and_new_module_names_do_not_leak() {
     let selected = "struct Record { option: Option<u8> }";
     let repo = fixture(selected);
     let result = run(
@@ -393,8 +403,9 @@ fn prelude_batch_parent_arrivals_and_new_module_names_refuse() {
             json!([entry(&repo, selected, new("cases/layout/Option.rs")),]),
         )),
     );
-    withheld(&result);
-    assert_eq!(proof_count(&result, "Option"), 0);
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    assert_eq!(proof_count(&result, "Option"), 1);
+    apply(&repo, &result);
     repo.write("cases/layout/other.rs", "struct Option;\n");
     repo.write(
         "cases/layout/lib.rs",
@@ -411,8 +422,9 @@ fn prelude_batch_parent_arrivals_and_new_module_names_refuse() {
             ]),
         )),
     );
-    withheld(&result);
-    assert_eq!(proof_count(&result, "Option"), 0);
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    assert_eq!(proof_count(&result, "Option"), 1);
+    apply(&repo, &result);
 }
 
 #[test]
@@ -446,13 +458,13 @@ fn prelude_does_not_bridge_constructors_associated_calls_methods_macros_or_custo
             "fn selected(input: Option<u8>) { invoke!(); }",
             "",
             "macro_context_unexamined",
-            0,
+            1,
         ),
         (
             "struct Record { value: Option<u8> }",
             "#[derive(Args)]\n",
             "conditional_or_inherited_context",
-            0,
+            1,
         ),
     ] {
         let repo = fixture(&format!("{prefix}{selected}"));

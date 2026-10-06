@@ -30,7 +30,7 @@ pub struct LexicalLocation {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(rename_all = "snake_case")]
 pub enum WitnessRelation {
-    HoistPossibility,
+    StatementMacroBeforeReference,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -313,7 +313,7 @@ pub(crate) fn lexical_assessment(
     )
 }
 /// Audit written bindings only for test-risk acknowledgment, never as a binding proof.
-/// The ordinary assessment still reports every same-block statement macro.
+/// The ordinary assessment still reports preceding same-block statement macros.
 pub(crate) fn test_consumer_binding(
     path: &str,
     node: Node<'_>,
@@ -466,13 +466,14 @@ fn lexical_context(
             }
         }
         if parent.kind() == "block" {
-            // Statement macros can introduce hoisted items as well as lets. A
-            // definite written local cannot prove their expansion disjoint,
-            // regardless of the macro's source order in this same block.
+            // Audit written statement macros only at-or-before this occurrence.
+            // Later and sibling-block token trees are not expansion witnesses for
+            // this reference; this is position evidence, not a hygiene proof.
             for i in 0..parent.named_child_count() {
                 check(controls.0, controls.1)?;
                 let statement = parent.named_child(i as u32).expect("statement");
                 if statement_macros
+                    && statement.start_byte() <= child.start_byte()
                     && (statement.kind() == "macro_invocation"
                         || (statement.kind() == "expression_statement"
                             && statement
@@ -490,7 +491,7 @@ fn lexical_context(
                         .uncertainty
                         .as_mut()
                         .expect("uncertainty")
-                        .witness_relation = Some(WitnessRelation::HoistPossibility);
+                        .witness_relation = Some(WitnessRelation::StatementMacroBeforeReference);
                     return Ok(assessment);
                 }
             }

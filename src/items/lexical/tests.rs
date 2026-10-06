@@ -231,7 +231,7 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::UnsupportedPattern,
         ),
         (
-            "fn f() { selected(); m!(); }",
+            "fn f() { m!(); selected(); m!(); }",
             LexicalReason::UnsupportedPattern,
         ),
         (
@@ -239,7 +239,7 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::UnsupportedPattern,
         ),
         (
-            "fn f() { let selected = value; selected(); m!(); }",
+            "fn f() { let selected = value; m!(); selected(); }",
             LexicalReason::UnsupportedPattern,
         ),
         (
@@ -292,18 +292,21 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
 fn statement_macro_witness_is_disclosed_as_same_block_not_containing_pattern() {
     for source in [
         "fn f() { m!(); let n = selected; }",
-        "fn f() { let n = selected; m!(); }",
+        "fn f() { m!(); { let n = selected; } }",
     ] {
         let assessment = assess(source, "selected", false);
         assert_eq!(assessment.binding, LexicalBinding::Uncertain);
         let witness = serde_json::to_value(assessment.uncertainty.unwrap()).unwrap();
-        assert_eq!(witness["witness_relation"], "hoist_possibility");
+        assert_eq!(
+            witness["witness_relation"],
+            "statement_macro_before_reference"
+        );
         assert_eq!(witness["scope"]["kind"], "block");
         let at = source.find("selected").unwrap();
         let range = &witness["pattern"]["range"];
         let start = range["start_byte"].as_u64().unwrap() as usize;
         let end = range["end_byte"].as_u64().unwrap() as usize;
-        assert!(end <= at || start >= at + "selected".len());
+        assert!(end <= at);
         assert_eq!(&source[start..end], "m!();");
     }
     let assessment = assess(
@@ -313,6 +316,25 @@ fn statement_macro_witness_is_disclosed_as_same_block_not_containing_pattern() {
     );
     let witness = serde_json::to_value(assessment.uncertainty.unwrap()).unwrap();
     assert!(witness.get("witness_relation").is_none());
+}
+#[test]
+fn later_sibling_and_body_macros_do_not_poison_written_references() {
+    for (source, expected) in [
+        ("fn f() { let n = selected; m!(); }", LexicalBinding::Absent),
+        (
+            "fn f() { { m!(); } let n = selected; }",
+            LexicalBinding::Absent,
+        ),
+        (
+            "fn f() { let selected = value; selected(); m!(); }",
+            LexicalBinding::Independent,
+        ),
+        ("fn f(value: selected) { m!(); }", LexicalBinding::Absent),
+    ] {
+        let assessment = assess(source, "selected", false);
+        assert_eq!(assessment.binding, expected, "{source}");
+        assert!(assessment.uncertainty.is_none(), "{source}");
+    }
 }
 #[test]
 fn syntax_recovery_is_not_a_disjointness_proof() {
@@ -359,7 +381,7 @@ fn nested_item_capture_context_does_not_inherit_outer_local_proof() {
 fn lexical_refusal_basis_keeps_the_actual_positional_witness() {
     for (source, class, expected) in [
         (
-            "fn f() { selected(); m!(); }",
+            "fn f() { m!(); selected(); }",
             "chain_macro_statement",
             "m!();",
         ),
