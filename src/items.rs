@@ -544,9 +544,9 @@ pub(crate) fn use_facts(
     }
     Ok((glob, names))
 }
-/// Conservative written competitors for a bare pattern argument. This is not
-/// constant resolution: visible unit variants also retain uncertainty, even
-/// when no written import establishes that the variant is a bare binding.
+/// Conservative competitors for a bare pattern argument. This is not constant
+/// resolution: visible unit variants and potentially item-producing macros
+/// retain uncertainty without proving a same-named bare constant exists.
 pub(crate) fn pattern_name_competes(
     pattern: Node<'_>,
     source: &str,
@@ -562,10 +562,24 @@ pub(crate) fn pattern_name_competes(
         check(controls.0, controls.1)?;
         let module_body = scope.kind() == "declaration_list"
             && scope.parent().is_some_and(|p| p.kind() == "mod_item");
-        if matches!(scope.kind(), "block" | "source_file") || module_body {
+        let written_item_scope = matches!(scope.kind(), "block" | "source_file") || module_body;
+        if written_item_scope || scope.kind() == "declaration_list" {
             for i in 0..scope.named_child_count() {
                 check(controls.0, controls.1)?;
                 let item = scope.named_child(i as u32).expect("scope item");
+                // Item output is unknown in the containing module and every
+                // intervening block/declaration scope, before or after the pattern.
+                if item.kind() == "macro_invocation"
+                    || (item.kind() == "expression_statement"
+                        && item
+                            .named_child(0)
+                            .is_some_and(|n| n.kind() == "macro_invocation"))
+                {
+                    return Ok(true);
+                }
+                if !written_item_scope {
+                    continue;
+                }
                 if matches!(item.kind(), "const_item" | "static_item") && same_name(item) {
                     return Ok(true);
                 }
@@ -1074,6 +1088,21 @@ pub fn dependencies(
             }
             if kind == "field_expression" {
                 needs.push(need(DecisionReason::MemberOrConstructorUnproved, "visibility_context", source_path, current, "member/method access and trait-import context are not established syntactically"));
+            }
+            if kind == "identifier"
+                && !reference_role(current)
+                && let Some(assessment) =
+                    lexical::pattern_uncertainty(source_path, current, source, controls)?
+            {
+                let mut value = need(
+                    DecisionReason::LexicalContextUnproved,
+                    "binding_collision",
+                    source_path,
+                    current,
+                    "pattern argument may name a constant; no independent local binding proof",
+                );
+                value.lexical(assessment);
+                needs.push(value);
             }
             let is_pattern = current
                 .parent()

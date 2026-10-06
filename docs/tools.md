@@ -737,10 +737,16 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   Scoped path patterns are non-binding positions, but their constructor/constant
   dependencies are still analyzed separately. Bare identifiers in tuple, slice,
   tuple-struct and explicit struct-field pattern arguments prove local bindings
-  only without competing written evidence in the pattern's enclosing scopes:
-  same-named const/static, unit constructor/visible enum unit variant, named import
-  leaf or any glob import. This is written evidence, not constant resolution or a
-  capitalization heuristic. Imports/items do not inherit into child modules.
+  only without competing evidence in the pattern's enclosing scopes:
+  same-named written const/static, unit constructor/visible enum unit variant,
+  named import leaf or any glob import. Potentially item-producing macro
+  invocations in the containing module or intervening block/declaration scopes
+  also retain uncertainty, regardless of their position before or after the
+  pattern; written syntax cannot rule out a macro-generated constant or variant.
+  An uncertain pattern argument blocks even when its name is unused in the arm
+  body. This is not macro expansion, constant resolution or a capitalization
+  heuristic. Imports/items do not inherit into child modules; parent-module or
+  sibling-scope invocations alone do not compete.
   Successful let-else bindings are out of scope in the initializer and failure
   block; match-arm bindings apply only to the guard and arm value. Non-binding
   literal/scoped-path or-pattern alternatives are admitted; binding or unresolved
