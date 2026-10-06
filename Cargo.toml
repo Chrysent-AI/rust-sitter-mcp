@@ -6,6 +6,10 @@ license = "MIT"
 description = "Structural Rust search and refactoring proposals over MCP"
 
 [dependencies]
+ra_ap_hir = { version = "=0.0.357", default-features = false }
+ra_ap_ide_db = { version = "=0.0.357", default-features = false }
+ra_ap_base_db = { version = "=0.0.357", default-features = false }
+ra_ap_syntax = { version = "=0.0.357", default-features = false }
 rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-io"] }
 tree-sitter = "=0.27.0"
 tree-sitter-rust = "=0.24.2"
