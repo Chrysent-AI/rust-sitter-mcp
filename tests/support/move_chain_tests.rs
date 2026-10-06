@@ -12,6 +12,8 @@ fn macro_root_move_refuses_with_named_actionable_cause() {
     for written in [
         chain_fixture::MACRO_ROOT,
         "emit_modules!(mod /* tokens */ branch;);\n",
+        chain_fixture::MACRO_NESTED_INPUT,
+        chain_fixture::MACRO_NESTED_OUTPUT,
     ] {
         repo.write(root, written);
         let result = run(&repo, args.clone());
