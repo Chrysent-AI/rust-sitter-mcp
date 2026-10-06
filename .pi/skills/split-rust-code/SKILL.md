@@ -7,7 +7,7 @@ description: Split or reorganize Rust files into modules using the rust-sitter-m
 
 Use the rust-sitter-mcp MCP server to split, extract, or reorganize Rust code. Discover `suggest_split` and `move_item` before use. In Pi, MCP exposure depends on configuration: use `tool_search` when the tools are not already exposed (deferred/codemode tools can be loaded this way); in other harnesses, follow that harness's guidance for loading MCP tools. Invoke the exact names and schemas exposed by the client (prefixes vary). The server is **read-only**: advice has no patch, and applicable move plans return patches you review and apply externally.
 
-**Not for:** semantic renames (requires type knowledge), inline `mod x { ... }` body extraction, cross-crate moves, macro-body refactoring, or same-file reordering. The engine is syntactic only — it never claims your code compiles.
+**Not for:** semantic renames (requires type knowledge), inline `mod x { ... }` body extraction, cross-crate moves, macro-body refactoring, or same-file reordering. By default the engine is syntactic only — it never claims your code compiles. Opt-in evidence flags (Step 3) add bounded, explicitly-configured resolution without ever claiming compilation or equivalence.
 
 **Set expectations first.** On idiomatic Rust — functions calling methods, prelude types (`Option`, `String`), `#[derive]`/proc-macro attributes, macro invocations (`println!`, `vec!`, `format!`), or consumers inside inline `#[cfg(test)]` modules — most selections block with `unsupported_in_engine` routes. For such files the realistic deliverable is a **design report** (inventory + grouping), not an applicable patch; the engine's sweet spot is macro-free library units (plain consts, undecorated items). `supported_unit` eligibility counts overstate what is actually movable. A file whose bulk is one large `impl` cannot be split by whole-item moves at all — methods are not items.
 
@@ -36,7 +36,7 @@ Use the rust-sitter-mcp MCP server to split, extract, or reorganize Rust code. D
 
 Use `paths` to keep discovery to the smallest useful scope; include `crate_root`, the source, and any files needed for module-chain or written-binding evidence. Omitting `paths` permits repository-wide discovery (large repos can return enormous decision lists); narrowing away required evidence makes the advice incomplete. For a `new_sibling` destination, admit its **directory literal** — e.g. creating `src/tui/new.rs` means `paths: ["src/lib.rs", "src/tui"]` — never the absent filename (`PATH_NOT_FOUND`, `INVALID_DESTINATION`). Note: cross-module binding decisions are usually a minority; most decisions on a big file are intra-file, so narrowing `paths` often does NOT shrink the response.
 
-**Response budget:** files over ~3,000 lines routinely exceed the default 2 MiB response cap — drafts, decisions, even `advice["root"]` can be silently withheld (`truncation_reasons: ["response_bytes"]`, `root: null`). If that happens, retry with `limits: {"response_bytes": 8388608}` (up to 16 MiB). When your client saves a truncated response to a file, parse that artifact with `jq`/python instead of eyeballing the preview.
+**Response budget:** current advice preserves full drafts and root/draft summaries at default budgets, including on large files. Still inspect `status`, coverage, omissions, and truncation reasons. If a response explicitly withholds data for `response_bytes`, retry with `limits: {"response_bytes": 8388608}` (up to 16 MiB). Distinguish server omissions from a client's truncated preview — inspect the saved full response.
 
 ## Step 2: Triage and edit the advice
 
@@ -84,6 +84,8 @@ If `span.text` is `null` or `text_omitted: true`, you must obtain complete bytes
 
 Submit all moves as **one batch** (the server plans them together, all-or-nothing):
 
+**Optional `move_item` evidence flags** (default off): `assume_standard_prelude` proves only unshadowed type-position `Option`/`Result`/`Box`/`Vec`/`String` and bare built-in derives; inspect `standard_prelude` / `standard_builtin_derive` proofs and coverage. `resolve_semantic` requires an explicit `semantic_configuration` (admitted crate graph with editions/features/cfg — no sysroot or external paths); bounded rust-analyzer resolution can prove eligible inherent methods, fields, constructors, and access at both source and final overlay — never compilation or equivalence. `acknowledge_test_consumers` discloses only consumers in the moved file's exact inline `#[cfg(test)]` module (including macro arguments) as nonblocking risks; it does not validate tests. Review proof/coverage and acknowledgment decisions; unrelated blockers still block.
+
 ```json
 {
   "repo_path": "/absolute/path/to/project",
@@ -105,10 +107,12 @@ Destination rules:
 **Require `plan.applicable: true` AND non-null `edits`, `created_files`, `patch`.** A `status: "complete"` envelope does NOT mean the plan is applicable; blocked plans withhold all three artifacts, and preview rewrites are informational only.
 
 Check:
-- `rewrites[]`: every import/path/visibility repair (review `before_text`/`after_text`)
-- `decisions[]` and `blockers[]`: read each `action.route`, `action.field`, `action.purpose` — see `references/failure-recovery.md` for routing
-- `trivia_decisions[]`: comment/banner ownership choices
-- `patch`: the git-apply diff
+- `binding_proofs[]` and coverage: review `standard_prelude`, `standard_builtin_derive`, or `ra_resolved` evidence; `integrity.semantic: "resolution_performed"` means bounded resolution only, never compilation/equivalence.
+- `decisions[]` / `blockers[]`: inspect routes, fields, purposes, and choices. A `test_consumer_acknowledged` decision is visible but nonblocking, not proof tests pass; run relevant tests.
+- `rewrites[]`: review every import/path/visibility repair (`before_text`/`after_text`).
+- `removal_gap` decisions: bytes stay as-is by default; collapse only via the explicit supported override after reviewing the exact whitespace.
+- `trivia_decisions[]`: review comment/banner ownership.
+- `patch`: review the complete git-apply diff and insertion locations.
 
 ## Step 5: Apply the patch
 
@@ -130,6 +134,7 @@ Keep or recheck original base bytes/modes plus `created_files[].must_be_absent` 
 - **Trailing newlines are not part of an item's syntax anchor** — inventory byte ranges exclude them.
 - **Some MCP clients stringify object parameters** — if a call fails validation with `must be object` (or you see `"limits": "null"` in the error echo), your client serialized `context`/`limits`/`globs` or an explicit `null` into a JSON string. Omit optional object parameters entirely; server defaults apply. Never pass explicit nulls.
 - **A complete draft is not move safety** — membership completeness and eligibility say nothing about cross-references, visibility, or macro context. That analysis happens in `move_item`.
+- **Chain refusals may name `macro_generated_module_tree` or `root_attribute_chain_uncertainty`** — these are advice-only causes, not override opportunities. Correct the root/scope where possible or stop at a design report.
 - **Macro-generated crate roots** (`crate_root!()` / `OUT_DIR` includes) cannot supply a proved ordinary module chain; treat these selections as advice-only.
 - **Creating `tests/*.rs` siblings can add Cargo integration-test crates** — module validity cannot see autotest discovery; review the build graph externally.
 - **Macro-invocation-as-item files are unsplittable like one-large-impl files** — generated items are not written inventory units; use advice, not an applicable-split claim.
