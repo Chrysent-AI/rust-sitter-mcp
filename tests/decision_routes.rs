@@ -62,7 +62,7 @@ fn blocked_batch_exposes_three_routes_and_choice_replay_clears_only_its_cause() 
         .find(|r| r["kind"] == "import_insert" && r["target"]["path"] == "cases/layout/source.rs")
         .unwrap();
     let mut rejected = args;
-    rejected["limits"]["diagnostic_count"] = json!(0);
+    rejected["limits"]["diagnostic_count"] = json!(64);
     rejected["rewrite_overrides"] = json!([{"target":import["target"],"action":"retain"}]);
     let result = client.call("move_item", rejected.clone());
     assert_eq!(result["schema_version"], 1);
@@ -116,6 +116,27 @@ fn blocked_batch_exposes_three_routes_and_choice_replay_clears_only_its_cause() 
             d["anchors"][0],
             anchor(&repo, "cases/layout/source.rs", text)
         );
+    }
+    let mut counts_only = rejected.clone();
+    counts_only["limits"]["diagnostic_count"] = json!(0);
+    let summary = client.call("move_item", counts_only);
+    assert_eq!(summary["plan"]["decisions"], json!([]));
+    assert_eq!(summary["counts"]["omissions"]["decisions"], decisions.len());
+    assert_eq!(summary["plan"]["decision_groups"], plan["decision_groups"]);
+    for group in summary["plan"]["decision_groups"].as_array().unwrap() {
+        let action = &group["actions"][0];
+        assert_eq!(action["route"], group["route"]);
+        match action["route"].as_str().unwrap() {
+            "request_field" => {
+                assert_eq!(action["field"], "rewrite_overrides[]");
+                assert_eq!(action["purpose"], "resolve_decision");
+                assert_eq!(action["choices"], json!(["accept_default", "replace"]));
+                assert!(action["target"].is_null());
+            }
+            "selection_change_required" => assert!(action["fields"].is_array()),
+            "unsupported_in_engine" => assert!(action["construct"].is_string()),
+            _ => panic!("unexpected route"),
+        }
     }
     rejected["rewrite_overrides"][0]["action"] = json!("accept_default");
     let replay = client.call("move_item", rejected);

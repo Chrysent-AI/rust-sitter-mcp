@@ -61,6 +61,26 @@ impl DecisionAction {
             },
         }
     }
+    pub(crate) fn summary(&self) -> Self {
+        match self {
+            Self::RequestField {
+                tool,
+                field,
+                choices,
+                purpose,
+                ..
+            } => Self::RequestField {
+                tool: tool.clone(),
+                field: field.clone(),
+                target: None,
+                trivia: None,
+                target_item: None,
+                choices: choices.clone(),
+                purpose: *purpose,
+            },
+            _ => self.clone(),
+        }
+    }
     pub(crate) fn route(&self) -> DecisionRoute {
         match self {
             Self::RequestField { .. } => DecisionRoute::RequestField,

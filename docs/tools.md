@@ -254,6 +254,56 @@ Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent 
 
 Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
 
+Blocked, failed and incomplete move previews are counts-first: `decision_groups`
+contains the complete analyzed cause counts, blocking flags and routing guidance;
+`decisions` contains at most `limits.diagnostic_count` detail records (default 64).
+Group and move/rewrite decision IDs still name the full analyzed set, so some IDs
+may have no detail record in a capped response. `counts.omissions.decisions`
+reports exactly how many detail records were withheld, with `diagnostic_count` in
+`truncation_reasons`; omitted per-decision chain links are counted separately.
+Display omissions do not by themselves make a completed analysis partial.
+Raise `limits.diagnostic_count` to obtain more detail, up to 100,000 for moves
+(the existing whole-call decision guard); raise `response_bytes` too if needed.
+For example, `limits:{"diagnostic_count":512}` can return all 326 decisions from
+a blocked batch. This does not resolve any blocker or guarantee output will fit.
+Applicable plans retain all decisions, regardless of the diagnostic display cap.
+
+Preview `rewrites` default to **4 exemplars** on blocked, failed and incomplete
+plans, while decisions retain their own 64-record default. The same single
+`limits.diagnostic_count` knob controls both: when explicitly supplied, its
+value caps each array independently. For example, `diagnostic_count:5` returns
+up to 5 rewrite exemplars and 5 decisions; `diagnostic_count:64` explicitly
+requests up to 64 of each. Increasing the explicit value monotonically expands
+detail; `diagnostic_count:100000` requests all observed rewrites and decisions
+within the whole-call guards (raise `response_bytes` too if necessary). Omitting
+`diagnostic_count`, including when other limits are supplied, keeps the separate
+4-rewrite/64-decision defaults. No separate rewrite-expansion parameter exists.
+
+`counts.rewrites` reports all observed rewrites, while `plan.rewrites` returns
+the first capped exemplars in their existing order.
+`counts.omissions.rewrites` records the remainder, with `diagnostic_count` in
+`truncation_reasons`. Move rewrite IDs still name the full observed set, so
+omitted IDs need not resolve in a capped preview. `diagnostic_count:0` returns
+counts without decision or rewrite exemplars. These are informational previews,
+not applicable artifacts. Applicable plans always keep their full byte-exact
+rewrite audit, regardless of this display cap.
+
+By default, blocked previews surface `trivia_decisions` only for selected items,
+their immediate gaps, or explicitly overridden trivia. Attachments and internal
+trivia owned by unselected items are excluded even if that item is a neighbor.
+Set `include_unselected_trivia:true` to inspect the full source-file trivia
+preview. Scoped-out entries are counted in `counts.omissions.trivia_decisions`
+with `trivia_scope` in `truncation_reasons`. This is response shaping only:
+analysis, ownership, override validation and group counts still cover the same
+source. Applicable plans keep the full existing trivia audit and byte-complete
+artifacts; neither this flag nor diagnostic/text limits remove artifact bytes.
+
+Move decisions retain authoritative full original `anchors[].expected_text`.
+An `evidence[]` slice duplicating the same anchored range and bytes is removed
+(the field remains, possibly `[]`); distinct evidence is retained. This removes
+redundancy, not unique evidence, and therefore adds no omission count. Replay
+anchors inside `action` retain their existing wire shape.
+
 Common limits/admission/cancellation apply. `max_moves` defaults to 500 (1–5,000) and counts the whole explicit list. Fixed work guards are 100,000 inventory descriptors, 100,000 relevant reference candidates and 128 MiB aggregate analysis descriptors, including conservatively accounted transient binding/evidence records. Effective guards, observed counts and reference coverage are reported; query-state limits do not apply to direct CST analysis. Mandatory anchors/artifacts/audit must fit the complete duplicated wire response. `text_bytes:0` omits descriptive slices, **not** freshness checks or artifact bytes. On overflow, all artifacts are withheld and preview-array omissions are explicit. Calls allocate no search cursor/series.
 
 Definite bad requests use `INVALID_ITEM_SELECTION`, `DUPLICATE_MOVE`, `STALE_SELECTION`, `INVALID_DESTINATION`, `INVALID_NEW_FILE_NAME`, `INVALID_DECLARATION_PARENT`, `DESTINATION_ALREADY_EXISTS`, `MODULE_DECLARATION_CONFLICT`, `STALE_DESTINATION`, `INVALID_MOVE_TRIVIA_OVERRIDE`, `INVALID_REWRITE_OVERRIDE` or `STALE_REWRITE_OVERRIDE`, with actionable input fields. Uncertain identity uses `CRATE_IDENTITY_UNCERTAIN`, not a guessed cross-crate assertion. Dependency decisions distinguish binding, glob, macro, re-export, module, visibility, inherited scope and unsupported-form categories with evidence and narrowing actions. Pre-existing/new syntax recovery, unsafe attachment, overlap, cancellation, work/output limits, source changes or `CREATION_RACE` withhold the entire batch. Final byte/mode/ignore/absence rechecks are observational, not atomic or application-time guarantees.
@@ -338,12 +388,22 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
 Both tools also publish `decision_groups[]` (inside `plan` for moves). Each group
 contains `category`, `reason`, `route`, `blocks_applicability`, `decision_ids` and
 `count`. These sorted cause summaries count decision records, not guessed
-references. Follow every linked decision for its complete anchors, evidence,
-item links and chain diagnostics; no evidence is replaced by the summary. Groups
-are finalized even when advice has no drafts, and are independent of the displayed
-`diagnostic_count` cap. Mandatory-evidence overflow clears groups and decisions
-together, reports group/reference omissions and marks the result incomplete.
-Schema version 1 and all legacy decision fields remain unchanged.
+references. Move groups additionally contain `actions[]`: every distinct typed
+route for the group, including the request tool/field/purpose/choices,
+selection-change fields/instruction, or unsupported construct/instruction.
+These are routing summaries, **not replay targets**: request-field actions have
+null `target`, `trivia` and `target_item`. Raise the move diagnostic limit and
+obtain full original anchors to replay a particular choice. This guidance remains
+available even with `diagnostic_count:0`, including when different chain causes
+share a group. Advice's group wire shape and complete decision links are unchanged.
+
+Groups are finalized before move detail capping and even when advice has no
+drafts. Follow returned detail records for anchors, unique evidence, item links
+and chain diagnostics; consult omission counts when detail is capped. Group
+counts and IDs cover all analyzed decisions, including omitted detail. Mandatory
+evidence or overall response overflow still clears groups and decisions together,
+reports group/reference omissions and marks the result incomplete. Schema
+version 1 and the existing decision fields remain available.
 
 Draft groups carry `item_ids`, not member-name strings. Join every ID to
 `inventory[].id`, including the retain group and context-sensitive units. Count
@@ -460,12 +520,12 @@ Eligibility precedence: oversized → binary (NUL in first 8,192 bytes) → non-
 | `limits.time_budget_ms` | 60,000 | 300,000 (minimum 1) |
 | `limits.query_state_limit` | 4,096 | 65,536 |
 | `limits.response_bytes` | 2 MiB | 16 MiB (minimum 64 KiB) |
-| `limits.diagnostic_count` | 64 | 256 (minimum 0) |
+| `limits.diagnostic_count` | 64 | 256; 100,000 for `move_item` (minimum 0) |
 | `limits.text_bytes` | 8 KiB | 64 KiB (minimum 0) |
 
 Other bounds are positive. Partial option objects use defaults for omitted settings; unknown fields are rejected. Raw query size is at most 64 KiB, 64 patterns/64 capture names. Sugar size is at most 64 KiB, 4,096 significant IR nodes and 64 metavariable occurrences. Decoded arguments are at most 8 MiB. Per-file query execution permits at most 100,000 candidate matches and 128 MiB of capture/range descriptors. Unfinished file matches are discarded. One engine call is admitted at a time (`BUSY` instead of unbounded queueing); blocking work uses at most four worker-local parsers/cursors. Cancellation/deadlines are cooperative; OS/Git I/O can outlast them.
 
-Structured results also include a JSON text fallback. Wire accounting includes both representations, JSON escaping and a framing reserve. The schema-version-1 envelope carries `tool`, canonical `root` (null if unresolved), `snapshot_id`, `status`, `coverage`, `counts`, effective `limits`, `truncation_reasons`, fixed-key `skipped`, bounded `diagnostics` and omissions, typed `error`, `matches`, `next_cursor` and `has_more`. Invalid/domain calls set MCP `isError:true` and return a failed envelope; successful empty results are not errors. Input deserialization failures use `INVALID_PARAMS`, not an opaque router response.
+Structured results also include a JSON text fallback. Wire accounting includes both representations, JSON escaping and a framing reserve. The schema-version-1 envelope carries `tool`, canonical `root` (null if unresolved), `snapshot_id`, `status`, `coverage`, `counts`, effective `limits`, `truncation_reasons`, fixed-key `skipped`, bounded `diagnostics` and omissions, typed `error`, `matches`, `next_cursor` and `has_more`. Invalid/domain calls set MCP `isError:true` and return a failed envelope; successful empty results are not errors. Input deserialization failures use `INVALID_PARAMS`, not an opaque router response. When a string is supplied where an object is expected, or the literal string `"null"` causes a type error, the message adds a client-stringification hint: omit optional object parameters instead of passing null. Values are still rejected, never parsed again or coerced; required object parameters must be actual JSON objects.
 
 `scan_exhausted` concerns traversal; `eligible_scan_complete` means a complete fingerprintable source manifest was built; `scope_exhaustive` additionally requires no eligible-file failures or unfinished matching. Hard/ignore/filter exclusions define scope, while policy boundary counts disclose symlink/nested exclusions. Skip records contain exact/saturating counts, at most three examples per reason, and `examples_omitted`. Non-UTF-8 path examples have null actionable path and bounded `path_bytes_hex`, never lossy path strings. Diagnostics/skip examples share a display budget.
 
