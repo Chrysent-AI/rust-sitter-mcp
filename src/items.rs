@@ -651,6 +651,7 @@ pub enum DecisionReason {
     ModuleChainFailure,
     RequiredRewriteRetained,
     OrdinaryTriviaChoice,
+    RemovalGapChoice,
     CrossGroupReferenceReview,
     DestinationBindingConflict,
     SourceBindingAmbiguous,

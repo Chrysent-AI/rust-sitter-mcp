@@ -86,7 +86,7 @@ fn every_supported_kind_and_simultaneous_original_order() {
     assert_eq!(result["plan"]["selected_count"], texts.len());
     let copy = apply(&repo, &result);
     let content = fs::read_to_string(copy.0.join("cases/layout/new_file.rs")).unwrap();
-    assert_eq!(content, texts.join("\n"));
+    assert_eq!(content, format!("{}\n", texts.join("\n")));
     for record in result["plan"]["moves"].as_array().unwrap() {
         assert_eq!(record["item"]["eligibility"], "supported_unit");
     }
@@ -556,7 +556,7 @@ fn unrelated_module_aliases_do_not_block_moves() {
                 assert!(result["plan"]["blockers"].as_array().unwrap().is_empty());
                 let copy = apply(&repo, &result);
                 let applied_root = fs::read_to_string(copy.0.join("cases/layout/lib.rs")).unwrap();
-                assert!(applied_root.starts_with(&root));
+                assert_eq!(applied_root.replace("mod target;\n", ""), root);
                 assert!(
                     fs::read_to_string(copy.0.join(target))
                         .unwrap()

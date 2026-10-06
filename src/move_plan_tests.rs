@@ -80,12 +80,13 @@ fn stopped_decision_grouping_clears_decisions_and_links_with_accounted_omissions
     .unwrap();
     let before = observe(&repo.0);
     let baseline = run(&repo.0, request.clone(), &AtomicBool::new(false));
-    assert_eq!(baseline.plan.decisions.len(), 2);
+    assert_eq!(baseline.plan.decisions.len(), 4); // Two trivia choices and two optional gaps.
     request.trivia_overrides = Some(
         baseline
             .plan
             .decisions
             .iter()
+            .filter(|d| d.reason == DecisionReason::OrdinaryTriviaChoice)
             .enumerate()
             .map(|(index, d)| MoveTriviaOverride {
                 trivia: d.anchors[0].clone(),
@@ -105,7 +106,7 @@ fn stopped_decision_grouping_clears_decisions_and_links_with_accounted_omissions
         assert!(result.plan.applicable, "{result:?}");
         assert!(result.plan.edits.is_some() && result.plan.patch.is_some());
         let decision_count = result.plan.decisions.len();
-        assert_eq!(decision_count, 2, "{result:?}");
+        assert_eq!(decision_count, 3, "{result:?}"); // Carried banners join the removal component.
         let move_links: usize = result.plan.moves.iter().map(|m| m.decision_ids.len()).sum();
         assert!(move_links > 0);
         let deadline = if code == "planning_deadline" {
@@ -238,7 +239,7 @@ fn blocked_multi_thousand_line_batch_caps_details_and_reports_scoped_omissions()
     );
     result.finish_decision_groups(groups);
     assert!(!result.plan.applicable);
-    assert_eq!(result.plan.decisions.len(), 360);
+    assert_eq!(result.plan.decisions.len(), 361);
     assert_eq!(result.plan.trivia_decisions.len(), 300);
     let legacy_bytes = result.wire_bytes();
     result.shape_diagnostics(false, request.limits.preview_count());
@@ -250,24 +251,30 @@ fn blocked_multi_thousand_line_batch_caps_details_and_reports_scoped_omissions()
         lean_bytes < legacy_bytes,
         "legacy={legacy_bytes}, lean={lean_bytes}"
     );
-    assert_eq!(result.plan.decisions.len(), 1);
+    assert_eq!(result.plan.decisions.len(), 2);
     assert_eq!(result.counts.omissions["decisions"], 359);
     assert_eq!(result.counts.omissions["trivia_decisions"], 300);
-    assert_eq!(result.plan.decision_groups[0].count, 360);
+    let blocking_group = result
+        .plan
+        .decision_groups
+        .iter()
+        .position(|g| g.blocks_applicability)
+        .unwrap();
+    assert_eq!(result.plan.decision_groups[blocking_group].count, 360);
     result.fit();
     assert_eq!(result.status, "complete");
     let root = result.root.clone();
     let snapshot = result.snapshot_id.clone();
-    result.plan.decision_groups[0].unresolved_consequence = "x".repeat(100_000);
+    result.plan.decision_groups[blocking_group].unresolved_consequence = "x".repeat(100_000);
     result.limits.response_bytes = 65536;
     result.fit();
     assert_eq!(result.status, "partial");
     assert_eq!(result.root, root);
     assert_eq!(result.snapshot_id, snapshot);
     assert!(!result.coverage.scope_exhaustive);
-    assert_eq!(result.counts.omissions["decisions"], 360);
-    assert_eq!(result.counts.omissions["decision_groups"], 1);
-    assert_eq!(result.counts.omissions["decision_group_references"], 360);
+    assert_eq!(result.counts.omissions["decisions"], 361);
+    assert_eq!(result.counts.omissions["decision_groups"], 2);
+    assert_eq!(result.counts.omissions["decision_group_references"], 361);
     assert!(result.wire_bytes() <= result.limits.response_bytes);
     assert_eq!(observe(&repo.0), before);
 }

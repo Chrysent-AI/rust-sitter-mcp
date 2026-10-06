@@ -1,5 +1,6 @@
 //! One simultaneous, read-only relocation plan with itemized written-binding repairs.
 mod actions;
+pub(crate) mod ergonomics;
 mod prelude;
 use crate::{
     edit::{self, Edit},
@@ -238,6 +239,8 @@ pub struct Decision {
     pub chain_diagnostic_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_uncertainty: Option<items::LexicalUncertainty>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removal_gap: Option<ergonomics::RemovalGapChoice>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -569,6 +572,7 @@ impl MoveEnvelope {
                 blocks_applicability: true,
                 chain_diagnostic_ids: vec![diagnostic.id.clone()],
                 lexical_uncertainty: None,
+                removal_gap: None,
             };
             self.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
             self.plan.chain_diagnostics.push(diagnostic);
@@ -601,6 +605,7 @@ impl MoveEnvelope {
             blocks_applicability: true,
             chain_diagnostic_ids: Vec::new(),
             lexical_uncertainty: None,
+            removal_gap: None,
         };
         self.account(descriptor_bytes(&decision)?)?;
         self.plan.decisions.push(decision);
@@ -1780,6 +1785,7 @@ fn build(
             blocks_applicability: true,
             chain_diagnostic_ids: Vec::new(),
             lexical_uncertainty: need.lexical_uncertainty,
+            removal_gap: None,
         };
         result.account(descriptor_bytes(&decision)?)?;
         result.plan.decisions.push(decision);
@@ -2146,7 +2152,7 @@ fn collect_trivia(
                     },
                     purpose: DecisionPurpose::ReviewDefault,
                 };
-                result.plan.decisions.push(Decision { reason: DecisionReason::OrdinaryTriviaChoice, next_action: action.next_action(), action, id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None });
+                result.plan.decisions.push(Decision { reason: DecisionReason::OrdinaryTriviaChoice, next_action: action.next_action(), action, id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None, removal_gap: None });
                 result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
             }
         }
@@ -2324,7 +2330,7 @@ fn rewrite(
             anchors.first().map(|a| a.range.clone()),
         );
         let route = DecisionAction::rewrite(target.clone());
-        let decision = Decision { reason: DecisionReason::RequiredRewriteRetained, next_action: route.next_action(), action: route, id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new(), lexical_uncertainty:None };
+        let decision = Decision { reason: DecisionReason::RequiredRewriteRetained, next_action: route.next_action(), action: route, id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new(), lexical_uncertainty:None, removal_gap:None };
         result.account(descriptor_bytes(&decision)?)?;
         result.plan.decisions.push(decision);
         decision_ids.push(id);
@@ -2490,14 +2496,14 @@ fn assemble(
             .push(index);
     }
     let mut declarations: BTreeMap<(String, usize), Vec<String>> = BTreeMap::new();
+    let mut declaration_anchors = BTreeMap::new();
     for (path, creation) in creations.iter() {
         items::check(deadline, cancelled)?;
         if creation.link.is_none() {
+            let (at, anchors) = ergonomics::declaration_boundary(&creation.parent, files, parsed);
+            declaration_anchors.insert(path.clone(), anchors);
             declarations
-                .entry((
-                    creation.parent.clone(),
-                    files[&creation.parent].source.len(),
-                ))
+                .entry((creation.parent.clone(), at))
                 .or_default()
                 .push(path.clone());
         }
@@ -2566,6 +2572,7 @@ fn assemble(
             rewrites: Vec::new(),
             item_ids: Vec::new(),
         };
+        let has_declarations = declarations.contains_key(&key);
         let mut import_indexes = imports.remove(&key).unwrap_or_default();
         import_indexes.sort_by_key(|i| authored[*i].2.clone());
         for index in import_indexes {
@@ -2662,6 +2669,14 @@ fn assemble(
                 &ids,
                 None,
             )?;
+            result
+                .plan
+                .rewrites
+                .last_mut()
+                .expect("module audit")
+                .anchors = declaration_anchors
+                .remove(&created_path)
+                .expect("declaration boundary");
             let start = insertion.text.len();
             insertion.text.push_str(&text);
             insertion
@@ -2766,15 +2781,39 @@ fn assemble(
                 copy_run(&mut insertion, files, &run.path, cursor, run.range.end_byte);
             }
         }
-        if at < original.len() && !insertion.text.is_empty() && !insertion.text.ends_with('\n') {
+        if (at < original.len() || !files.contains_key(&path) || has_declarations)
+            && !insertion.text.is_empty()
+            && !insertion.text.ends_with('\n')
+        {
+            let contributors: Vec<_> = selected
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| insertion.item_ids.contains(&s.item.id))
+                .map(|(i, _)| i)
+                .collect();
+            // A CR appended to an EOF line comment becomes part of that CST node,
+            // which would violate its byte-origin proof. LF terminates it without mutation.
+            let tail_eol = insertion
+                .copies
+                .last()
+                .filter(|copy| {
+                    copy.output_range.end_byte == insertion.text.len()
+                        && parsed[&copy.source_path].trivia.iter().any(|t| {
+                            t.range.end == copy.source_range.end_byte
+                                && files[&copy.source_path].source[t.range.clone()]
+                                    .starts_with("//")
+                        })
+                })
+                .map(|_| "\n")
+                .unwrap_or(eol);
             add_separator(
                 request,
                 &mut used,
                 result,
                 &mut insertion,
-                &indexes,
+                &contributors,
                 selected,
-                (eol, "after_payload", format!("insertion:{at}")),
+                (tail_eol, "after_payload", format!("insertion:{at}")),
             )?;
         }
         insertions.push(insertion);
@@ -2810,19 +2849,6 @@ fn assemble(
                 .push((id.clone(), range(start, insertion.text.len())));
             absorbed.insert(id.clone());
         }
-    }
-    if used.len()
-        != request
-            .rewrite_overrides
-            .as_deref()
-            .unwrap_or_default()
-            .len()
-    {
-        return Err(error(
-            "INVALID_REWRITE_OVERRIDE",
-            "unknown/stale synthesis/source target; replay a complete target from this request's audit",
-            "rewrite_overrides",
-        ));
     }
     let mut edits = Vec::new();
     for s in selected {
@@ -2878,7 +2904,30 @@ fn assemble(
         edit.rewrite_ids.push(id.clone());
         edits.push(edit);
     }
-    // Sort deletions first; any consumed overlap already has a blocker. No arbitrary folding.
+    ergonomics::removal_gaps(
+        request,
+        files,
+        parsed,
+        &insertions,
+        &mut edits,
+        &mut used,
+        controls,
+        result,
+    )?;
+    if used.len()
+        != request
+            .rewrite_overrides
+            .as_deref()
+            .unwrap_or_default()
+            .len()
+    {
+        return Err(error(
+            "INVALID_REWRITE_OVERRIDE",
+            "unknown/stale synthesis/source target; replay a complete target from this request's audit",
+            "rewrite_overrides",
+        ));
+    }
+    // Only explicitly accepted removal gaps fold deletions; no arbitrary folding.
     if edit::sort_validate(&mut edits).is_err() {
         result.blocker("OVERLAPPING_EDITS", "consumed runs overlap", None, None);
         return Ok(());
