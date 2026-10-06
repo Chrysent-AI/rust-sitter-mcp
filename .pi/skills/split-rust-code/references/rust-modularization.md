@@ -72,7 +72,7 @@ Rules:
 - Tightly coupled helpers with a single consumer
 - Unit tests alongside tested code (`#[cfg(test)] mod tests`)
 
-**Co-location is grouping advice, not a capability guarantee.** Inline test modules are context-sensitive; `#[cfg]`, `#[derive]`, proc-macro attributes, and relevant macro contexts can block moves. Do not extract their bodies or detach attributes to bypass a blocker.
+**Co-location is grouping advice, not a capability guarantee.** Inline test modules are context-sensitive; `#[cfg]`, `#[derive]`, proc-macro attributes, and relevant macro contexts can block moves. Do not extract their bodies or detach attributes to bypass a blocker. Opt-in standard-prelude proofs cover only the documented unshadowed names; explicit `resolve_semantic` covers only bounded, positively resolved eligible occurrences; `acknowledge_test_consumers` discloses exact same-file inline test consumers without validating them. None resolves generic/trait/macro uncertainty or proves compilation/equivalence. The engine supports only private and `pub(crate)` repairs — it won't generate `pub(super)`/`pub(in ...)` alternatives; review any widening.
 
 ## Anti-patterns
 

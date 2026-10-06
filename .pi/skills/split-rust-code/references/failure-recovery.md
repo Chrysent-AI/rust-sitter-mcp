@@ -8,7 +8,9 @@ Common failures and typed recovery routing for rust-sitter-mcp. Unknown or undia
 - **Blocked plan** (`status: "complete"`, `plan.state: "blocked"`): inspect `plan.blockers[]` and `plan.decisions[]`; artifacts are withheld.
 - **Incomplete advice** (`status` not complete, or omissions/truncation present): inspect `truncation_reasons`, `coverage`, `counts.omissions`.
 
-Accepting one rewrite does not clear independent blockers; unsupported decisions cannot be cleared by accepting unrelated rewrites.
+Accepting unrelated rewrites does not clear independent blockers; unsupported decisions cannot be cleared by accepting unrelated rewrites.
+
+Decision groups may encode `decision_ids` as `{first_id, count}` runs rather than one entry per decision. Read group counts and omissions; `diagnostic_count` controls returned full exemplars, not the underlying decision count.
 
 ## Common error codes
 
@@ -48,14 +50,16 @@ Note: `request_field` route means "a request field or choice is actionable per `
 
 | Reason | Meaning | Agent action |
 |---|---|---|
-| `external_or_missing_binding` | Dependency on external/unresolved name | Semantic-stage; no override. |
-| `member_or_constructor_unproved` | Field/method access needs type knowledge — including method calls (`x.trim()`) and prelude types (`Option`, `String`, `usize`) inside the moved item's own body | Semantic-stage; no override. Expect this on nearly all real Rust functions; probe with 1–2 items before a large batch. |
+| `external_or_missing_binding` | External/unresolved dependency; default blocker. Standard-prelude/builtin-derive proofs or `ra_resolved` may discharge only eligible occurrences when their opt-in conditions are met; otherwise no override. |
+| `member_or_constructor_unproved` | Field/method access needs type knowledge — including method calls (`x.trim()`) and prelude types (`Option`, `String`, `usize`) inside the moved item's own body | Default blocker for unresolved method/field/constructor access. `resolve_semantic` can prove eligible true-inherent/field/constructor access only with explicit configuration and positive access at both ends; trait/generic/macro uncertainty remains blocked. |
 | `lexical_context_unproved` | Binding/pattern/namespace context unknown | Inspect `lexical_uncertainty` as diagnostic evidence only — currently `unsupported_in_engine`; no binding-evidence field resolves it. Change selection or investigate separately. |
 | `macro_context_unexamined` | Required macro expansion context | Unsupported; the engine doesn't expand macros. |
 | `glob_binding_unproved` | Wildcard import provenance unclear | Unsupported; no glob synthesis. |
 | `public_path_change` | Move would change a public/reexported path | No API shim; preserve the exposed path or design compatibility separately. |
 | `required_rewrite_retained` | A required repair was rejected | Re-submit with `accept_default` or a valid `replace`. |
 | `unsupported_unit_kind` / `unsupported_construct` | Context-sensitive or unsupported form | Omit from moves. |
+
+`test_consumer_acknowledged` is a nonblocking disclosed decision, not a blocker or test result; inspect its anchors and run caller tests. `standard_prelude`, `standard_builtin_derive`, and `ra_resolved` are proof classes, not refusal reasons; confirm their anchors and separate coverage counts. Resolution labeling is not compilation.
 
 ### Advice-completeness states (suggest_split)
 
@@ -69,7 +73,7 @@ Note: `request_field` route means "a request field or choice is actionable per `
 
 ## Module-chain failures
 
-All 13 chain reasons appear under `chain_diagnostics` — not only for a wrong `crate_root`: a valid root can still hit unadmitted (`chain_file_unadmitted`), missing (`chain_file_missing`), conditional (`conditional_declaration`), path-attribute, competing (`competing_declarations`/`competing_file_layout`), or inline (`inline_module_layout`) hops. Follow the diagnostic's named failing hop; `relation` distinguishes `direct` observations from mere `possible_ancestor` obstructions.
+Chain reasons appear under `chain_diagnostics`, including `macro_generated_module_tree` and `root_attribute_chain_uncertainty`; named refusals explain the cause but do not offer an override. A valid root can still hit unadmitted (`chain_file_unadmitted`), missing (`chain_file_missing`), conditional (`conditional_declaration`), path-attribute, competing (`competing_declarations`/`competing_file_layout`), or inline (`inline_module_layout`) hops. Follow the diagnostic's named failing hop; `relation` distinguishes `direct` observations from mere `possible_ancestor` obstructions.
 
 ## Rewrite overrides
 

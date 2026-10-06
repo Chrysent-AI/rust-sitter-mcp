@@ -29,6 +29,10 @@ Every change that adds or re-pins a dependency requires a short research step BE
 - Edits are **lossless**: byte-exact splices in original coordinates; never regenerate or reformat source.
 - Anything the engine cannot prove (trivia ownership, binding identity, module context) becomes an explicit, overridable decision or a typed blocker — never a silent guess.
 
+## Skill lockstep (binding)
+
+The bundled agent skill at `.pi/skills/split-rust-code/` is a product surface: agents enter through it. **Any material or contract change to the MCP tools** — new/changed request flags, response fields or schema versions, decision reasons, refusal vocabulary, capability boundaries — **requires a same-change review of the skill and its references for accuracy**, updating it in the same commit (or an immediately following one) when behavior the skill describes has changed. A stale skill silently degrades every agent consumer.
+
 ## CI and platforms
 
 CI runs on Linux amd64 and arm64 only (macOS cloud builds are intentionally excluded for cost — macOS is validated by the local gated workflow). Do not add macOS runners to workflows.
