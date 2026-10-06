@@ -357,6 +357,109 @@ fn test_consumer_lexical_acknowledgment_keeps_written_conflicts_blocking() {
 }
 
 #[test]
+fn test_consumer_hoist_acknowledgment_keeps_value_item_in_type_position_blocking() {
+    let repo = fixture(include_str!(
+        "../fixtures/test_consumers/namespace_mismatch.rs"
+    ));
+    let mut args = request(
+        &repo,
+        json!([entry(
+            &repo,
+            "const LIMIT: usize = 4;",
+            new("cases/layout/moved.rs")
+        )]),
+    );
+    args["acknowledge_test_consumers"] = json!(true);
+    let value = run(&repo, args);
+    code(&value, "MODULE_CONTEXT");
+    let reference = value["plan"]["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["anchors"][0]["expected_text"] == "LIMIT")
+        .unwrap();
+    assert_eq!(reference["reason"], "conditional_or_inherited_context");
+    assert_eq!(reference["blocks_applicability"], true);
+    assert_eq!(reference["action"]["route"], "unsupported_in_engine");
+    assert_eq!(
+        reference["lexical_uncertainty"]["witness_relation"],
+        "hoist_possibility"
+    );
+}
+
+#[test]
+fn test_consumer_hoist_acknowledgment_accepts_type_items_in_type_position() {
+    for selected in ["struct LIMIT;", "enum LIMIT { Value }"] {
+        let repo = fixture(&format!(
+            "{selected}\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ let _: LIMIT = value; assert_eq!(1, 1); }} }}\n"
+        ));
+        let mut args = request(
+            &repo,
+            json!([entry(&repo, selected, new("cases/layout/moved.rs"))]),
+        );
+        args["acknowledge_test_consumers"] = json!(true);
+        let value = run(&repo, args);
+        assert_eq!(value["plan"]["applicable"], true, "{selected}: {value}");
+        assert_eq!(value["plan"]["integrity"]["semantic"], "not_performed");
+        let risks = acknowledged(&value);
+        let reference = risks
+            .iter()
+            .find(|d| d["anchors"][0]["expected_text"] == "LIMIT")
+            .unwrap();
+        assert_eq!(reference["blocks_applicability"], false);
+        assert_eq!(
+            reference["lexical_uncertainty"]["witness_relation"],
+            "hoist_possibility"
+        );
+        apply(&repo, &value);
+    }
+}
+
+#[test]
+fn test_consumer_hoist_acknowledgment_checks_type_item_value_constructors() {
+    for (selected, compatible) in [
+        ("struct LIMIT;", true),
+        ("struct LIMIT(usize);", true),
+        ("struct LIMIT {}", false),
+        ("enum LIMIT { Value }", false),
+        ("union LIMIT { value: usize }", false),
+        ("trait LIMIT {}", false),
+        ("type LIMIT = usize;", false),
+    ] {
+        let repo = fixture(&format!(
+            "{selected}\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ let n = LIMIT; assert_eq!(1, 1); }} }}\n"
+        ));
+        let mut args = request(
+            &repo,
+            json!([entry(&repo, selected, new("cases/layout/moved.rs"))]),
+        );
+        args["acknowledge_test_consumers"] = json!(true);
+        let value = run(&repo, args);
+        assert_eq!(
+            value["plan"]["applicable"], compatible,
+            "{selected}: {value}"
+        );
+        let reference = value["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["anchors"][0]["expected_text"] == "LIMIT")
+            .unwrap();
+        assert_eq!(reference["blocks_applicability"], !compatible);
+        assert_eq!(
+            reference["lexical_uncertainty"]["witness_relation"],
+            "hoist_possibility"
+        );
+        if compatible {
+            assert_eq!(reference["reason"], "test_consumer_acknowledged");
+        } else {
+            withheld(&value);
+            assert_eq!(reference["action"]["route"], "unsupported_in_engine");
+        }
+    }
+}
+
+#[test]
 fn test_consumer_acknowledgment_does_not_clear_stale_anchors_or_broken_structure() {
     for (source, expected) in [
         (

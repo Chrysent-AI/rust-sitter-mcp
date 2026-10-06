@@ -323,7 +323,8 @@ and super-import/glob classifier used by split advice; move acknowledgment also
 covers macro-argument candidates such as `assert!` and `assert_eq!` without
 expanding or rewriting their tokens. It also covers bare test references carrying
 a same-block statement-macro `hoist_possibility` witness, including a later macro
-statement, when the written super import reaches the selected file and a separate
+statement, when the written super import reaches the selected file, the reference's
+written type/value namespace is compatible with the selected item, and a separate
 written-binding audit finds no competing local or other lexical uncertainty.
 The witness remains disclosed on the acknowledged decision; this is acceptance
 of expansion risk, not a proof that the macro cannot introduce bindings.

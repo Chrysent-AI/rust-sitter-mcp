@@ -63,6 +63,34 @@ pub(crate) fn test_scope(
     Ok(Some(scope))
 }
 
+/// Only written namespace compatibility, not binding identity or constructor access.
+fn hoist_namespace_compatible(reference: Node<'_>, item: &Item, data: &ParsedFile) -> bool {
+    match reference.kind() {
+        "type_identifier" => matches!(
+            item.kind.as_str(),
+            "struct_item" | "enum_item" | "union_item" | "trait_item" | "type_item"
+        ),
+        "identifier" => match item.kind.as_str() {
+            "function_item" | "const_item" | "static_item" => true,
+            "struct_item" => data
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(
+                    item.span.range.start_byte,
+                    item.span.range.end_byte,
+                )
+                .is_some_and(|declaration| {
+                    declaration.kind() == "struct_item"
+                        && declaration
+                            .child_by_field_name("body")
+                            .is_none_or(|body| body.kind() == "ordered_field_declaration_list")
+                }),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// A residual consumer need can be acknowledged only for its own selected file,
 /// never for an attribute veto, caller repair failure, or another decision class.
 pub(crate) fn test_consumer(
@@ -191,8 +219,11 @@ pub(crate) fn test_consumer(
             let targets: Vec<_> = selected
                 .iter()
                 .filter(|(_, item, _)| need.item_ids.contains(&item.id))
-                .filter_map(|(_, item, _)| item.name.as_deref())
-                .map(|name| name.trim_start_matches("r#"))
+                .filter_map(|(_, item, _)| {
+                    item.name
+                        .as_deref()
+                        .map(|name| (name.trim_start_matches("r#"), item))
+                })
                 .collect();
             let mut stack = vec![consumer];
             let mut observed = false;
@@ -210,8 +241,15 @@ pub(crate) fn test_consumer(
                 }
                 let spelling = source[reference.byte_range()].trim_start_matches("r#");
                 if matches!(reference.kind(), "identifier" | "type_identifier")
-                    && targets.contains(&spelling)
+                    && targets.iter().any(|(name, _)| *name == spelling)
                 {
+                    if hoist_risk
+                        && targets.iter().any(|(name, item)| {
+                            *name == spelling && !hoist_namespace_compatible(reference, item, data)
+                        })
+                    {
+                        return Ok(false);
+                    }
                     observed = true;
                     let mut path = reference;
                     while let Some(parent) = path.parent().filter(|p| {
