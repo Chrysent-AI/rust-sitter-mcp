@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Replay frozen move_item batches without applying any returned artifacts."""
+import argparse
+from collections import Counter
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import selectors
+import subprocess
+import sys
+import tempfile
+import time
+
+CORPUS = Path(__file__).resolve().parent.parent / "tests/fixtures/replay-corpus"
+COLUMNS = ("baseline-off", "baseline-on", "candidate-off", "candidate-on")
+SEGMENTS = ("member/constructor", "macro", "external-binding", "conditional/derive",
+            "cfg-test/module-context", "glob", "other")
+
+
+def digest(path):
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def git(repo, *args):
+    # Keep an inherited committing index/worktree from redirecting observations.
+    environment = os.environ.copy()
+    for key in tuple(environment):
+        if key.startswith("GIT_"):
+            del environment[key]
+    return subprocess.check_output(
+        ["git", "--no-optional-locks", "-C", str(repo), *args],
+        env=environment, timeout=30)
+
+
+def relative_file(repo, name):
+    path = Path(name)
+    if path.is_absolute() or ".." in path.parts or ".git" in path.parts:
+        raise ValueError(f"unsafe corpus path: {name}")
+    for parent in (repo / path, *(repo / path).parents):
+        if parent == repo:
+            break
+        if parent.is_symlink():
+            raise ValueError(f"symlink in corpus path: {name}")
+    return repo / path
+
+
+def snapshot(request):
+    """Hash every possible source/ignore input, including absent destinations."""
+    repo = Path(request["repo_path"]).resolve(strict=True)
+    names = {os.fsdecode(name) for name in
+             git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard").split(b"\0")
+             if name and (name.endswith(b".rs") or Path(os.fsdecode(name)).name == ".gitignore")}
+    names.add(request["crate_root"])
+    for move in request["moves"]:
+        names.add(move["item"]["path"])
+        names.add(move["destination"]["path"])
+        if "parent_path" in move["destination"]:
+            names.add(move["destination"]["parent_path"])
+    # An ignore file can be absent/ignored by Git but still read by discovery.
+    for name in tuple(names):
+        names.update(str(parent / ".gitignore") for parent in Path(name).parents)
+    hashes = {}
+    for name in sorted(names):
+        path = relative_file(repo, name)
+        hashes[name] = digest(path) if path.exists() else None
+    status = git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    return hashes, status
+
+
+def corpus_inputs(request, hashes):
+    scopes = [Path(path) for path in request["paths"]]
+    return {name: value for name, value in hashes.items()
+            if any(Path(name).is_relative_to(scope) for scope in scopes)
+            or Path(name).name == ".gitignore"}
+
+
+class Client:
+    """Line-delimited MCP JSON-RPC; stdin remains open until the reply arrives."""
+    def __init__(self, binary, timeout):
+        self.timeout = timeout
+        self.id = 0
+        self.buffer = b""
+        self.log = tempfile.TemporaryFile()
+        self.process = subprocess.Popen([str(binary)], stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=self.log)
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+
+    def __enter__(self):
+        try:
+            self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                   "clientInfo": {"name": "replay-unlocks", "version": "1"}})
+            self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def send(self, message):
+        self.process.stdin.write((json.dumps(message) + "\n").encode())
+        self.process.stdin.flush()
+
+    def rpc(self, method, params):
+        self.id += 1
+        self.send({"jsonrpc": "2.0", "id": self.id, "method": method, "params": params})
+        deadline = time.monotonic() + self.timeout
+        while True:
+            if b"\n" in self.buffer:
+                line, self.buffer = self.buffer.split(b"\n", 1)
+                reply = json.loads(line)
+                if "id" not in reply:  # Server notifications are not replies.
+                    continue
+                if reply["id"] != self.id or "error" in reply:
+                    raise ValueError(f"JSON-RPC failed: {reply}")
+                return reply["result"]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not self.selector.select(remaining):
+                raise TimeoutError(f"{method} timed out after {self.timeout}s")
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk:
+                raise ValueError(f"server exited before {method} replied")
+            self.buffer += chunk
+            if len(self.buffer) > 64 * 1024 * 1024:
+                raise ValueError("JSON-RPC response exceeds rig's 64 MiB safety cap")
+
+    def call(self, name, request):
+        result = self.rpc("tools/call", {"name": name, "arguments": request})
+        value = result["structuredContent"]
+        text = json.loads(result["content"][0]["text"])
+        if value != text or result.get("isError") or value.get("error"):
+            raise ValueError(f"{name} returned an error or inconsistent content: {value.get('error')}")
+        return value
+
+    def close(self):
+        self.process.stdin.close()
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+        self.selector.close()
+        self.process.stdout.close()
+        self.log.close()
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def segment(group):
+    reason, category = group["reason"], group["category"]
+    if reason == "module_chain_failure" or category == "module_context":
+        return "cfg-test/module-context"
+    return {"member_or_constructor_unproved": "member/constructor",
+            "macro_context_unexamined": "macro",
+            "external_or_missing_binding": "external-binding",
+            "conditional_or_inherited_context": "conditional/derive",
+            "glob_binding_unproved": "glob"}.get(reason, "other")
+
+
+def measure(value, request):
+    plan = value["plan"]
+    # Compact previews may omit individual decisions/moves. Groups retain exact
+    # occurrence totals; display-only truncation is not incomplete analysis.
+    if value["status"] != "complete" or any(
+            reason not in ("diagnostic_count", "trivia_scope")
+            for reason in value["truncation_reasons"]):
+        raise ValueError(f"incomplete analysis: {value['status']} {value['truncation_reasons']}")
+    if plan["integrity"]["semantic"] != "not_performed":
+        raise ValueError("unexpected semantic verification claim")
+    selected = value["counts"]["selected_items"]
+    if selected != len(request["moves"]) or type(plan["applicable"]) is not bool:
+        raise ValueError("selected-item count/applicability mismatch")
+    counts, raw = Counter(), Counter()
+    for group in plan["decision_groups"]:
+        if group["blocks_applicability"]:
+            counts[segment(group)] += group["count"]
+            raw[f"{group['category']}/{group['reason']}"] += group["count"]
+    applicable = plan["applicable"]
+    if applicable and (counts or any(plan[key] is None for key in
+                                    ("edits", "created_files", "patch"))):
+        raise ValueError("applicable plan has blockers or missing artifacts")
+    selected_bytes = sum(move["item"]["range"]["end_byte"] -
+                         move["item"]["range"]["start_byte"] for move in request["moves"])
+    return {"applicable": applicable, "selected_items": selected,
+            "selected_bytes": selected_bytes,
+            "applicable_item_estimate": selected if applicable else 0,
+            "applicable_byte_estimate": selected_bytes if applicable else 0,
+            "blockers": dict(counts), "raw_reasons": dict(raw),
+            "coverage": value["coverage"], "omissions": value["counts"]["omissions"],
+            "display_truncation": value["truncation_reasons"]}
+
+
+def replay(binary, entry, prelude, timeout):
+    request = copy.deepcopy(entry["request"])
+    request["assume_standard_prelude"] = prelude
+    before = snapshot(request)
+    frozen = {file["path"]: file["sha256"] for file in entry["source_sha256"]}
+    observed = corpus_inputs(request, before[0])
+    if observed != frozen:
+        changed = sorted(name for name in observed.keys() | frozen.keys()
+                         if name not in observed or name not in frozen or observed[name] != frozen[name])
+        raise ValueError(f"frozen corpus drift in {entry['id']}: {changed}")
+    for move in request["moves"]:
+        anchor = move["item"]
+        data = relative_file(Path(request["repo_path"]), anchor["path"]).read_bytes()
+        span = anchor["range"]
+        if data[span["start_byte"]:span["end_byte"]] != anchor["expected_text"].encode():
+            raise ValueError(f"stale anchor in {entry['id']}: {anchor['path']}")
+    try:
+        with Client(binary, timeout) as client:
+            value = client.call("move_item", request)
+    finally:
+        after = snapshot(request)
+        if after != before:
+            changed = sorted(name for name in before[0].keys() | after[0].keys()
+                             if before[0].get(name) != after[0].get(name))
+            raise ValueError(f"READ-ONLY VIOLATION in {entry['id']}: {changed}; "
+                             f"Git status changed={before[1] != after[1]}")
+    if any(file["path"] not in before[0] for file in value["plan"]["base_files"]):
+        raise ValueError("server reported a base file outside the read-only observation")
+    result = measure(value, request)
+    result["read_only_files_checked"] = len(before[0])
+    return result
+
+
+def table(headers, rows):
+    print("| " + " | ".join(headers) + " |")
+    print("| " + " | ".join("---" for _ in headers) + " |")
+    for row in rows:
+        print("| " + " | ".join(str(cell) for cell in row) + " |")
+
+
+def report(results, binaries):
+    for name, binary in zip(("baseline", "candidate"), binaries):
+        print(f"{name}: {binary['path']} — {binary['version']} — sha256={binary['sha256']}")
+    print("\nApplicability (whole batches; no partial-item unlock claims)")
+    table(("codebase / batch", *COLUMNS),
+          [(f"{entry['codebase']} / {entry['id']}",
+            *(str(entry["runs"][col]["applicable"]).lower() for col in COLUMNS))
+           for entry in results])
+    print("\nPer-entry counts (blocking decision occurrences, not group count)")
+    table(("batch", "variant", "selected items/bytes", "applicable estimate items/bytes", *SEGMENTS),
+          [(entry["id"], col, f"{run['selected_items']}/{run['selected_bytes']}",
+            f"{run['applicable_item_estimate']}/{run['applicable_byte_estimate']}",
+            *(run["blockers"].get(reason, 0) for reason in SEGMENTS))
+           for entry in results for col, run in entry["runs"].items()])
+    print("\nPer-codebase applicability and newly-applicable/regressed batches (A → B)")
+    for codebase in sorted({entry["codebase"] for entry in results} | {"ALL"}):
+        entries = [entry for entry in results if codebase == "ALL" or entry["codebase"] == codebase]
+        totals = [sum(entry["runs"][col]["applicable"] for entry in entries) for col in COLUMNS]
+        newly, regressed = [], []
+        for off, on in ((0, 2), (1, 3)):
+            newly.append(sum(not entry["runs"][COLUMNS[off]]["applicable"] and
+                             entry["runs"][COLUMNS[on]]["applicable"] for entry in entries))
+            regressed.append(sum(entry["runs"][COLUMNS[off]]["applicable"] and
+                                 not entry["runs"][COLUMNS[on]]["applicable"] for entry in entries))
+        print(f"{codebase}: {totals}/{len(entries)} batches; newly off/on={newly}; regressed off/on={regressed}")
+        aggregates = []
+        for col in COLUMNS:
+            total = Counter()
+            for entry in entries:
+                total.update(entry["runs"][col]["blockers"])
+            aggregates.append(total)
+        table((f"{codebase} reason", *COLUMNS, "delta off", "delta on"),
+              [(reason, *(total[reason] for total in aggregates),
+                aggregates[2][reason] - aggregates[0][reason],
+                aggregates[3][reason] - aggregates[1][reason]) for reason in SEGMENTS])
+    print("\nResidual blocker-combination frequencies (batches, not occurrences)")
+    for col in COLUMNS:
+        combinations = Counter(" + ".join(reason for reason in SEGMENTS if
+                                          entry["runs"][col]["blockers"].get(reason)) or "none"
+                               for entry in results)
+        print(f"{col}: {json.dumps(dict(sorted(combinations.items())))}")
+    print("\nRead-only: SHA-256 source/ignore inputs + absent destinations and Git status unchanged "
+          f"for all {len(results) * 4} requests. semantic: not_performed.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("baseline", type=Path)
+    parser.add_argument("candidate", type=Path)
+    parser.add_argument("filter", nargs="?", default="", help="substring of batch id, codebase or label")
+    parser.add_argument("--corpus", type=Path, default=CORPUS)
+    parser.add_argument("--timeout", type=float, default=120, help="seconds per JSON-RPC request")
+    parser.add_argument("--json", action="store_true", help="machine-readable report instead of tables")
+    parser.add_argument("--repo", action="append", default=[], metavar="CODEBASE=PATH",
+                        help="relocate a frozen repository without regenerating anchors")
+    args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    roots = {}
+    for mapping in args.repo:
+        codebase, separator, path = mapping.partition("=")
+        if not separator or not path:
+            parser.error("--repo requires CODEBASE=PATH")
+        roots[codebase] = str(Path(path).expanduser().resolve(strict=True))
+    entries = [json.loads(path.read_text()) for path in sorted(args.corpus.glob("*.json"))]
+    entries = [entry for entry in entries if args.filter.lower() in
+               " ".join((entry["id"], entry["codebase"], entry["label"])).lower()]
+    if not entries:
+        parser.error("corpus filter matched no batches")
+    binaries = []
+    for path in (args.baseline, args.candidate):
+        path = path.expanduser().resolve(strict=True)
+        version = subprocess.check_output([str(path), "--version"], timeout=10).decode().strip()
+        binaries.append({"path": str(path), "version": version, "sha256": digest(path)})
+    results = []
+    for entry in entries:
+        if entry["codebase"] in roots:
+            entry["request"]["repo_path"] = roots[entry["codebase"]]
+        print(f"replaying {entry['id']}: {entry['label']}", file=sys.stderr)
+        runs = {}
+        for col, binary in zip(COLUMNS, (binaries[0], binaries[0], binaries[1], binaries[1])):
+            runs[col] = replay(binary["path"], entry, col.endswith("-on"), args.timeout)
+        results.append({"id": entry["id"], "codebase": entry["codebase"], "label": entry["label"],
+                        "runs": runs})
+    # Fail rather than attribute a binary replacement during the run to one version.
+    if any(digest(Path(binary["path"])) != binary["sha256"] for binary in binaries):
+        raise ValueError("server binary changed during replay")
+    if args.json:
+        print(json.dumps({"columns": COLUMNS, "binaries": binaries, "results": results}, indent=2))
+    else:
+        report(results, binaries)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print(f"replay-unlocks: {error}", file=sys.stderr)
+        sys.exit(1)
