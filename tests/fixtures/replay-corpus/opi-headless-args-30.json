@@ -1,0 +1,1077 @@
+{
+  "id": "target-headless-args-30",
+  "codebase": "target",
+  "label": "Recorded 30-move headless argument extraction",
+  "source_commit": "ba6b1003dac17139100ace3377a096f92a07bff5",
+  "provenance": "Copied without changing arguments from /tmp/target-args-moves.json on 2026-10-06.",
+  "source_sha256": [
+    {
+      "path": ".gitignore",
+      "sha256": "2ed47d3dab144036c8939a4b52b6ee5ec56c8221cbf22081faec9e2ff433949b"
+    },
+    {
+      "path": "benchmarks/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "benchmarks/terminus-2.1/.gitignore",
+      "sha256": "90eafac535a388eb84b99414b257212570dfa7aee61ee2519d7928fe364e4c23"
+    },
+    {
+      "path": "crates/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/build/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/bin/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/bin/rust_loc_budget/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/db/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/db/readonly/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/db/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/config/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/config/status/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/config/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/status/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/config/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/config/theme/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/admission.rs",
+      "sha256": "93c656b6f3948a45966277a81db4684d249fbb81c249a9adfdfbd90c67c31342"
+    },
+    {
+      "path": "crates/target/src/headless/answer.rs",
+      "sha256": "be64902965466569cdcf6d4733c766d3e26fe021a5f586efd1e687452f17d408"
+    },
+    {
+      "path": "crates/target/src/headless/args.rs",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/cleanup.rs",
+      "sha256": "3a3fdfb918fd16a24923011e10bdf55b7732ef59503981186c08a5b145b44918"
+    },
+    {
+      "path": "crates/target/src/headless/deadline.rs",
+      "sha256": "eb7a2a7ae4bbc03c9f4e40b963fa7d179e00831e0c8683fbe458bb4b1d67e84b"
+    },
+    {
+      "path": "crates/target/src/headless/diagnostics.rs",
+      "sha256": "c145cfbe505fa31fd69b61a311d9bce52b086e2ead96a2958c881ad4969d4ada"
+    },
+    {
+      "path": "crates/target/src/headless/diagnostics/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/diagnostics/sensitive.rs",
+      "sha256": "a8fd2e1100ae2c30682466d37437ed6030477eeaeedfa46ae124865d20e3d4ad"
+    },
+    {
+      "path": "crates/target/src/headless/mod.rs",
+      "sha256": "313c3f4cb7dff2d94931dfdd2866fc42d85f557ebf7fe17cad95f7715c05f21b"
+    },
+    {
+      "path": "crates/target/src/headless/recovery.rs",
+      "sha256": "46a9ef656761865e87c8735fa791b4719cb4a411e4e28a0d5e09102158778174"
+    },
+    {
+      "path": "crates/target/src/headless/result.rs",
+      "sha256": "6841d9c667fca4675fb0976ee27e7763cf07cd345cab340666ed733171c2d3f0"
+    },
+    {
+      "path": "crates/target/src/headless/result/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/result/bounds.rs",
+      "sha256": "a9eca5956a7f878811667846ccfa9d7b21454b5ccee76bb352ce2b7a1f9ac6ab"
+    },
+    {
+      "path": "crates/target/src/headless/result/capture.rs",
+      "sha256": "f2eb011e2ceed40b12befe61b22baa6a213a53cfa93c832f1b048c880441d47e"
+    },
+    {
+      "path": "crates/target/src/headless/result/capture_tests.rs",
+      "sha256": "0ed291adb3b7dea94707bc6e95d3eb11974bfec6088c1fdd4ec9d18b09f2f46e"
+    },
+    {
+      "path": "crates/target/src/headless/result/child_session.rs",
+      "sha256": "3602d62eca50bfbd589d08cc21e1665e438fe71493fcbb4767f24395651c8335"
+    },
+    {
+      "path": "crates/target/src/headless/result/child_session_tests.rs",
+      "sha256": "2185b9156e09d3b8e186bc545e2faa47dd9382863a23e4ccba872e9cf420d4d4"
+    },
+    {
+      "path": "crates/target/src/headless/result/publication.rs",
+      "sha256": "2fe8b38b0b81932bf78990ff62f82bfaceb299fe90af744c50cd127535f77164"
+    },
+    {
+      "path": "crates/target/src/headless/result/publication_tests.rs",
+      "sha256": "dfe18a4983828f960056de3ec9bcad261b34500d1eb450442a93bc29f12c202b"
+    },
+    {
+      "path": "crates/target/src/headless/result/rendering.rs",
+      "sha256": "0ac153801489022e7b491027374d0289717dcc70c0368b3ab90fc895246366a2"
+    },
+    {
+      "path": "crates/target/src/headless/result/rendering_tests.rs",
+      "sha256": "662aadd8dbb898d4bd40f9c1b0b266206b802469274c153241520e22177bf1c6"
+    },
+    {
+      "path": "crates/target/src/headless/result/tests.rs",
+      "sha256": "6417c885ceaccc31f19ab1266d9fcc9c52a1086fc9347f84a71b95897595604d"
+    },
+    {
+      "path": "crates/target/src/headless/result/validation.rs",
+      "sha256": "f748a40fd9ea7d1491c4a62b3c3d29bcfec15b887c100b20302ca331db31bd2c"
+    },
+    {
+      "path": "crates/target/src/headless/signal.rs",
+      "sha256": "e3683013ae3ec23a7a1bb5506339e904edabdd9ba222e87e02b5bc6557309eb6"
+    },
+    {
+      "path": "crates/target/src/headless/supervisor.rs",
+      "sha256": "9ffe8acd01f2310b67aa002fe998f90be84c87bed1eb90db277f414502dbb3ef"
+    },
+    {
+      "path": "crates/target/src/headless/worktree.rs",
+      "sha256": "0a860c0f59ce88cd3dab1ddbdae857a57e26ad286eb1d3c3d889e7c25b50944d"
+    },
+    {
+      "path": "crates/target/src/install/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/lib.rs",
+      "sha256": "ca344b322226229730ee7aa47584f57a794be93826c5d033d779277b0036a147"
+    },
+    {
+      "path": "crates/target/src/main/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/mcp_config/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/pi/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/pi/client/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/pi/event_log/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/bridge/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/bridge/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/persistence/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/persistence/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/command_verifier/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/operations/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/operations/verification_flow/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/session_index/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/session_index/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/specs/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/stack/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/stack/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/subagent/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/subagent/spawner/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/subagent/spawner/claim_review_adapter/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/trust/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/external_editor/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/actions/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/input/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/overlay/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/overlay/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control/completion/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/message_history/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/protocol/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/render/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/output_detail/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/pi_outbox/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_draft_editor/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/presentation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_recovery/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_claim_review/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tickets_browser/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/input/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/input/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/list/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/prompt/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/bold/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/chip/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/safe_format/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_draft_document/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_runtime/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/inline/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/owner/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/worker/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/selector/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/session_selector/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/status_line/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/terminal/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/terminal/syntax_panic_tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/terminal_title/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tree_view/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/utils/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/utils/compact_bash/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/utils/session_report/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/worktree/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/worktree/registry/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/tests/.gitignore",
+      "sha256": null
+    }
+  ],
+  "request": {
+    "repo_path": "/Users/said/Dev/vibe/target",
+    "crate_root": "crates/target/src/lib.rs",
+    "paths": [
+      "crates/target/src/lib.rs",
+      "crates/target/src/headless"
+    ],
+    "moves": [
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 1912,
+            "start_byte": 1870
+          },
+          "expected_text": "const MAX_PROMPT_BYTES: usize = 1_048_576;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 1948,
+            "start_byte": 1913
+          },
+          "expected_text": "const MAX_MODEL_BYTES: usize = 256;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2000,
+            "start_byte": 1949
+          },
+          "expected_text": "pub(super) const MAX_SUMMARY_BYTES: usize = 65_536;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2032,
+            "start_byte": 2001
+          },
+          "expected_text": "const MAX_EVIDENCE: usize = 64;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2066,
+            "start_byte": 2033
+          },
+          "expected_text": "const MAX_KIND_BYTES: usize = 64;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2114,
+            "start_byte": 2067
+          },
+          "expected_text": "pub(super) const MAX_PATH_BYTES: usize = 4_096;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2169,
+            "start_byte": 2115
+          },
+          "expected_text": "pub(super) const MAX_DESCRIPTION_BYTES: usize = 8_192;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2217,
+            "start_byte": 2170
+          },
+          "expected_text": "pub(super) const MAX_REASON_BYTES: usize = 128;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2270,
+            "start_byte": 2218
+          },
+          "expected_text": "pub(super) const MAX_QUESTION_BYTES: usize = 65_536;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2323,
+            "start_byte": 2271
+          },
+          "expected_text": "pub(super) const MAX_CONTEXT_BYTES: usize = 131_072;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2365,
+            "start_byte": 2324
+          },
+          "expected_text": "pub(super) const MAX_CHOICES: usize = 32;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2415,
+            "start_byte": 2366
+          },
+          "expected_text": "pub(super) const MAX_CHOICE_ID_BYTES: usize = 64;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2471,
+            "start_byte": 2416
+          },
+          "expected_text": "pub(super) const MAX_CHOICE_LABEL_BYTES: usize = 1_024;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 2512,
+            "start_byte": 2472
+          },
+          "expected_text": "const DEFAULT_TIMEOUT_SECS: u64 = 3_600;"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 14968,
+            "start_byte": 14854
+          },
+          "expected_text": "struct EvidenceArgs {\n    kind: String,\n    path: String,\n    #[serde(default)]\n    description: Option<String>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 15133,
+            "start_byte": 15037
+          },
+          "expected_text": "struct OutcomeArgs {\n    status: String,\n    summary: String,\n    evidence: Vec<EvidenceArgs>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 15313,
+            "start_byte": 15202
+          },
+          "expected_text": "struct ChoiceArgs {\n    id: String,\n    label: String,\n    #[serde(default)]\n    description: Option<String>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 15562,
+            "start_byte": 15382
+          },
+          "expected_text": "struct InterventionArgs {\n    reason: String,\n    question: String,\n    #[serde(default)]\n    context: Option<String>,\n    #[serde(default)]\n    choices: Option<Vec<ChoiceArgs>>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 15712,
+            "start_byte": 15564
+          },
+          "expected_text": "fn bounded_required(value: &str, max_bytes: usize) -> bool {\n    let trimmed = value.trim();\n    !trimmed.is_empty() && trimmed.len() <= max_bytes\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 15839,
+            "start_byte": 15714
+          },
+          "expected_text": "fn bounded_optional(value: Option<&str>, max_bytes: usize) -> bool {\n    value.is_none_or(|value| value.len() <= max_bytes)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 16296,
+            "start_byte": 15981
+          },
+          "expected_text": "fn bounded_synthetic_text(value: Option<&str>, max_bytes: usize) -> Option<String> {\n    let value = value?.trim();\n    if value.is_empty() {\n        return None;\n    }\n    let mut end = value.len().min(max_bytes);\n    while !value.is_char_boundary(end) {\n        end -= 1;\n    }\n    Some(value[..end].to_owned())\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 16783,
+            "start_byte": 16298
+          },
+          "expected_text": "fn valid_outcome(args: &OutcomeArgs) -> bool {\n    matches!(args.status.as_str(), \"completed\" | \"failed\")\n        && bounded_required(&args.summary, MAX_SUMMARY_BYTES)\n        && args.evidence.len() <= MAX_EVIDENCE\n        && args.evidence.iter().all(|entry| {\n            bounded_required(&entry.kind, MAX_KIND_BYTES)\n                && bounded_required(&entry.path, MAX_PATH_BYTES)\n                && bounded_optional(entry.description.as_deref(), MAX_DESCRIPTION_BYTES)\n        })\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 17924,
+            "start_byte": 16785
+          },
+          "expected_text": "fn valid_intervention(args: &InterventionArgs) -> bool {\n    bounded_required(&args.reason, MAX_REASON_BYTES)\n        && bounded_required(&args.question, MAX_QUESTION_BYTES)\n        && bounded_optional(args.context.as_deref(), MAX_CONTEXT_BYTES)\n        && args.choices.as_ref().is_none_or(|choices| {\n            choices.len() <= MAX_CHOICES\n                && choices.iter().enumerate().all(|(index, choice)| {\n                    bounded_required(&choice.id, MAX_CHOICE_ID_BYTES)\n                        && bounded_required(&choice.label, MAX_CHOICE_LABEL_BYTES)\n                        && bounded_optional(choice.description.as_deref(), MAX_DESCRIPTION_BYTES)\n                        && choices[..index]\n                            .iter()\n                            .all(|prior| prior.id.trim() != choice.id.trim())\n                })\n        })\n        // The terminal protocol has broader field maxima than the frozen\n        // persistence schema. Reject values that cannot be durably recorded\n        // before the action is latched and settlement can begin.\n        && intervention_fits_schema(&new_intervention(args.clone()))\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 18518,
+            "start_byte": 17926
+          },
+          "expected_text": "fn new_intervention(args: InterventionArgs) -> NewIntervention {\n    NewIntervention {\n        reason: args.reason.trim().to_owned(),\n        question: args.question.trim().to_owned(),\n        context: args.context,\n        choices: args.choices.map(|choices| {\n            choices\n                .into_iter()\n                .map(|choice| InterventionChoice {\n                    id: choice.id.trim().to_owned(),\n                    label: choice.label.trim().to_owned(),\n                    description: choice.description,\n                })\n                .collect()\n        }),\n    }\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 21533,
+            "start_byte": 18751
+          },
+          "expected_text": "fn synthetic_intervention_from_ui(method: &str, fields: &Value) -> Option<NewIntervention> {\n    if !matches!(method, \"select\" | \"confirm\" | \"input\" | \"editor\") {\n        return None;\n    }\n    let title = bounded_synthetic_text(fields.get(\"title\").and_then(Value::as_str), 16_384);\n    let message = bounded_synthetic_text(fields.get(\"message\").and_then(Value::as_str), 16_384);\n    let question = title\n        .as_deref()\n        .or(message.as_deref())\n        .unwrap_or(\"An extension UI request requires a human response.\");\n    // Context retains the normalized message only when the normalized title is\n    // the question, so it is always bounded independently of the raw event.\n    let context = title\n        .as_deref()\n        .zip(message.as_deref())\n        .filter(|(_, message)| *message != question)\n        .map(|(_, message)| message.to_owned());\n    let choices = match method {\n        \"select\" => fields\n            .get(\"options\")\n            .and_then(Value::as_array)\n            .filter(|options| options.len() <= MAX_CHOICES)\n            .and_then(|options| {\n                options\n                    .iter()\n                    .map(Value::as_str)\n                    .map(|option| bounded_synthetic_text(option, MAX_CHOICE_LABEL_BYTES))\n                    .collect::<Option<Vec<_>>>()\n            })\n            .map(|options| {\n                options\n                    .into_iter()\n                    .enumerate()\n                    .map(|(index, label)| InterventionChoice {\n                        id: format!(\"option-{}\", index + 1),\n                        label,\n                        description: None,\n                    })\n                    .collect()\n            }),\n        \"confirm\" => Some(vec![\n            InterventionChoice {\n                id: \"confirmed\".into(),\n                label: \"Confirm\".into(),\n                description: None,\n            },\n            InterventionChoice {\n                id: \"declined\".into(),\n                label: \"Decline\".into(),\n                description: None,\n            },\n        ]),\n        \"input\" | \"editor\" => None,\n        _ => unreachable!(\"waiting UI methods were checked above\"),\n    };\n    let mut intervention = NewIntervention {\n        reason: \"An extension UI request requires human input.\".into(),\n        question: question.to_owned(),\n        context,\n        choices,\n    };\n    // All single fields above are normalized to their storage bounds. Keep the\n    // longest source-ordered prefix whose serialized choices fit the frozen\n    // aggregate column, the only remaining schema-fit failure.\n    while !intervention_fits_schema(&intervention) {\n        let choices = intervention.choices.as_mut()?;\n        choices.pop()?;\n    }\n    Some(intervention)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 21758,
+            "start_byte": 21535
+          },
+          "expected_text": "fn prompt_from_args(args: &HeadlessArgs) -> Result<String, HeadlessError> {\n    let stdin_is_tty = std::io::stdin().is_terminal();\n    prompt_from_args_with_reader(args, stdin_is_tty, std::io::stdin()).map_err(Into::into)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 22531,
+            "start_byte": 21760
+          },
+          "expected_text": "fn model_from_args(args: &HeadlessArgs) -> Result<String, ModelError> {\n    let Some(model) = args.model.as_deref() else {\n        return Err(ModelError::Missing);\n    };\n    let model = model.trim();\n    let valid_chars = model.chars().all(|character| {\n        character.is_ascii_alphanumeric()\n            || matches!(character, '.' | '_' | ':' | '/' | '@' | '+' | '-')\n    });\n    let Some((provider, id)) = model.split_once('/') else {\n        return Err(ModelError::Invalid);\n    };\n    if model.is_empty()\n        || model.len() > MAX_MODEL_BYTES\n        || !valid_chars\n        || !provider.starts_with(\"target-gw-\")\n        || provider.len() == \"target-gw-\".len()\n        || id.is_empty()\n    {\n        return Err(ModelError::Invalid);\n    }\n    Ok(model.to_owned())\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 23479,
+            "start_byte": 22533
+          },
+          "expected_text": "fn prompt_from_args_with_reader(\n    args: &HeadlessArgs,\n    stdin_is_tty: bool,\n    stdin: impl Read,\n) -> Result<String, PromptError> {\n    let explicit_sources = args.prompt.len() + args.prompt_file.len();\n    if explicit_sources > 1 {\n        return Err(PromptError::Duplicate);\n    }\n\n    let text = match (args.prompt.first(), args.prompt_file.first()) {\n        (Some(prompt), None) => prompt.clone(),\n        (None, Some(path)) if path == Path::new(\"-\") => read_prompt_input(stdin)?,\n        (None, Some(path)) => {\n            let file = std::fs::File::open(path)\n                .map_err(|error| PromptError::Unreadable(error.to_string()))?;\n            read_prompt_input(file)?\n        }\n        (None, None) if !stdin_is_tty => read_prompt_input(stdin)?,\n        (None, None) => return Err(PromptError::Missing),\n        (Some(_), Some(_)) => unreachable!(\"duplicate sources were rejected above\"),\n    };\n\n    validate_prompt(text)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 23938,
+            "start_byte": 23481
+          },
+          "expected_text": "fn read_prompt_input(input: impl Read) -> Result<String, PromptError> {\n    let mut bytes = Vec::with_capacity(MAX_PROMPT_BYTES.min(8_192));\n    input\n        .take((MAX_PROMPT_BYTES + 1) as u64)\n        .read_to_end(&mut bytes)\n        .map_err(|error| PromptError::Unreadable(error.to_string()))?;\n    if bytes.len() > MAX_PROMPT_BYTES {\n        return Err(PromptError::TooLarge);\n    }\n    String::from_utf8(bytes).map_err(|_| PromptError::InvalidUtf8)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/headless/mod.rs",
+          "range": {
+            "end_byte": 24179,
+            "start_byte": 23940
+          },
+          "expected_text": "fn validate_prompt(text: String) -> Result<String, PromptError> {\n    if text.is_empty() {\n        return Err(PromptError::Empty);\n    }\n    if text.len() > MAX_PROMPT_BYTES {\n        return Err(PromptError::TooLarge);\n    }\n    Ok(text)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/headless/args.rs",
+          "parent_path": "crates/target/src/headless/mod.rs"
+        }
+      }
+    ]
+  }
+}

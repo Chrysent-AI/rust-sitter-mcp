@@ -1,0 +1,2136 @@
+{
+  "id": "target-app-lifecycle-2",
+  "codebase": "target",
+  "label": "TUI drop and signal lifecycle cluster",
+  "source_commit": "ba6b1003dac17139100ace3377a096f92a07bff5",
+  "provenance": "Constructed read-only from suggest_split inventory ranges and exact UTF-8 byte slices, 2026-10-06.",
+  "source_sha256": [
+    {
+      "path": ".gitignore",
+      "sha256": "2ed47d3dab144036c8939a4b52b6ee5ec56c8221cbf22081faec9e2ff433949b"
+    },
+    {
+      "path": "benchmarks/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "benchmarks/terminus-2.1/.gitignore",
+      "sha256": "90eafac535a388eb84b99414b257212570dfa7aee61ee2519d7928fe364e4c23"
+    },
+    {
+      "path": "crates/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/build/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/bin/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/bin/rust_loc_budget/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/db/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/db/readonly/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/checkpoint/db/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/config/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/config/status/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/config/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/cli/status/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/config/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/config/theme/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/diagnostics/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/headless/result/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/install/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/lib.rs",
+      "sha256": "ca344b322226229730ee7aa47584f57a794be93826c5d033d779277b0036a147"
+    },
+    {
+      "path": "crates/target/src/main/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/mcp_config/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/pi/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/pi/client/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/pi/event_log/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/bridge/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/bridge/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/persistence/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/persistence/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/command_verifier/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/operations/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/operations/verification_flow/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/runtime/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/scheduler/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/session_index/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/session_index/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/specs/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/stack/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/stack/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/subagent/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/subagent/spawner/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/subagent/spawner/claim_review_adapter/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/trust/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/accounting.rs",
+      "sha256": "4def3b73b29ebdd1b74dbe4e4d9a9345254c5bcf05ebcc9f06a9c52c2288b421"
+    },
+    {
+      "path": "crates/target/src/tui/app.rs",
+      "sha256": "ee20c01aef9510dbb278792ad1bfedbf611fae83a00a4cf6db4eff2fc452ca87"
+    },
+    {
+      "path": "crates/target/src/tui/app/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/activity.rs",
+      "sha256": "b6a8d4bd853efa91e4bfd55ad150835afb1ebc5ac7e9aa4b715643d7922efd82"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/association.rs",
+      "sha256": "abe44eda33e37ff0f4442a7503c63693e367b8d5be6f6b45703f6851b30f0af3"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/cadence.rs",
+      "sha256": "ceb6688b43e8078c5cf676923f81ba115bb05abba20ab118a8e539b7b06b5605"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/format.rs",
+      "sha256": "13108600c99febdde0a5b1351a6593e8dd4da2284353ae8a81e89d7d33379f87"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/format_tests.rs",
+      "sha256": "8652b552fbe418cde56e9c67e8940d1c4e569ea63dff577ebb7418a8ecedde18"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/input_tests.rs",
+      "sha256": "7f8a2ce97aa7dde37818defe944ecdf99ede24ccd5f3cd0525fa352530952f00"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/mod.rs",
+      "sha256": "5cda19623c17bd542199060ec421fb08fedd9fb9010aac194fffa19e2617e86c"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/reader.rs",
+      "sha256": "df2463fa759ae7077b0f6633f9434fbb44bbf1f0c7fb4b7d6185718ec3db25aa"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/reader_tests.rs",
+      "sha256": "57b655464d181e954490e008dec198516a95f8def213ce2ac22f50135a9d1568"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/routing.rs",
+      "sha256": "6ef3c2184daf05d9ee9d10ba8281608e7da51a93a08dd2116950b5e696de522a"
+    },
+    {
+      "path": "crates/target/src/tui/app/child_log/tests.rs",
+      "sha256": "83ce406f528407ff67c796ad00582977c701328dec2063e58425be5fa3211a4e"
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste.rs",
+      "sha256": "a441cf2f4e0d04849e1d2dc0bb423690036618c3a98ab80abe8fb8a08d734bf2"
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/protocol.rs",
+      "sha256": "8abd8f5ace923a0285ad26a2076828515f85c34fc43c22564c18b38ce350652c"
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/tests.rs",
+      "sha256": "f87db810e821885e492353dd67edb696595f6981a5bfd7710f774193dad51655"
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/tests/focus.rs",
+      "sha256": "eaef02391f773d4993b207dfff1a7b9791611d9a6de830b271e27f24342a52a6"
+    },
+    {
+      "path": "crates/target/src/tui/app/clipboard_paste/tests/protocol_tests.rs",
+      "sha256": "13a2bd8c561305e6137c34a3b69b132ba881e9c2643cd8142b97dbe46a80f7de"
+    },
+    {
+      "path": "crates/target/src/tui/app/content_logging.rs",
+      "sha256": "46174c05ff335d055b638fd9d1840866e0b77adfdd13e77536b98db733c89bc0"
+    },
+    {
+      "path": "crates/target/src/tui/app/context_window.rs",
+      "sha256": "4bbe4fef2e42acc712adf0bec4e4559a22a6158d34b902ecada7425e3b52ad30"
+    },
+    {
+      "path": "crates/target/src/tui/app/extension_ui.rs",
+      "sha256": "1208ce2de5d702a4125c1ae39f8068ad8156e66e543d0d40c20a0c878f6a00f9"
+    },
+    {
+      "path": "crates/target/src/tui/app/external_editor.rs",
+      "sha256": "55047ac51c37e8c1ed250fb85587df3045a2e20b89cea1f73a7a76dd0f775af8"
+    },
+    {
+      "path": "crates/target/src/tui/app/external_editor/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/external_editor/tests.rs",
+      "sha256": "3729bf0b65d5f3910bd1acdb4c61fc6eb0f5f76e984b865aec53a39030c20bf4"
+    },
+    {
+      "path": "crates/target/src/tui/app/frame_layout.rs",
+      "sha256": "324aa9d97a19682900a9f20e61d613e47d9eb35b6a91f22160287a5a1d325393"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_loop_slash_methods.rs",
+      "sha256": "a4f9e41a27575ebcc0074650809ca8e50a352f86944147e6288f98e68f608d8b"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review.rs",
+      "sha256": "6f813b53eef5db183f48fd5a7ff1585040fc488f1cde2bb412ae3e15f9d7db08"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/actions.rs",
+      "sha256": "b5eaaed36b016cf944d09e15be5cae9c75d7310282392de59bc8a568515aa300"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/actions/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/actions/copy.rs",
+      "sha256": "02a8c7bc69425574d4a5291e390a72ab874d663d99e73336b89c8a82a2f6e4a4"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/actions/verifier_stop.rs",
+      "sha256": "8bbb9c1529c2bd8ddff16a939af913c151a4c2c85cb6ac3381b1494b9a32316d"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/input.rs",
+      "sha256": "c4ffa7d9c6c4a528570a99a428e5bd1e1518a0bc347862375f8444f50f89260e"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/input/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/input/tests.rs",
+      "sha256": "918cc41f795e96d67e85e823bd4506d5a3752f02dee42f6937d12710966ba7bf"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/manager.rs",
+      "sha256": "ae104463becce2eb47873e007c6161e8b337ffe92b5f83dfa95ee95121ad45d4"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay.rs",
+      "sha256": "b76e47753390161f4b7008fd644f5aac4a2ad59c31fd0d55d70b8b03a844c8f1"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/availability.rs",
+      "sha256": "a54c7c7793f74855e0cea5081af5bfc23c0ee298e3a7d04868b4feaf4f36bf1f"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/copy.rs",
+      "sha256": "c576b2f9ccf5022b86e1b8c1b784fabe36d7f1ed5c55eb79138ed44b703ef6b6"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/inspectability.rs",
+      "sha256": "45ebb9a9135fead95a9ab1a4124b55ba4db1a265dbe9986f50a75d649319278f"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/review_rows.rs",
+      "sha256": "44fa1410d8f10cf93bda8013d4b8815cd5058c35bef8e85295e6119676e68521"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/tests.rs",
+      "sha256": "b88b4f2647a46243ae93eff044b684007cfbcfb0676d0ad50aad60a074d91ea2"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/overlay/verifier_copy.rs",
+      "sha256": "869a4517aefb78f75dde6d6201bef9f7225df60f0e60d545d1ca1fea7ad2ebd0"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/scroll.rs",
+      "sha256": "daaf445210e736c4559138c63a82f79590a02dc09e570860137f0e304090875a"
+    },
+    {
+      "path": "crates/target/src/tui/app/goal_review/state.rs",
+      "sha256": "4b206c0b6448bcc0aa3f2662e61ed297e68cc878825c62c421785067870cdb00"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application.rs",
+      "sha256": "17c7f9c45722aa6a4b634a9262817ca781e08fd9785879bab92d0c24a3c48c9b"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/compaction_watchdog.rs",
+      "sha256": "5ae9e04657fff75d5bb779e88b6904fb375c8b92f64d93ef30e68b2d2d865407"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/pi_lifecycle.rs",
+      "sha256": "f49c55823f14899e59528e4e9eb6784a8d9731f2f0882f66a44900db5f37b545"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/prompt_delivery.rs",
+      "sha256": "f280d99287dd5844b8fd76ea562e19a0c8e7367ea941ea5be7e3c3ada45085a0"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/scheduler_gates.rs",
+      "sha256": "94541e2112401b087d7d6c94463f88a02740b71f9cc2e9c2cf6be5268efb7a59"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/session_recovery.rs",
+      "sha256": "baf260888841684e9f1f921089acdf02ebdabf9418b7a2251530643585f5ba29"
+    },
+    {
+      "path": "crates/target/src/tui/app/interactive_application/tool_subagent_lifecycle.rs",
+      "sha256": "4126c0199fb9644d51f68eba064517d95debe4605aff853e44008879c70034d7"
+    },
+    {
+      "path": "crates/target/src/tui/app/local_shell.rs",
+      "sha256": "f1782c5b5e411b6f15a6d7ba2d40ef7d1e66370b2c6ecdde506f8aa840c808da"
+    },
+    {
+      "path": "crates/target/src/tui/app/logging_overlay_methods.rs",
+      "sha256": "8045b3727fce81f7c39d54201fa14b7d9562d30014945c293c4092936a94537f"
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review.rs",
+      "sha256": "fabc6b029d19139125600507a561789f4dd8f5e6daf87093a8be48caa8fc9204"
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/overlay.rs",
+      "sha256": "6305a0f24d7e73d134723d588123de5c5df7b653e67699718929af8f00a9b5ab"
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/overlay/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/overlay/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/loop_review/overlay/tests/notice_tests.rs",
+      "sha256": "6a92f1789ba153b034f0407b8524d475b0fc94024db82430bc523214fd95b00f"
+    },
+    {
+      "path": "crates/target/src/tui/app/markdown_cadence.rs",
+      "sha256": "a4d6a8c65f84f1c69a0db4750fe3df1d3fbe215cd1c09939f9666f77204e5829"
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control.rs",
+      "sha256": "134050be209b163358eb4424141a94ae0ee61b64dd183fd0e922fc9192525372"
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control/completion.rs",
+      "sha256": "1744abf6cec76b03cf9465f477e90ce3adcd42e5fe2de471aea96e740aa4cf59"
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control/completion/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/mcp_control/completion/tests.rs",
+      "sha256": "c5cad46241aec95258df78771094f82ed4b9c9b743132abf684da92b68ccf90d"
+    },
+    {
+      "path": "crates/target/src/tui/app/message_history.rs",
+      "sha256": "7eb31083672bede5d807d17e86d98dc5c05df4a66128f4eb8562d7806f0f5421"
+    },
+    {
+      "path": "crates/target/src/tui/app/message_history/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/message_history/tests.rs",
+      "sha256": "a48bb95dcb4e6f424142f714b6435af4b4d70d33e9b18008b283df6d88588e8a"
+    },
+    {
+      "path": "crates/target/src/tui/app/message_stream.rs",
+      "sha256": "1f3e71704b423fbbc4d570e39bb62d5c53d8807cb75226cd4aac341f9295e969"
+    },
+    {
+      "path": "crates/target/src/tui/app/message_terminal.rs",
+      "sha256": "dacbb04d5e6770e022c485fd34cd87ea65830db7494313eb4d5a2d969d957b00"
+    },
+    {
+      "path": "crates/target/src/tui/app/model_context.rs",
+      "sha256": "15622e49ce1433c96c9715300babdc6d78adc1e0c02d7ffe5782ed326061d73c"
+    },
+    {
+      "path": "crates/target/src/tui/app/model_id.rs",
+      "sha256": "1032ee24b76fd89003ef67b276b09dab63ecbc32490cf0763c4684bebea7d259"
+    },
+    {
+      "path": "crates/target/src/tui/app/model_reconciliation.rs",
+      "sha256": "ab833730d7acce75c305c1699db8d6487450e78e05ccd304b11817a4de6de0f1"
+    },
+    {
+      "path": "crates/target/src/tui/app/model_selector_input.rs",
+      "sha256": "8041948e54a0e2183f8c70ee1cf39c16b5a47dbd82bffc9b4a05a328b05888fb"
+    },
+    {
+      "path": "crates/target/src/tui/app/mouse_move_coalescer.rs",
+      "sha256": "477e8281161aedbb0495c333199b1905760e1209868fdf60368d9d54626d66df"
+    },
+    {
+      "path": "crates/target/src/tui/app/next_turn_recovery.rs",
+      "sha256": "cbfaddb3701a5a88a5dfbb2b6150716e62f016da35a4c3848d534195abe844f3"
+    },
+    {
+      "path": "crates/target/src/tui/app/open_link_methods.rs",
+      "sha256": "11975f8b36f0b1cd38bde3a599b13b363cf8ecd49d8874f55e00c620c166d5f2"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources.rs",
+      "sha256": "8a60006ca5d7167c9bed6449950c85c4dffe97cc76332a44a5849458952e310a"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/flow.rs",
+      "sha256": "9ba0092134001f949867064db17305840781a4405653c89721841b2206d429ed"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/labels.rs",
+      "sha256": "20ad01a4d5723960dd1eaf310862a647601300d8f335ac4e616bcd165c90d2cd"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/protocol.rs",
+      "sha256": "b09e1678adeab837ae328141b50069ba9b4c796c07af5a2b6155dc179b81b134"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/protocol/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/protocol/categories.rs",
+      "sha256": "f6f68dc081ab62058343479cf12d27af1ec036592b8ab762229cbaf60ab6c3ba"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/render.rs",
+      "sha256": "67e9a4417b845d07b008b5e759dff7c7ccdf747d872c133e7fcc0e87ed20216b"
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/render/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/agent_resources/render/support.rs",
+      "sha256": "589dc4461ee7b5049a90ecb5813ada2137744865c038d54e3fccee17eacaafd5"
+    },
+    {
+      "path": "crates/target/src/tui/app/output_detail.rs",
+      "sha256": "f67e493138fd06ec334931ae7fe82d145f749c6e99febf11a76dc2a2e7296e98"
+    },
+    {
+      "path": "crates/target/src/tui/app/output_detail/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/output_detail/layout.rs",
+      "sha256": "c53ed66fdca0dda600753a408d73ce8c5b419c8fee86106d47e6b3a11d5b55ae"
+    },
+    {
+      "path": "crates/target/src/tui/app/output_detail_methods.rs",
+      "sha256": "00dba619d2a77f8e42f5dd9f0bd6426eb80ebb7f57c4bf51eda118f89e9a6779"
+    },
+    {
+      "path": "crates/target/src/tui/app/overlay_action.rs",
+      "sha256": "f9f28233cc1c247bcd19061899ff54cdcc1b39aa73a21a5f7659800e09bad29e"
+    },
+    {
+      "path": "crates/target/src/tui/app/overlay_builders.rs",
+      "sha256": "dd61dce30fdcfeb4f929b18b6065ef8c25cc0159c01e80b21991f9d86afbea8e"
+    },
+    {
+      "path": "crates/target/src/tui/app/overlay_dispatch_filter.rs",
+      "sha256": "873fc0328edbed42b27c9de3ab167ed8c277c5dcc4a9a5022fab3b7dac6d8a2d"
+    },
+    {
+      "path": "crates/target/src/tui/app/overlay_surfaces.rs",
+      "sha256": "91c104546bf9dc30d41eed202ddb66956caee3e587e4cd0c7669e311cd1d3f0f"
+    },
+    {
+      "path": "crates/target/src/tui/app/path_autocomplete.rs",
+      "sha256": "cb40f732bcc42dff586cd82ee45c41ae87849650f1bc8332c1e3af7918546349"
+    },
+    {
+      "path": "crates/target/src/tui/app/pi_outbox.rs",
+      "sha256": "0cd1649b93eaf2dfe20f0539e1e1f3b932da12cde1fb6bddae202d09319a0ec3"
+    },
+    {
+      "path": "crates/target/src/tui/app/pi_outbox/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/pi_outbox/session_catalog.rs",
+      "sha256": "c5f21c9e9f5fda1f96b87f1276483ceb59701ac20854c07d9407a478f1b677bb"
+    },
+    {
+      "path": "crates/target/src/tui/app/project_status_runtime.rs",
+      "sha256": "68aee3277f19c7a3635ee5ce4dea43374ef9664e663f4189ee77ad7364cc30e0"
+    },
+    {
+      "path": "crates/target/src/tui/app/prompt_queue.rs",
+      "sha256": "4a8e3b73e05c25f1e6b5645b6af9b8f881bf6c08741fa2b17d452efcbefab2ff"
+    },
+    {
+      "path": "crates/target/src/tui/app/reasoning_effort.rs",
+      "sha256": "cf8ca758affa1b7ec544cbdede5e8cfcb1f2db0c4dc93f11d70c796895bdabac"
+    },
+    {
+      "path": "crates/target/src/tui/app/render_projection.rs",
+      "sha256": "167a08a6f0d6b81abbcaf5d16940ab451012ed0b2dc24a3e13e63581afe751fa"
+    },
+    {
+      "path": "crates/target/src/tui/app/response.rs",
+      "sha256": "186a9f25c8dc727966069d055258ff2b793b5b33996ba5af4c1bef3505b72893"
+    },
+    {
+      "path": "crates/target/src/tui/app/resume_all_sessions_runtime.rs",
+      "sha256": "55f3726d71e1b3398dcd95848d403847eb4f17c12a414ff425cda3d9d6aa7bba"
+    },
+    {
+      "path": "crates/target/src/tui/app/resume_reconcile_runtime.rs",
+      "sha256": "a87fd751843cb556d42e6cd92449722af3c4371a2a02adb16046b90e94661fd2"
+    },
+    {
+      "path": "crates/target/src/tui/app/resume_seed.rs",
+      "sha256": "7b663bfa28f4d328f2c8a9064662cf3f70d6bc71c67799f83d81fd6486e686a2"
+    },
+    {
+      "path": "crates/target/src/tui/app/resume_selector_flow.rs",
+      "sha256": "1602192e47416cff7622f0c91aca65bee5247ad801e2b5c8a03e895d3b803cb6"
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_bind.rs",
+      "sha256": "f75d38125ed59fb5ac888ee7f1af723700c77591423ed0cb0a74a55cdbe8c6d6"
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_dispatch_methods.rs",
+      "sha256": "b5e94378f57dc096e18d6a121c81e6e86d0736c801d299dd09f2f809203f6573"
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_draft_editor.rs",
+      "sha256": "96d07426bfcc38012d19192ae4ba1bcbe37b265e0028de8121d7c678928b4cf0"
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_draft_editor/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_draft_editor/tests.rs",
+      "sha256": "8e760137ac60cd3fc87784dcebcc01e983cbbf60bdc01751de282b8e29eb454c"
+    },
+    {
+      "path": "crates/target/src/tui/app/scheduler_review_styles.rs",
+      "sha256": "4d67ca918b8a0163a87816292c2167e0eacfdadf8bbb009e29728a96ea174dfa"
+    },
+    {
+      "path": "crates/target/src/tui/app/scroll_position.rs",
+      "sha256": "6fa22028bd85da21a38afb3c2e70292d85b25388d20f8d26393907bfe9268c91"
+    },
+    {
+      "path": "crates/target/src/tui/app/scrollback_hit.rs",
+      "sha256": "f44068d129e62e9816ddedfe8f686daa5b8fa1d410365899d55228d474b3b1a7"
+    },
+    {
+      "path": "crates/target/src/tui/app/seam_modules.rs",
+      "sha256": "04b4b8d50b73a4fb3eb8e635e4459795cc92f7f68050d1f578d2a3d493c7a749"
+    },
+    {
+      "path": "crates/target/src/tui/app/selector_text.rs",
+      "sha256": "95b65d3638e6f0f67d3dbe62b0a3eaeb316ddf0ad4c3c76d3b32f9ce52a29c23"
+    },
+    {
+      "path": "crates/target/src/tui/app/session_selector_input.rs",
+      "sha256": "fd2f4d3b1fe97eb1ec25be65043aea45ab29ca3247757da9672798f3a8ea22ed"
+    },
+    {
+      "path": "crates/target/src/tui/app/session_selector_methods.rs",
+      "sha256": "9b5e8532f2bd81c2c52c57129f469ddb93aba8760a11dd93e8b73dd44efee04f"
+    },
+    {
+      "path": "crates/target/src/tui/app/session_stats.rs",
+      "sha256": "f6f39da2e384d075a4dedd1697b9510ace9b2df7d3b46092c9dd8215c848fa92"
+    },
+    {
+      "path": "crates/target/src/tui/app/shutdown.rs",
+      "sha256": "d19798309646f0c9b2fbad9ae2b06104583552b734e5b9c489ee23235ea005f3"
+    },
+    {
+      "path": "crates/target/src/tui/app/slash_autocomplete.rs",
+      "sha256": "1de6d78cff86261cb0b6fee847599f9757b3c4d3b0ba9bad5209320305f8164b"
+    },
+    {
+      "path": "crates/target/src/tui/app/slash_autocomplete_render.rs",
+      "sha256": "eb427cdb56752fdfff2aa1afba026f01495c4ffd8fbb9e056946fdfa74e905db"
+    },
+    {
+      "path": "crates/target/src/tui/app/slash_commands.rs",
+      "sha256": "dbac98a2b31d33c550c20e66eaed3930147dc7e5536a178fba6a5c04170f01df"
+    },
+    {
+      "path": "crates/target/src/tui/app/state_file.rs",
+      "sha256": "06fed97be4744b244e6f1891ef1052d6dd200848f284cda8ae26a6de28f51676"
+    },
+    {
+      "path": "crates/target/src/tui/app/status_click.rs",
+      "sha256": "402abc2f51c188a64cc29e5300e68c8d43d538900dce6594e4a3d0510a3537ea"
+    },
+    {
+      "path": "crates/target/src/tui/app/status_click_tests.rs",
+      "sha256": "4d4fc16fd10479a2b3fd8de4aaf432a9d55a064ddc04587a12209f0456287168"
+    },
+    {
+      "path": "crates/target/src/tui/app/status_snapshot.rs",
+      "sha256": "fa6dee9a6475264dc627ca0081e1c81874898fab49de5bd6d62f3ccdc5607b76"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout.rs",
+      "sha256": "f1b1ac059e37d8bd591d74bf247192d128810cf247beeb8b9dc879b31bd57d9e"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/flow.rs",
+      "sha256": "8fded1902ea0da36be9224580ddd248d665035b3f8e5a9790ce83c7d99a4d993"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/owner_join_tests.rs",
+      "sha256": "326578d3d3779d77e7767e73272762096776cb149a55b53d72586efeafa472d5"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/presentation.rs",
+      "sha256": "c0bbc7389a350bfe8ad7d5aeb810d6759be655fd2e7c9e2780f72ed9819ba8cc"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/presentation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/presentation/panel.rs",
+      "sha256": "74cdb022ad62cbfebdc2d5b16c39193b8f120038e32762d26c90f7f55d62521e"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/presentation/panel_tests.rs",
+      "sha256": "c8e5e727beee62e0119dfa5745e9ca546f5b7f9ac3dec5c772a8049e02e40f15"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/presentation_tests.rs",
+      "sha256": "d77c086e9a1d06b34d64d81345e0b2230c341ebb0bb168caa9fb0713646564b3"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/routing_tests.rs",
+      "sha256": "1cc03d8ea075835f09eee36b616bf39e5b3f6fc3f8e96224fe6430cdd75336fa"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/session_recovery_tests.rs",
+      "sha256": "5088acf5a191e353497a9407eeaa2a67d37ab57304efea1159ff0b3a027b3a30"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/tests.rs",
+      "sha256": "bd3a7b5d09558521627f32bc9c49afbdd683aa713a2b548d62e11dbab8d9e18f"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/transport.rs",
+      "sha256": "8340a7e2b433ed4b8219145e971fc9cb8a325e8e1baacf2e4aaf1d627d51430d"
+    },
+    {
+      "path": "crates/target/src/tui/app/subagent_timeout/transport_tests.rs",
+      "sha256": "cf08c3df070faaad7101eb08cccbb455d3a7b979c4ca5cc372fdb1848c9a3b3a"
+    },
+    {
+      "path": "crates/target/src/tui/app/terminal_state.rs",
+      "sha256": "fd2e436340f997a59eef175fc29e2f6c0345299e3187fd07a51c96111f70f3fc"
+    },
+    {
+      "path": "crates/target/src/tui/app/test_seams.rs",
+      "sha256": "5d23e83726cd0f1234e802e8a64e48f2fcc29e7876d1ed36bfeaa55be28e43a4"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/abort_background_work.rs",
+      "sha256": "e1333b1e31faf7992d54a9d7593087cc031c7751b507731b8ff4c7e93cdb3936"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/compaction_handoff.rs",
+      "sha256": "c6df0521519db166dc1f9f0fc4f7de025b3d85f7a228aad12ae4a6065a083504"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/complete_frame_oracle.rs",
+      "sha256": "e79520b716bf6c44d722e74246a3c30b476ad315bd0b78865f8953d860c0cd40"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/effort_autocomplete.rs",
+      "sha256": "1df587afddf18b819c87c47f3017c7478a95330e19ad0c9823c46225115488b7"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/effort_resume.rs",
+      "sha256": "041c2846ed50669092386161338634aea80862650cb338e1416d741af6ce465c"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/local_shell.rs",
+      "sha256": "5452a33517353e7fb85e111d791f1ec35046769f7d657f8ec199dd8feb8dc453"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/manager_availability.rs",
+      "sha256": "96bf00593dbbeada4afcfe648067a60b82c7358d90fd56fff639db9d2940206f"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown.rs",
+      "sha256": "756521f9ff24e4b25355e494ff082f9d3efc32683f606a39f282e836b8e76702"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown/inline.rs",
+      "sha256": "b336f95f098f56d5f07624a377bd3b7f7851b720d5c82bdf4d553ca5bb49a989"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown/inline_theme.rs",
+      "sha256": "4bc6f2847a9afbe7c30d90d4cb757565670b9933f3b0dea1fe080de83edf26aa"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown/measurements.rs",
+      "sha256": "001666ef30bd8977bd247d901e967699721e730f887f55f44402ed11e6c9ed66"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/markdown/prefix.rs",
+      "sha256": "b3e18b87bd32448eb1f7efc58e1c275bbb0b304b2ac4ba5619705f3a5e0f9d8f"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/model_reconnect.rs",
+      "sha256": "935a23b01a6692bdc4e1803ab05ec2b8974a4a57c7e605bbeb68d990857b0c69"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/model_selector_input.rs",
+      "sha256": "6ac12fab40a95839affa11280ebe671048033d4e9b2ed3b008a801cc95993eb5"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/mouse_move_coalescer.rs",
+      "sha256": "dd4f1ea2bc51dcb5c4f651ec7d550dc3b5549694b1d25af3691f1f2401270b3b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/next_turn_recovery.rs",
+      "sha256": "1cf17e52f0394ca5e65c5c598b25eea4b24e88ad672468bf00db993b8c17d568"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources.rs",
+      "sha256": "661191591a78cef84ea992b4a0191b4fff56e807c11920a654c985f3bd7c71c7"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/bridge_settlement.rs",
+      "sha256": "c310aa6d92dbf0a71a42e551024c1c2b7b6334408bc8398f5cbe7defff36ea0b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/catalog_refresh.rs",
+      "sha256": "7b647c8145c9202d2d7aefc6a91fe0d9b3ba1938cb57ec3d464fa0411400a254"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/hardening.rs",
+      "sha256": "3096e69850e22c6086bdded67d6e7bff06ca0bd25e470dc08ace802134341729"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/lifecycle.rs",
+      "sha256": "a4f55c69b1335c5ae4ff9c7d37afe7f9bb6c1185ed79110f51c70b3a0aaf0b7f"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/producer_contract.rs",
+      "sha256": "df2ed12fbe190325e025ec639a03485538a470404b49f1115cd6dae66698e06d"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/reliability_fixes.rs",
+      "sha256": "891a356cd9e3248dd6efbc24ef2000e6c74140549d4e6e512855b3ee91857e2e"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/render_contract.rs",
+      "sha256": "c36ae4e848a60687ca4b2bbbc019a1a9bee4df4806c86d53b0136f5a41d25679"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/rendering.rs",
+      "sha256": "e4f1d7714d46af24914eac0169ec35ba1ab772cd52fbd1fa7f5eb0b5112cf549"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/agent_resources/widget_report.rs",
+      "sha256": "6cac1957a1bd1551e76bdf6d184f6178f6f2afba7dbe5476c98a92252d43522b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/artifacts.rs",
+      "sha256": "83f2b3b76bd9396f03a33fbde1804538b1d33b9f2c58b95d22fe545c90d6bf28"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/input.rs",
+      "sha256": "d6ca8efae8fc5c4709bf6992bd33a06322027c5efff229b3fc8cd6a93ce27a9a"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/input_harness.rs",
+      "sha256": "cfd8d0bf7f042d07ab92e4d72456d80ee7639f1fe25614b089abac0d162763f3"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/interaction_priority.rs",
+      "sha256": "63f067f93c696ea394461b12b87a31e340f2a5aa9da68bc917030a4abc1d8682"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/mod.rs",
+      "sha256": "c158219a7b44fa120e40e748ebbd26b79eccfa8c1fda250045039b4fc48ed461"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/prompt_editing.rs",
+      "sha256": "47c3e6d1a74c6e0e8f479b9cc5966537dcf838c1dc4af14a4271c5cf023c2556"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/prompt_queue.rs",
+      "sha256": "734f62b99c5103c6e020a1e4f3d6d5b291e67e5f56beb3bec5942e3fdd464856"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/reasoning_effort.rs",
+      "sha256": "5b622d3293367f9e0df980d5941bd848336d227449410382009023d839d715ae"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/retention.rs",
+      "sha256": "84b01ce3d9172200ce1a0bf30184ef99867847d2ef0604959181fba7096de05b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/scrollback.rs",
+      "sha256": "cf6b118e9a8bc43e0ea2e808131e9e95a9c4ba3df2f4806f66f4350b4ce06773"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/slash_commands.rs",
+      "sha256": "1fefc8b4990b1b4f985e81a835662abd3b3fa4facd6ad3631275f8c99cb7fbba"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/state.rs",
+      "sha256": "0f34178c234d49b16cf8f54e93147b64988229b32c735c773199cc45dc219e43"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/surface.rs",
+      "sha256": "de9a09f3c4be69358990b01ffe6523e196aa513ac185fb49a1c2815b8fc2a5bd"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/output_detail/tree_overlay.rs",
+      "sha256": "6533e31e85781a96cb7a64204aba240f0249739d196d19f35a67596c29a58cc3"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/overlay_dispatch_short_circuit.rs",
+      "sha256": "7edbdc1383b561d073e870941cf9d92f031ea05bfa6b81e67ee98d4d17f07e6d"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/path_autocomplete.rs",
+      "sha256": "7523b722ca6179b3de0bc4aa9ccb1514846b07f1d692e4f0aa33db22ae58412b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/production_lifecycle_oracle.rs",
+      "sha256": "6c0963cbdd3162c5f9e7cccb7e5e1de3c821ab148ea066cdadf5c7d83414ae64"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_arrow_behavior.rs",
+      "sha256": "35fa6bf54517ea71a8d9a973a8a8c661d4496a83a2bab21283c73d70a6a279c5"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_cursor_regressions.rs",
+      "sha256": "dac0e9274ae13b924a23d97e22f74a649baf3cdf16823093a64a9d1226e113dc"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_recovery.rs",
+      "sha256": "d37a4937893c8c0e3877972741253c66faf6f3cd756b13eededef1a9242430f2"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_recovery/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_recovery/mcp_control.rs",
+      "sha256": "794917b8fc9bbc873e30d7eef48698e58537508fbee413436a3614043ac79d70"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/prompt_recovery/native_commands.rs",
+      "sha256": "c51e566e5a1cfb25114f26d2d8d85865a192480d8b85f89b3ea2733c3c93e754"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/render_overlays.rs",
+      "sha256": "ceaeb5554f5a810b4e2a92bd158b17efd087c05a34270d2943e1ad3703f9b4db"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_cancellation.rs",
+      "sha256": "ec0e43f9f2be359c35b8bb601bc3e70c265ac675f7c28339f9743d11136d8a5b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_markdown.rs",
+      "sha256": "bd275b886df049f1b472772b8e1bec3baf32dfa2177ac3904cf2c05cdf320431"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_markdown/inline.rs",
+      "sha256": "849ccbcb0e86fbe9190598abb19df6880db9b659982073f8a4051ca515f513d5"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_markdown/measurements.rs",
+      "sha256": "0ca90246e7b53b2eaea78e6c758a238421892069f657dda03a2f12a983a421af"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/report_markdown/resize.rs",
+      "sha256": "75f2cae1fd68327d4f18b9e5e643def6db92cb6bdd2fc3dffbf0f803367911dd"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_claim_review.rs",
+      "sha256": "8ef808ded530dc3d245446a9be08c23fd70f652aa3707a51d3e3587abdf7f6ee"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_claim_review/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_claim_review/launch_failure.rs",
+      "sha256": "228a9b88c33b5bef432971a4a47e1668caa2e4c03f62688c2ffc03fc67292c7f"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_claim_review/queued_pump.rs",
+      "sha256": "bad38a75c6ac2f24d640d0bc6dbe6bb8b9e669c2b480d4cb82eace0f36dd0f83"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_countdown.rs",
+      "sha256": "0fd9182a05f997bc91b3c2afdf196595ef92710cd7a66869e53ca152e589ac54"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_diagnostics.rs",
+      "sha256": "713a91f0d0cbff6fde8dc843ac97c462e17f5837196cedf2600e9ebbcc595342"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_modal_dispatch.rs",
+      "sha256": "b5ff9486ff029e83506c4c4ea4931bce8ae622857c24c6120485557e685a658d"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scheduler_stuck_prompt_recovery.rs",
+      "sha256": "e11df84f50249bffb29845730c1ccccdacc041b76b378ce9911ef773ae5f0f8b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/scrollback_hit.rs",
+      "sha256": "65149e40f667068a6709885468e89660899b2d8f8530d515d29d8fb884bd162d"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/session_selector_input.rs",
+      "sha256": "412c859fa5f4060bef9caf17aaee2743d57d25fa69f9782c87240d58b9c419a3"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/slash_autocomplete.rs",
+      "sha256": "43a42fea30512e41d32164e8479d67edc3431fe99bb9e5056d5e892295795a98"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/slash_command_builders.rs",
+      "sha256": "b73ad0763db52c322d2b41168f3686e924623a7356d40f9ad27bcd20b014b0e7"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/soft_stop.rs",
+      "sha256": "4197676e74bce72bc36f90c60069594b7eabef80ef6f4ee79e32fce2fac28989"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/soft_stop_transport.rs",
+      "sha256": "898da2048f0e1c1fe92c0a6be2857d0040f349bc5ef5ae208b7413215a4cdfcf"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/compaction.rs",
+      "sha256": "65bb337e5c44a90d26d6c6fa00cb8300acd84c3d2ff4c1e42d8099a743d2503c"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/event_stream.rs",
+      "sha256": "e4eeaba3292fdcd187e81320d85e143de1a6bd6e52b9e1d5d82faa3de3dbba1b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/mod.rs",
+      "sha256": "3935226e4be00d4ed918ec7f3033a35a00c0ae0a73a3c77b2f7dbcdb29401176"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/model_identity.rs",
+      "sha256": "017c5dc14f04c95ee8d33ea8057d1fbcff48572b630b611adc986164007534f6"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/model_metadata.rs",
+      "sha256": "d4a4f17dfc999d390c25b02f5272651b4599656626528f1174b0615e5c09472e"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/noop_events.rs",
+      "sha256": "936c977cb20d70698ac730cdca83a238bb173a846cfba7e07d954affd6da6d85"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/processing_lifecycle.rs",
+      "sha256": "562f0e69e87b94fa62a007da5ec23df4fbb72839d583084a8dbab07505a2a4ae"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/role_and_echo.rs",
+      "sha256": "c74e18a4cac95948b6d3a8fffffbe0d986d4cfe4e2404dd2ef1a792ad49a8e35"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/scheduler_runtime.rs",
+      "sha256": "d4819acc6d5c61164124c2341dee363640f4516c17257f3761b4fa3824ad5606"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/state_events/usage_context.rs",
+      "sha256": "24b58741aad59fead69e665a0d3b086a8c6ee7e161c79669a6f29999b59bba57"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/steering_bypass.rs",
+      "sha256": "0c11454fd163c8d7b8cd70c28df4c5fd3acfdd6178f9b4390fcaa01955697e20"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/subagent_overlay.rs",
+      "sha256": "3f43f63cde11d65a3751284cd4940e0068c1e9dd8a321e8acb9259efdffa8b89"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/theme_selector_input.rs",
+      "sha256": "7ce56255ba59230c8dc265effffda3e48db27f38cf4219890266328570fadaed"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tickets_browser/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tickets_browser/mod.rs",
+      "sha256": "1b4e794f3f39a9f4b1c60f9207e4facf8f7cf2bc2ce0381a7be5a8a6b901e3cc"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/args_preview.rs",
+      "sha256": "80e55c556636915d92279f7a4a1e387a69b29f068c9e668e6fec8065abee046f"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/diagnostics.rs",
+      "sha256": "0076c9f68a8add396c434278a309eddef6c593471c1225318b3d48e7b870dd7c"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/edit_result.rs",
+      "sha256": "6a2be68200d1da564ecbfcb336a2eab2f9f1350e5c94d44778b3f9f87d69f21a"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/mcp.rs",
+      "sha256": "f5d1936400255203363f470ea69b74794a5d126dd73662b1d63a7fa6489d7491"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/mod.rs",
+      "sha256": "d6b3cc80b493df72707d8948c234378b885cd54b31bef583f665a7ccd9bee0fc"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/agent_spawn.rs",
+      "sha256": "59f36c34048de22a46d929907e4127cb64aa80f3915326c65568faf458049e8c"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/retention.rs",
+      "sha256": "5c1f69ce15068466c91e71cb2ad83c82b00586e8408a37e0243472364099218c"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/spawn_verbose_replay.rs",
+      "sha256": "5a84f2d51a06c7158c31f67584633d2afb776907f8c953e8948c50142ed7445a"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/styling.rs",
+      "sha256": "84580daa46c5f75999befda6e1b8b871d4786d20dbc040a8d9ba83f9819befb7"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/write_result.rs",
+      "sha256": "565a184c1ea0f93883bd58c251b8db0576e86f817677fd2d0bb9b1d21c7eb27f"
+    },
+    {
+      "path": "crates/target/src/tui/app/tests/tool_output/yaml.rs",
+      "sha256": "82737eac73ad1b23fb8125a554a37e3e03a4af989e2ae1d4c2ce177ebc231eba"
+    },
+    {
+      "path": "crates/target/src/tui/app/theme_selector_input.rs",
+      "sha256": "b6a23fb16a6be20146e64ecd5463d088ffe2dd5d7b60285a2327937e615852cd"
+    },
+    {
+      "path": "crates/target/src/tui/app/tickets_browser_methods.rs",
+      "sha256": "d1cd806575a5c7f30778a92a4ccadf7b5eadf7d4d1671ef3be0344a077931460"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting.rs",
+      "sha256": "8eee4d9dfaf4d387188e13b2ae180cd3cbad00395f52c60a80da7f879af7aa29"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/bounded_json.rs",
+      "sha256": "f199afd4c0ca773fd3d247a208047803ef7482bafc366db68158389710288c34"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/edit_result.rs",
+      "sha256": "f52ac40fe5df3afc2375a1dce3c706ab98728c65034105a387defbc032442653"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/final_tail.rs",
+      "sha256": "767de752324223bcb6303ee39bbc35c029412651d165d52fc8bf36aa093c3ec3"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/limits.rs",
+      "sha256": "6d8ee6be317fe24a4ade5a3e0b399ee50c345a440532b291815ad46d7bd297ae"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/mcp.rs",
+      "sha256": "1e3045658a93280769e7a6da5688b6d76b4364e06d153b01983a0807a6979dfe"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_formatting/sanitize.rs",
+      "sha256": "2af7fa6f7a8a7fcce5577e27192f4723775bf924f152b4b25fd6a2060642a4bc"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_sections.rs",
+      "sha256": "2020b2cfc9204da37fde321e6d12862c09861a3768cc333048711d609ad83cac"
+    },
+    {
+      "path": "crates/target/src/tui/app/tool_state.rs",
+      "sha256": "0de76e9872096270a5fdad7d1a30d9b3f01bf8081fd21a969d59815745e5062b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tree_view_input.rs",
+      "sha256": "24afeeb6df8365b80af8ccb41e04e0d0041df927e3435b56cf05739f436fd42b"
+    },
+    {
+      "path": "crates/target/src/tui/app/tui_view_state.rs",
+      "sha256": "ff40e7841dc8ae6525d569542ec1205316341efdce7f7971445a93b36acdff84"
+    },
+    {
+      "path": "crates/target/src/tui/bash_bg_tasks.rs",
+      "sha256": "33601ba6db970a6b130738f76e14cf0a0d86bb49d8517b2c4739d44523783888"
+    },
+    {
+      "path": "crates/target/src/tui/help_overlay.rs",
+      "sha256": "64ae540c0808e57855959e2796f2856e2a3def58ebf8d03b4dad403c8bd33bbe"
+    },
+    {
+      "path": "crates/target/src/tui/input.rs",
+      "sha256": "7f3cfacdc33dac4ece5a79089db0eb4fd63a241439e0119017c5a2851f403c83"
+    },
+    {
+      "path": "crates/target/src/tui/input/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/input/tests.rs",
+      "sha256": "58387ae8b5baa753211771531e21a104a1c832b8de2600cea6022987a8331346"
+    },
+    {
+      "path": "crates/target/src/tui/input/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/input/tests/basic_keys.rs",
+      "sha256": "8b443d259f37b7095dc8483e3c364dab8e00c0bfa85ffa4a73a30dbe44818b9e"
+    },
+    {
+      "path": "crates/target/src/tui/input/tests/chords_and_hotkeys.rs",
+      "sha256": "74c3c2246a8a129ba5f9b4971faa5b67f60cd0255536f26724029a42f8e671e3"
+    },
+    {
+      "path": "crates/target/src/tui/input/tests/clipboard_paste.rs",
+      "sha256": "357a0b911d38e646e75279fc465c13377c25456219cde8801f047a3581cc09b6"
+    },
+    {
+      "path": "crates/target/src/tui/input/tests/events_and_mouse.rs",
+      "sha256": "9335a6d5cc2a4bc247f88c44ffc8450f7218098bdd6d4156df684acf030eb84e"
+    },
+    {
+      "path": "crates/target/src/tui/logging_overlay.rs",
+      "sha256": "5568c1efb3b8f15fd7048c0b6f3eb0cafd5d5e2055d78d490822633bc1ae5f01"
+    },
+    {
+      "path": "crates/target/src/tui/main_pi_bridge.rs",
+      "sha256": "8dff6f878a679a20fdfc90d1244633d17b17eba41a4ffd291d24fcd78960f1ad"
+    },
+    {
+      "path": "crates/target/src/tui/main_pi_bridge_path.rs",
+      "sha256": "4099b6edaa4146b64ff99f95a62af910153a5f967ea5c6040ff37fdb40ad1922"
+    },
+    {
+      "path": "crates/target/src/tui/main_pi_bridge_tests.rs",
+      "sha256": "7fb420d8685c9c3fb93312c822aeb1851e434df705b37e3fb10dd732eab01137"
+    },
+    {
+      "path": "crates/target/src/tui/mod.rs",
+      "sha256": "7dcf819a2bb7b0f7d77e373aa94bf11b56784c8c419fa51975c9dc8a134cbf38"
+    },
+    {
+      "path": "crates/target/src/tui/model_selector.rs",
+      "sha256": "78b6cb2cc599fe466e3c636a84fe95b73ced6b88bc52433d207cd9486bc8b125"
+    },
+    {
+      "path": "crates/target/src/tui/open_link.rs",
+      "sha256": "80eceb19f78740e61fdca8583a7447622a655f5705fa967a53c8e7c89f0d5f9d"
+    },
+    {
+      "path": "crates/target/src/tui/overlay.rs",
+      "sha256": "7571d96b8820c960a924b040c6808605515f4888c500da1c250d8e7de7e72b8e"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/detail_reload.rs",
+      "sha256": "e5a03bf739763fb312f7a3a681615624c8a86d2d9c9fa11406916db84063e009"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/list.rs",
+      "sha256": "3b4a94f2830f9104b9348610d0b6ad747efd93ae6416170588844cf506d16e48"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/list/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/list/format.rs",
+      "sha256": "8c57bfba05697f95a61127ea66cf62954c916c65b0dd54ad9a8f063a49b06505"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/render_gate.rs",
+      "sha256": "82ae183154f815d13930690f22521ce45ff3baaf3ce64bc00a048f150570d421"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report.rs",
+      "sha256": "dbed6158c00552565c058360ea83e072e685176b17378bbae180d1af0f8b6a5e"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/frontmatter.rs",
+      "sha256": "8b14e774a8a885e63a6169e479c0cbabffa90c381d220bc16eeb2ec52aaefa6e"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/frontmatter_tests.rs",
+      "sha256": "f7aa7c14c7df6972d5f1575594c33034fad26a49cc2530645bf11cc4d41e1f2b"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/measurement_support.rs",
+      "sha256": "665462739948cb97c308ddb903dc549c1abd99ae077dcd88ac7d55acfa1977fe"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection.rs",
+      "sha256": "7fe6ec6d492a5727123ec5ba552aacdf1e6d9966cf0df008213d7c18bc9df8bd"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests.rs",
+      "sha256": "486b8a087001a9e14ec0ace5621ad07c5d45700a536d5a5dcf377215feb72d3c"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests/cells.rs",
+      "sha256": "d0069829c6e6ee1e1f9f0886ae4e3950012bdabf5ac7be2d82a40f970bec56a5"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests/inline.rs",
+      "sha256": "b8e9c8351703277d1a3be13374581a2f473d645acceb040a23303b0f5bb20a5d"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests/prefix.rs",
+      "sha256": "1d083200e0803bb39bd53989c6b80f08f2ab17f6e3e9d0cd0048edfadd476eab"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/projection_tests/prefix_deadline.rs",
+      "sha256": "c9330d0099674f342c82c1a07116ad6b77832612f33802120b819281ff843a54"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/source.rs",
+      "sha256": "6acf183c1611503dd6cd9445d299180b261fd696db48cf5b2033bfe3de88eb16"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/source_tests.rs",
+      "sha256": "fae83f37be1faaf372103367562bd1a34003aedba80138edc5e0df4e10bd3bc6"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report/tail_tests.rs",
+      "sha256": "80d4445c4fbd7f1ce152aecea94be2b9fa0dcb9302224e2c4b1021390f45a68e"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report_reload.rs",
+      "sha256": "f0d2bb2bb15fde558c33b64ad1e6f4321f65cd457e6e2d5ca856953c6fa2ce57"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/report_render.rs",
+      "sha256": "ea312a5b06afedd2c86513e6381b9dc03c5a432c91d62c460031ded273cc77f2"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/sanitize.rs",
+      "sha256": "3ad24303e0980ea087c9f51af8f06aa681829e993d6399de734422ef84714d65"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/detail_reload.rs",
+      "sha256": "c716c20e81a64dbaf7f7713f69b24449d0d9e7f01de1ea418bf056de2cdf93ab"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/detail_render.rs",
+      "sha256": "c03a246934457ddd704347f4f1818f31c360fa9cea50d9b879312dddaf6cac22"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/detail_state.rs",
+      "sha256": "a9a77fd680567fb422558f728ec301117170a61d3f5ecc827b6ee616cc756dd9"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/list.rs",
+      "sha256": "d454b9c68bbf524be49b254568ff0a26fd004bb998bf03626b3fd108094cf035"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/mod.rs",
+      "sha256": "379e8d55ca0120f0a5d0462650c3e6796705ffde11ba4d9f29268542a3b94f2a"
+    },
+    {
+      "path": "crates/target/src/tui/overlay/tests/report_view.rs",
+      "sha256": "df6b1e8a77d163a8506633059c15e7fa74f52af86c8e741e159ea3154d478144"
+    },
+    {
+      "path": "crates/target/src/tui/project_status.rs",
+      "sha256": "166f8a7468d75e9822da0371abcf397aaf69f70c3556ba11f5e9837fc18f1af4"
+    },
+    {
+      "path": "crates/target/src/tui/prompt.rs",
+      "sha256": "67d08e56178dce70530f667f9976bb6433a98a7471b42467d182e14b6093b00c"
+    },
+    {
+      "path": "crates/target/src/tui/prompt/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/prompt/tests.rs",
+      "sha256": "836e33c9965af2ecab513a2b0ce7cea15824343459427b2c29d1ba1bf493cd17"
+    },
+    {
+      "path": "crates/target/src/tui/render.rs",
+      "sha256": "dc31b63b27306716f4cfede264cf3cbefe91e0dbbe57bc21242679db1d861af2"
+    },
+    {
+      "path": "crates/target/src/tui/render/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown.rs",
+      "sha256": "6c7434d59c638d03f46fcda3401f3a494479b7d901aae6c49dcae884528722ec"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/bold.rs",
+      "sha256": "6945a4d54378a6fd5cd957f9a7fd8827d738b24964810f021e488dd5f74dc9a1"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/bold/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/bold/tests.rs",
+      "sha256": "be0ee9ecce8165e39d36a4e5b6ba13f3757b7435fc063878ee7a76100867e2c7"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/chip.rs",
+      "sha256": "55ccc38ce9632a1ccaac83833ee38ef66c020afc0f528b5080b564772b79725c"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/chip/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/chip/tests.rs",
+      "sha256": "648f2d1303361acb15bbb84f0d67ef6a3d962fd622586f096e75f68ccca4cad4"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/tests.rs",
+      "sha256": "542b46222fb3ffe2bc5e8f3e4ee8f36c599b3354127e96af81ea3e8a41d450d5"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/tests/chips.rs",
+      "sha256": "96e5a6c25980278b8b83f3800c04edc4e42a2ba6dd43970602a9fbcec692cb8b"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/tests/inline.rs",
+      "sha256": "f230d55517ac1ba9e6f3c3608bcd4de01734e9e557ef751e7fb1d83c11ba2786"
+    },
+    {
+      "path": "crates/target/src/tui/render/markdown/tests/prefix.rs",
+      "sha256": "a49085aac574f9b43a81e1604ec742b51e5b81508146c81364169c5557ab8134"
+    },
+    {
+      "path": "crates/target/src/tui/render/row.rs",
+      "sha256": "3d4a3d501768f38fbec1e24fe045b0e709e7e7766e27961714b38bc67632e89e"
+    },
+    {
+      "path": "crates/target/src/tui/render/status_click_tests.rs",
+      "sha256": "3eb34b15c4c744174c4fa5a8de54e8a52f3d9850164cbe5e0018290ce57c1da2"
+    },
+    {
+      "path": "crates/target/src/tui/render/tests.rs",
+      "sha256": "aefa8d10c125940cc3cf4512c88f177665760b38f65119de3b3774515f8ae20b"
+    },
+    {
+      "path": "crates/target/src/tui/replay_lifecycle.rs",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/safe_format.rs",
+      "sha256": "e07cb00c8eb6531e7d790a11fa2a93a785aa137dc05f3a81b065979d317ab6c6"
+    },
+    {
+      "path": "crates/target/src/tui/safe_format/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/safe_format/tests.rs",
+      "sha256": "002a55a253fafcc1bc81796c899b6d93b88d5286fcf055e0e412221865569c19"
+    },
+    {
+      "path": "crates/target/src/tui/safe_format/yaml.rs",
+      "sha256": "9257dc866733ccd2fb37c110b602571e860e5e7d0e886b92bb85b168ead1228d"
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_draft_document.rs",
+      "sha256": "e77210bb6b1d7a79300b7c1836797bf6906d3f48aaa48c1fecaefa83558040dd"
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_draft_document/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_draft_document/tests.rs",
+      "sha256": "723ba44f2e4df53106a2f16481b511a0115d2f3179221ccfbe26211dfbca4da4"
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_runtime.rs",
+      "sha256": "b82531905495dc1fa25b31096a07c1eafd0e56d3bfce041a497c0111e1ad9572"
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_runtime/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_runtime/countdown.rs",
+      "sha256": "63d222c712035714c1403d08d6b70139ede941abe03872e80d7f9b1afeae767d"
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_runtime/manager_notice.rs",
+      "sha256": "20faacf4ce25f727d64a15325a294deee5b9fcb2f5003651bd14f8dbce3c3353"
+    },
+    {
+      "path": "crates/target/src/tui/scheduler_runtime/tests.rs",
+      "sha256": "225cda39c95a70964271065fe4d62d938f02a62c687dedbbdc4bdedc6de200ae"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback.rs",
+      "sha256": "95a3df0646ab978663fb75a1765eaea402eb9e62c8280b45976c522e3ec9cdef"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/dual.rs",
+      "sha256": "42edd0a008cb049ba11b3d118520ec90af3e9e5ad530f82f0fb0ef029794aa58"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/line.rs",
+      "sha256": "9616fb29b671dc5fa45cb7ddb5681649a89b06f5ce6d008df4f17b8918c81141"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown.rs",
+      "sha256": "1fe1d22753e9c08c78e28939e514d4b1a0932f4bf9cbaa40265812e4829bced9"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/inline.rs",
+      "sha256": "e75a05dbb067114613dd0c966f6e21b81e29d141adae86f33eed03e1cab38c88"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/inline/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/inline/cursor.rs",
+      "sha256": "5452288ddeffc71026b9720571131b0aae7f8fc4a8c26f5428b905d0e5faf6e5"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/inline/tests.rs",
+      "sha256": "c9aa9d5a5737439de9060c849b6f2833ea8afa96c0d2d96753673121de332bf3"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout.rs",
+      "sha256": "9a0c817cfb837a709d9370b4b193d9bd9be391a0b543efc6239c6113b3417f54"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/plain.rs",
+      "sha256": "2d4994600fd19f94796b35a14d487bfd47bf86c63761c6845a07afcc72cbefb4"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/prefix.rs",
+      "sha256": "d1eac8b82352249d9d39ddff7ee904348cc55d7a6215b57afe030cf87e93b893"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/table.rs",
+      "sha256": "31ea30e5ef2cc27c361e5f321463893fa1321ee279b8c97064617aef1ba1ee93"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/tests.rs",
+      "sha256": "36af3a3961724800407d4ab322351eb8663aca3d59f996e5279292b53a6460cf"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/tests/cells.rs",
+      "sha256": "9c4e428471169fa58418c2b907e076908c51a80f44ddebdb1b41e9b1c19d228e"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/tests/inline.rs",
+      "sha256": "f5438db70931cda32f3183f8afe0a3ac34d981f17e9a5ad7dfb5488d6ffd2201"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/layout/tests/prefix.rs",
+      "sha256": "ce31772f397726afb9cf98e364609624cca811495be28920e6679dbe3dbd6c1d"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/prefix.rs",
+      "sha256": "41dfda28dce74f8de13631535619742aefe35862c4061f6be03d906b44b77cab"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/prefix_tests.rs",
+      "sha256": "7b6f6637da8e7721876cf2e3575072262fc727ab5fb9962a6b5e4f4d7f235439"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/markdown/tests.rs",
+      "sha256": "0adf77a0a0f3713f0758e3c8e5c72898d36082a1d147f4718b6e156aea860026"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/navigation.rs",
+      "sha256": "1b8d935a1895d5fb5e5c082f556bf72d191c8e4ef8d14593102b0ef0308d07ae"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation.rs",
+      "sha256": "b88243fd9a431ce9eb44ae84447df19f6ca9d037f58714bd935844b0e64c0a1f"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/fence_parity_tests.rs",
+      "sha256": "74f504dc457be967d3081e4e831b995d2131fdd3ccf7a63a230169a7cb8d7bb4"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/inline_deadline_tests.rs",
+      "sha256": "dac98963eb983e3f7a3f87e8928c91b79dfea97a1f0d154cb4a4a74195b8086a"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/inline_tests.rs",
+      "sha256": "789284c0456c92644c2c658515b1d7d8ea5aa35ec92f082ba163d28acd84f8e8"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/interaction.rs",
+      "sha256": "80ff709e0b572d0b79a0b383fa7df5dc518c37db48898d77fd1fae69d61ba102"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/parity_tests.rs",
+      "sha256": "47f6c7dfdd43487804ff3a7f3d6040d1661ea8b8876b95b2a6b4a15bb98cc659"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/prefix_tests.rs",
+      "sha256": "4bafe18b9755728e2c4985bbeec1077376369fe1214a5ce42c3c0a0d008d8ba2"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/scanning.rs",
+      "sha256": "00576d37c94c84b72937417c7da010f689a7de670ea48e07a39ecd99f594d8ce"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/scanning_tests.rs",
+      "sha256": "8aacdbcece85a54e68414e3b0f0aac6bf6b3267bef290b42250965b0937d3568"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/source.rs",
+      "sha256": "a0b633cfa80f73e262033e7f4f3f4670d7c0c465d8cdee4cffad40c5b3cc73f6"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/state.rs",
+      "sha256": "5cefa58dd268f12973da3abdfa0077e2892ed0feeb2aeddc417ed20c0a51011f"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/state_inline_tests.rs",
+      "sha256": "e46737c465c51bfbed06d7def311e63e90e67f9f0a0aa96a22186b7f5a525383"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/presentation/tests.rs",
+      "sha256": "265b5a6dd666bb63d98076688e4f9687996140d8561e3833e29cc5578a765859"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax.rs",
+      "sha256": "cb2fc949566cd09310ade5b3a73656837a6afe653c1e06b1cd0d4d16ee349162"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/coverage_tests.rs",
+      "sha256": "e724beca1c940b86d51daedf5b3c47d5925a9428a2b191c8303cb97936575565"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/embedded.rs",
+      "sha256": "5e2c1fb47f10e0e8c9c706d1f3960a96f2098a5e739480db57fda93f7900764f"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/measurements.rs",
+      "sha256": "c55003632e5a147b24726f577e55a7d901ba7902ff0284ea4f0dc6e9cfeefcf2"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/owner.rs",
+      "sha256": "dc0507826cca44d59f6d52970020b4589d763ef5d913af3a7cd785e602ff8c6f"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/owner/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/owner/disposal_tests.rs",
+      "sha256": "2d470a125309142693d00848bf431a9e06419bff20c141caea483ae31b309c16"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/owner/tests.rs",
+      "sha256": "e7dafa2191454d25eca648987e57d4ec97f38204b5c5040ed9972ed7b2e0cb84"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/recovery.rs",
+      "sha256": "650da249f8ff51d6e739a22f47a543d20476acc9710aa485c97be7cbea284cd2"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/report.rs",
+      "sha256": "d576562cd418720d8e526f99fe5f0a584c218056f2c65f2036e98f58db7b0c61"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/tests.rs",
+      "sha256": "7c2ec0566b30448021c4c9546516eb4e5ad16e0abfb3d122d3a0f7e67199a489"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/worker.rs",
+      "sha256": "5133df99fa325e6dfd1bd87282ff9d1d0042bf7a1893cb1303285a92674ba3d0"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/worker/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/syntax/worker/tests.rs",
+      "sha256": "834cda9f4ea41c602222be0b5a0d3964ac37823a0488459c6aaae9713793b0a5"
+    },
+    {
+      "path": "crates/target/src/tui/scrollback/tests.rs",
+      "sha256": "bdedf51c4c0206c1adb5c87f4f1f83211e7735f02d299aabfe46606023298bdd"
+    },
+    {
+      "path": "crates/target/src/tui/search.rs",
+      "sha256": "058508ebc9fd957560a4c98b1b30a00f936fb7ec793a4fcbb4924c03934e96a9"
+    },
+    {
+      "path": "crates/target/src/tui/selector.rs",
+      "sha256": "7197daafb21a4811bc12945b3d0a2fc2e04ce6e415982ae6be457a39413e37d0"
+    },
+    {
+      "path": "crates/target/src/tui/selector/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/selector/render.rs",
+      "sha256": "ba731c55c6435fe1133abd68fbad58786f6c64409701ac22807fecc0f5b40808"
+    },
+    {
+      "path": "crates/target/src/tui/selector/tests.rs",
+      "sha256": "8888338229765bac9bb15cabe6ca4c321c2cbe87bf4a67a64814dfd3717f194e"
+    },
+    {
+      "path": "crates/target/src/tui/session_selector.rs",
+      "sha256": "466d349e7348edf0e5483f546238c00bf828ff08c23d9c6e502b4478bbdf7b34"
+    },
+    {
+      "path": "crates/target/src/tui/session_selector/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/session_selector/tests.rs",
+      "sha256": "664ce616dac7a7cb0b3fd261fcc263a38e339ad7827d559827cd665914149572"
+    },
+    {
+      "path": "crates/target/src/tui/status_line.rs",
+      "sha256": "34db8f72c46bb1e121086869cada85623d6ef576bc8fefabc1a582b47a165f13"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/status_line/compression.rs",
+      "sha256": "d02837b74083c7a18b54682718bce407a6f9af436738e9fa39ccc7f810a69a4b"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/format.rs",
+      "sha256": "e6de93303f251aa0e69989d8cfc89625e4fd912a3979cdba88d0f85cc73560fc"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/info.rs",
+      "sha256": "a49abd6f1d6df236aeacc8427d70d6628191633ebab1b6cd5a9436433e649a4f"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/click_targets.rs",
+      "sha256": "c4b15d13cc3440925c4c200215c1838702bc72297c58c35c15ee77e21b4a83c3"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/compression.rs",
+      "sha256": "f5c683d03f7e3c2fd8df84bb263fefb05cb64555992a71612076224cee67a3d6"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/formatting.rs",
+      "sha256": "28e34528ab208ca070cd7b7279957c43508386ba63c32284d436a0ef1992444b"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/mod.rs",
+      "sha256": "95f00979003e0e5aaaee38951f04441c007b793d70cd7a82c038b136bfc7eec1"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/pager.rs",
+      "sha256": "8dbb71e8d55e460ec0f3ff25ed7d631c92248d9615b4862e7d859397520fb1df"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/render_state.rs",
+      "sha256": "dcd64660f012b46a6f07162fc788debeed93b37da63b1f3a362e6e1b9dc0c4c3"
+    },
+    {
+      "path": "crates/target/src/tui/status_line/tests/scheduler.rs",
+      "sha256": "023b41092c375923c5c18409383a9593ef17d150fe8731f2b469eef14bdb82ba"
+    },
+    {
+      "path": "crates/target/src/tui/terminal.rs",
+      "sha256": "1a8c949b3828f1f2b3b0c64ba777b0da796266b937dcef60c6dbf7497ccefeeb"
+    },
+    {
+      "path": "crates/target/src/tui/terminal/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/terminal/keyboard_tests.rs",
+      "sha256": "9cfdf299ed10838dc6627b2ed0514f0aaec1c80cc77b6fca4555951e8db45bc3"
+    },
+    {
+      "path": "crates/target/src/tui/terminal/output_size_tests.rs",
+      "sha256": "e56199860a7c61c8904021b32ea1fb84a959454bb82a05b72849f1ce344b0048"
+    },
+    {
+      "path": "crates/target/src/tui/terminal/syntax_panic_tests.rs",
+      "sha256": "e8ffc8e712c243679bfef19b12cfef591487764380a150716029f9978c008965"
+    },
+    {
+      "path": "crates/target/src/tui/terminal/syntax_panic_tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/terminal/syntax_panic_tests/child.rs",
+      "sha256": "e63f607a4384f7308fa5be327dd899d0b0f6934857d8289c3c73a6d31de2339b"
+    },
+    {
+      "path": "crates/target/src/tui/terminal_output.rs",
+      "sha256": "eb1c0fe1371a25eb054fe824affa671f0ceadac7617ddf679036803fe4c87699"
+    },
+    {
+      "path": "crates/target/src/tui/terminal_title.rs",
+      "sha256": "7d6850f26f750e4758f537de84f2572769d38a44f8d3ec19e67a5273d9591bc2"
+    },
+    {
+      "path": "crates/target/src/tui/terminal_title/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/terminal_title/tests.rs",
+      "sha256": "624b99184cc0949fef1c5d34f639f985adbb4db62e73880eb83a29a49ed08071"
+    },
+    {
+      "path": "crates/target/src/tui/text_wrap.rs",
+      "sha256": "0df68506ecece43fd1284a58fa49abbb8d1bc8694403339b81e3f46f5bddc5c6"
+    },
+    {
+      "path": "crates/target/src/tui/theme_selector.rs",
+      "sha256": "3ccea3af8662d7b86211030d477c6b1a208155a443d288e495d4c2c5653f69f2"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser.rs",
+      "sha256": "1b1bb82c1be01d70684ef6c0131eded43a212095e2c4752f97b73afad999eb44"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/detail.rs",
+      "sha256": "64e8185482e115f6949768a6ca31e6facd253531207a5f00ca102bf675deb7f6"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/document.rs",
+      "sha256": "037f9b118159a85539043325a5c9842d6a30c52719629a28daf8f885ccf5eb11"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/inventory.rs",
+      "sha256": "01572b05c74ad6a6f0f254dfe7360b845f88523f0fa51df51181a460b3795d03"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/list.rs",
+      "sha256": "6759e35afa54aabe46036d94711b6adfac5e595ce8fd28c455b3a86c396ad6d7"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests.rs",
+      "sha256": "d2998fd06b0a9a4e968a67045c1ac62c0ae52ca244b8e4df5a13a7ee71c4868a"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests/detail.rs",
+      "sha256": "dd699831fb6b6a5985c0b520d45a83fc63c51aa8bb8dd8f31ae059a8f10e17d1"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests/inventory.rs",
+      "sha256": "c548d14ff55af63fdd3dce5221e78542df6c1cbb4c02f77406d58d42a0e3ccdb"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests/observations.rs",
+      "sha256": "7a91226922de9e5b6920d16b0d9853e3f74bb92a67f4c3f9f0f0e856dc3d6198"
+    },
+    {
+      "path": "crates/target/src/tui/tickets_browser/tests/sorting.rs",
+      "sha256": "d6d4b48f0a3b3fe0e123dbda32871dee6c6c7f5953285e8af5bf4846655adeef"
+    },
+    {
+      "path": "crates/target/src/tui/tool_render.rs",
+      "sha256": "1434bf6319199f08475d3eda2cc7f035ec24efe77b397f629fda9a205f31cfd7"
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates.rs",
+      "sha256": "174e7f84dc7bba504dfcccadec321ad4ce0575b2b53ece8bbcc0b8d55257b763"
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates/budget.rs",
+      "sha256": "20f90e9f7e5af0e598aba342bcc5b4ed8a18780ae400c0ea84442e54910664f1"
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates/extract.rs",
+      "sha256": "25a72bacc3667bfc0f7a6a47ac9de17525f5e73d8b71fe34acdc06f1c4775813"
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates/terminal_scan.rs",
+      "sha256": "7c9358bf50f98eac04e685093fe151fbff0af15b103e43df313066af3f99f9bb"
+    },
+    {
+      "path": "crates/target/src/tui/tool_updates/tests.rs",
+      "sha256": "8e3877e8aa511ecb378b525591dd1c48f870f133869e3a6a97bc9beeb814d9a7"
+    },
+    {
+      "path": "crates/target/src/tui/tree_view.rs",
+      "sha256": "f694858ec2dc43f3f7d6f80c9f311910cb8890ac8e36424a8030a0f8ec2f3285"
+    },
+    {
+      "path": "crates/target/src/tui/tree_view/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/tui/tree_view/tests.rs",
+      "sha256": "c9789e557292c2b42912331e106e5fccb48ba0fed6bd76acf99a7eb1874e00ed"
+    },
+    {
+      "path": "crates/target/src/tui/trust_prompt.rs",
+      "sha256": "0ae0af13105f157feef2235bbd58c341baa91984c8a1922521da7dc189966bb9"
+    },
+    {
+      "path": "crates/target/src/utils/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/utils/compact_bash/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/utils/session_report/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/worktree/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/src/worktree/registry/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "crates/target/tests/.gitignore",
+      "sha256": null
+    }
+  ],
+  "request": {
+    "repo_path": "/Users/said/Dev/vibe/target",
+    "crate_root": "crates/target/src/lib.rs",
+    "paths": [
+      "crates/target/src/lib.rs",
+      "crates/target/src/tui"
+    ],
+    "moves": [
+      {
+        "item": {
+          "path": "crates/target/src/tui/app.rs",
+          "range": {
+            "end_byte": 206091,
+            "start_byte": 205982
+          },
+          "expected_text": "impl Drop for App {\n    fn drop(&mut self) {\n        let _ = self.terminal_ownership.exit_terminal();\n    }\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/tui/replay_lifecycle.rs",
+          "parent_path": "crates/target/src/tui/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "crates/target/src/tui/app.rs",
+          "range": {
+            "end_byte": 207147,
+            "start_byte": 206408
+          },
+          "expected_text": "fn send_sigint_to_pid(pid: Option<u32>) {\n    #[cfg(unix)]\n    if let Some(pid) = pid {\n        let result = std::process::Command::new(\"kill\")\n            .arg(\"-INT\")\n            .arg(pid.to_string())\n            .status();\n        match result {\n            Ok(status) if status.success() => {\n                tracing::debug!(pid, \"SIGINT sent to pi\");\n            }\n            Ok(status) => {\n                tracing::warn!(pid, ?status, \"kill -INT returned non-zero\");\n            }\n            Err(e) => {\n                tracing::warn!(pid, error = %e, \"failed to send SIGINT\");\n            }\n        }\n    }\n\n    #[cfg(not(unix))]\n    {\n        let _ = pid;\n        tracing::warn!(\"SIGINT not supported on this platform\");\n    }\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "crates/target/src/tui/replay_lifecycle.rs",
+          "parent_path": "crates/target/src/tui/mod.rs"
+        }
+      }
+    ],
+    "globs": [
+      "crates/target/src/lib.rs",
+      "crates/target/src/tui/mod.rs",
+      "crates/target/src/tui/app.rs",
+      "crates/target/src/tui/app/**",
+      "crates/target/src/tui/replay_*.rs"
+    ]
+  }
+}

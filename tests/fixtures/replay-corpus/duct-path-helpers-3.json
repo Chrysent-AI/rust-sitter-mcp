@@ -1,0 +1,143 @@
+{
+  "id": "duct-path-helpers-3",
+  "codebase": "duct",
+  "label": "Proc-macro-light subprocess library path/error helpers",
+  "source_commit": "ba535d51f5e9912cc3a6bfbd8be80d7516305f8b",
+  "provenance": "Constructed read-only from suggest_split inventory ranges and exact UTF-8 byte slices, 2026-10-06.",
+  "source_sha256": [
+    {
+      "path": ".gitignore",
+      "sha256": "f9b1ca6ae27d1c18215265024629a8960c31379f206d9ed20f64e0b2dcf79805"
+    },
+    {
+      "path": "duct_sh/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "duct_sh/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/bin/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/bin/cat.rs",
+      "sha256": "fc6872c887aaf12b7f5f2d13b91ff938f205030aa29887d8a50efd212a644130"
+    },
+    {
+      "path": "src/bin/child_grandchild.rs",
+      "sha256": "300f8fb1e0ab77343952e516f0236524ae0947e10404cd26f4928872133c3ef2"
+    },
+    {
+      "path": "src/bin/echo.rs",
+      "sha256": "bb665380c7b3e9446fd78d04b2d1d35b4588ed65abb78c53be20bf9481047a77"
+    },
+    {
+      "path": "src/bin/exe_in_dir.rs",
+      "sha256": "e828bb957dea3d40f9ec67a2d5c8fc7c44cb0c46f56a4c9d126d437b72a0c330"
+    },
+    {
+      "path": "src/bin/print_env.rs",
+      "sha256": "115ccecc65972988f00ae8c017d4e2767b80570f491b9cf17bdb9c8b5c404420"
+    },
+    {
+      "path": "src/bin/print_env_name.rs",
+      "sha256": "31087ce6e7452094597094b644a953e9d6971c66d3d4717b8325e6238afea6d4"
+    },
+    {
+      "path": "src/bin/pwd.rs",
+      "sha256": "f5df52b1a4a186d3402b320287680bb0a385492dcd0c1724dd30073458338df3"
+    },
+    {
+      "path": "src/bin/sleep.rs",
+      "sha256": "8ff1189a0aba180f87fd41c1a7ccf4fb46a3d747d49a22e75f1e7182cf207610"
+    },
+    {
+      "path": "src/bin/status.rs",
+      "sha256": "f1ca9b987b2b7dba611ac9b1c86c9c1a5d7dc1eb5d91533def3915ec28340438"
+    },
+    {
+      "path": "src/bin/x_to_y.rs",
+      "sha256": "f55640201cfb96a4da3f6fdaaacb3b9eb6ba4261fa141e193d7d6feb5f84eb1b"
+    },
+    {
+      "path": "src/env_name_str.rs",
+      "sha256": "679f5ac97144658e43d2cc225fb339527b62e8c366521a8959aec1d4b43b81ef"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "4257ba015c29d2a4bd9e3ddbef9ce6aa3f054611c1cec750029abd8b2dabb387"
+    },
+    {
+      "path": "src/replay_paths.rs",
+      "sha256": null
+    },
+    {
+      "path": "src/test.rs",
+      "sha256": "82347b1960298070f30fcede6249dcca85a308d1615ce7b78b685b976530b628"
+    },
+    {
+      "path": "src/unix.rs",
+      "sha256": "c57d860cb5ae2e0eb13a1d0b38b6de8e6e99415772115c35853c187ac4a9b2c7"
+    }
+  ],
+  "request": {
+    "repo_path": "/Users/said/Dev/vibe/duct.rs",
+    "crate_root": "src/lib.rs",
+    "paths": [
+      "src"
+    ],
+    "moves": [
+      {
+        "item": {
+          "path": "src/lib.rs",
+          "range": {
+            "end_byte": 65083,
+            "start_byte": 62831
+          },
+          "expected_text": "fn canonicalize_exe_path_for_dir(exe_name: &OsStr, context: &IoContext) -> io::Result<OsString> {\n    // There's a tricky interaction between exe paths and `dir`. Exe paths can\n    // be relative, and so we have to ask: Is an exe path interpreted relative\n    // to the parent's cwd, or the child's? The answer is that it's platform\n    // dependent! >.< (Windows uses the parent's cwd, but because of the\n    // fork-chdir-exec pattern, Unix usually uses the child's.)\n    //\n    // We want to use the parent's cwd consistently, because that saves the\n    // caller from having to worry about whether `dir` will have side effects,\n    // and because it's easy for the caller to use Path::join if they want to.\n    // That means that when `dir` is in use, we need to detect exe names that\n    // are relative paths, and absolutify them. We want to do that as little as\n    // possible though, both because canonicalization can fail, and because we\n    // prefer to let the caller control the child's argv[0].\n    //\n    // We never want to absolutify a name like \"emacs\", because that's probably\n    // a program in the PATH rather than a local file. So we look for slashes\n    // in the name to determine what's a filepath and what isn't. Note that\n    // anything given as a std::path::Path will always have a slash by the time\n    // we get here, because we specialize the IntoExecutablePath trait to\n    // prepend a ./ to them when they're relative. This leaves the case where\n    // Windows users might pass a local file like \"foo.bat\" as a string, which\n    // we can't distinguish from a global program name. However, because the\n    // Windows has the preferred \"relative to parent's cwd\" behavior already,\n    // this case actually works without our help. (Windows users previously\n    // needed to watch out for local files shadowing global program names, but\n    // Rust 1.58 improved this.)\n\n    let has_separator = exe_name\n        .to_string_lossy()\n        .chars()\n        .any(std::path::is_separator);\n    let is_relative = Path::new(exe_name).is_relative();\n    if context.dir.is_some() && has_separator && is_relative {\n        Path::new(exe_name).canonicalize().map(Into::into)\n    } else {\n        Ok(exe_name.to_owned())\n    }\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "src/replay_paths.rs",
+          "parent_path": "src/lib.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "src/lib.rs",
+          "range": {
+            "end_byte": 65505,
+            "start_byte": 65344
+          },
+          "expected_text": "fn dotify_relative_exe_path(path: &Path) -> PathBuf {\n    // This is a no-op if path is absolute or begins with a Windows prefix.\n    Path::new(\".\").join(path)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "src/replay_paths.rs",
+          "parent_path": "src/lib.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "src/lib.rs",
+          "range": {
+            "end_byte": 67784,
+            "start_byte": 67566
+          },
+          "expected_text": "fn clone_io_error(error: &io::Error) -> io::Error {\n    if let Some(code) = error.raw_os_error() {\n        io::Error::from_raw_os_error(code)\n    } else {\n        io::Error::new(error.kind(), error.to_string())\n    }\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "src/replay_paths.rs",
+          "parent_path": "src/lib.rs"
+        }
+      }
+    ]
+  }
+}

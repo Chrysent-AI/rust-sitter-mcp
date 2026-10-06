@@ -1,0 +1,247 @@
+{
+  "id": "rust-sitter-template-types-3",
+  "codebase": "rust-sitter-mcp",
+  "label": "Engine template data types",
+  "source_commit": "7fa1564bf19f36e0b2af9c88a4ffa4e5513daa7a",
+  "provenance": "Constructed read-only from suggest_split inventory ranges and exact UTF-8 byte slices, 2026-10-06.",
+  "source_sha256": [
+    {
+      "path": ".gitignore",
+      "sha256": "26431918e449693f4385438e3955a1e078dbc9a4c78e68d8e6caf7a21647b1ff"
+    },
+    {
+      "path": "src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/cursor.rs",
+      "sha256": "02ff75151c68c519ec78d5a7ddafc4031aafca50388e22050487a122925aaf56"
+    },
+    {
+      "path": "src/edit.rs",
+      "sha256": "d22c62dc1880a77f48d19321f243e0b5d40b50270b5cf6ed42aeaaa3adb73cc3"
+    },
+    {
+      "path": "src/engine.rs",
+      "sha256": "15d54695c0f9fa8c17d18a51b412eac5e744a22adeba5b394fe042b20b83d884"
+    },
+    {
+      "path": "src/items.rs",
+      "sha256": "24cb7ea5ebbd9a1ed3645447f60c5af0ddb8ef2397083e7e212fa8dfb12d00df"
+    },
+    {
+      "path": "src/items/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/items/attributes.rs",
+      "sha256": "6fe61741632053549290ae6122d766870a071fc8a464c8b995a4c9133b57ce04"
+    },
+    {
+      "path": "src/items/chain.rs",
+      "sha256": "ec7e660d400ab882a0a97dda54287df534384cf59c7f919abb2d8c5659d6efc0"
+    },
+    {
+      "path": "src/items/chain/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/items/chain/tests.rs",
+      "sha256": "4dd1978894d0f214d04ab657e16b7ac0b0367e24b0a3df8bfdbfcccaa4a7b7a8"
+    },
+    {
+      "path": "src/items/globs.rs",
+      "sha256": "bd035f02a48b13a5d21ca17d45ec62d9c1e23995fe8e0b1defea7a555d980cbb"
+    },
+    {
+      "path": "src/items/lexical.rs",
+      "sha256": "cb5ef3441a0e966b587c49e6bc20915c8d524aa149e3fa40f27b4a20d6cba029"
+    },
+    {
+      "path": "src/items/lexical/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/items/lexical/tests.rs",
+      "sha256": "0bcbce2a84839a9e386b98817b2b46206aabb8e032e2cba544d788aaac69bbef"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "548934ec373bb8f64b5656ae9cc869aaf29a95e2fe0924aa909119019d002022"
+    },
+    {
+      "path": "src/main.rs",
+      "sha256": "fb60066e95c2c31ebdfd2a941ee8a5b1167a9789513b79b927ff5c165207535a"
+    },
+    {
+      "path": "src/matching.rs",
+      "sha256": "4eafcba4fd54950e90690071048f4870a4d0aab90b7cb9df3117095f2af45564"
+    },
+    {
+      "path": "src/mcp.rs",
+      "sha256": "4f0ad4c98c3c8822a785ee4cbd813325faf268c952129156141145d42aae55c5"
+    },
+    {
+      "path": "src/move_plan.rs",
+      "sha256": "7bf24d4092dc0f6dee50c66f487f628c8a1c8774f5c22924e3e50508de00be22"
+    },
+    {
+      "path": "src/move_plan/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/move_plan/actions.rs",
+      "sha256": "c15229fe42f9685c47d23f3c1edc839c289e2c1091faf2daccd47665a560603f"
+    },
+    {
+      "path": "src/move_plan/ergonomics.rs",
+      "sha256": "c6ca4c34d1525fcd5ca9b7593f94a3869fa21b55029d19e754486f6c585efff2"
+    },
+    {
+      "path": "src/move_plan/prelude.rs",
+      "sha256": "25c43c5915bdeb9d5aabd5ed2f511f4903fee6b8f849e80e7ad9d621eab10556"
+    },
+    {
+      "path": "src/move_plan_tests.rs",
+      "sha256": "54c4591ac2e1aaf617e5f92f428e62b208bf6c9e2fbff997f56f6f0e814f8c68"
+    },
+    {
+      "path": "src/patch.rs",
+      "sha256": "2273cbde3fc5743e7050183aeee30057a8756a5d60f3de657715ec6a05c514af"
+    },
+    {
+      "path": "src/pattern.rs",
+      "sha256": "68358ada0eea95c694183f503f7e4b21e646b8aa6c22cdd888ef0097f7093cfb"
+    },
+    {
+      "path": "src/plan.rs",
+      "sha256": "56fea843ccea97725d677018def90a689314bb3adeb99064ce389c08f226aa50"
+    },
+    {
+      "path": "src/query.rs",
+      "sha256": "b6dc6a5d0406ce6488deb73fa6493d638dd9e78bd33df45d04036f827615f0ab"
+    },
+    {
+      "path": "src/result.rs",
+      "sha256": "dd1128539cfdd3da3d2db68679288ef0b5059c4f154012ef7f7c77707865c442"
+    },
+    {
+      "path": "src/rewrites.rs",
+      "sha256": "6326abe0fcbc024d58b5d57139ccd15b9d223dc6d4330d2a9d2694b3d1dfb42d"
+    },
+    {
+      "path": "src/scope.rs",
+      "sha256": "d932a8b42327698dd4a1ca2dc93b004d4e16e2434f5f8ce17e7da5f1284abcf5"
+    },
+    {
+      "path": "src/split.rs",
+      "sha256": "b2c954b1543b114cf661d62bb6888e7bb2e69f3119aafa344ec8a541fbbc1953"
+    },
+    {
+      "path": "src/split/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/split/drafts.rs",
+      "sha256": "d93c2d029777358645bea4d3e85b08cf17de715b0fa0b04776907b7e988e68f2"
+    },
+    {
+      "path": "src/split/drafts/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "src/split/drafts/tests.rs",
+      "sha256": "e459cd1af60c371121184d3b876786e8e9edb5135f97a7b4f82fc20ca5859adc"
+    },
+    {
+      "path": "src/split/signals.rs",
+      "sha256": "94881a358b83fcf3b465ab68063a7c497886d4b0b7035c39b8dc6744c922af3d"
+    },
+    {
+      "path": "src/split/tests.rs",
+      "sha256": "9b1174a1168b65d511faeb859d6ffc9fc2e3af89cbe3b035b6acaf1b9a580b83"
+    },
+    {
+      "path": "src/template.rs",
+      "sha256": "430660fd6f8810176ad4f75ffdfd96a26a9d65917ea689fa703c478ce96ee0aa"
+    },
+    {
+      "path": "src/template_replay.rs",
+      "sha256": null
+    },
+    {
+      "path": "src/trivia.rs",
+      "sha256": "880300c42f757aadb5fe103b7f1c9a4c6dc5b1610867073292571c59560179a2"
+    },
+    {
+      "path": "tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "tests/fixtures/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "tests/fixtures/spawner_precision/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "tests/support/.gitignore",
+      "sha256": null
+    }
+  ],
+  "request": {
+    "repo_path": "/Users/said/Dev/vibe/rust-sitter-mcp",
+    "crate_root": "src/lib.rs",
+    "paths": [
+      "src"
+    ],
+    "moves": [
+      {
+        "item": {
+          "path": "src/template.rs",
+          "range": {
+            "end_byte": 302,
+            "start_byte": 214
+          },
+          "expected_text": "pub struct Template {\n    source: String,\n    references: Vec<(String, Range<usize>)>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "src/template_replay.rs",
+          "parent_path": "src/lib.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "src/template.rs",
+          "range": {
+            "end_byte": 407,
+            "start_byte": 320
+          },
+          "expected_text": "pub struct CopyOrigin {\n    pub original: Range<usize>,\n    pub output: Range<usize>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "src/template_replay.rs",
+          "parent_path": "src/lib.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "src/template.rs",
+          "range": {
+            "end_byte": 487,
+            "start_byte": 408
+          },
+          "expected_text": "pub struct Expansion {\n    pub text: String,\n    pub copies: Vec<CopyOrigin>,\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "src/template_replay.rs",
+          "parent_path": "src/lib.rs"
+        }
+      }
+    ]
+  }
+}
