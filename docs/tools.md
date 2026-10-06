@@ -323,6 +323,27 @@ There is no build-script environment, target data layout or implicit standard
 library source. Missing/invalid/incomplete graph evidence does not acknowledge
 away a blocker: the original typed needs remain.
 
+The resolution context gate evaluates written `cfg` and `cfg_attr` predicates:
+bare atoms, string-valued atoms (including `feature="name"`), `true`/`false`,
+`all(...)`, `any(...)` and single-operand `not(...)`, nested up to 32 levels.
+Exact atoms listed in that crate's configuration are ON; unlisted atoms (including
+unlisted features or a different value for a declared key) are **unknown**, not
+implicitly OFF. OFF is provable through `not` of an ON predicate, `false`, or
+`any()`. Every operand is checked: a known result cannot short-circuit an unknown
+atom away. Unsupported predicates, malformed attributes and unknown atoms retain
+the veto. A known-OFF sibling is configuration information, not proof an inactive
+selected occurrence resolves. No new false-atom request field is introduced.
+
+Bare derives containing only `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `PartialEq`,
+`Ord`, `PartialOrd` and `Hash` are admitted as compiler-built-in trait-impl-only
+context; known competing macro bindings, qualified names and other derive names
+retain the veto. This is the same bare built-in name contract as standard-prelude
+evidence, not proc-macro execution or a macro-hygiene proof. For `cfg_attr`, an ON
+condition requires each payload attribute to be admitted recursively; an OFF
+condition records the payload as inactive without evaluating it. Existing inert
+lint/doc/inline/registration attributes remain admitted. Module-level macro
+invocations still veto resolution.
+
 Only concrete, known receivers with preserved original **and adjusted** type
 identities qualify. The first scope resolves actual inherent functions (including
 associated calls), named fields, type/constructor paths and ordinary written
@@ -336,8 +357,9 @@ unsupported receiver shapes or const/lifetime substitutions, expanded/generated
 nodes and affected macro/attribute contexts retain their existing typed blockers.
 Macro-bearing function bodies unrelated to the selected occurrence and ordinary
 proc-macro registration elsewhere do not key refusal on the crate's kind.
-Existing macro/module-chain/cfg(test), API, trivia and required-repair vetoes are
-unchanged. This is not general trait resolution, semantic rename or a compiler.
+Independent macro/module-chain/cfg(test), API, trivia and required-repair vetoes
+are unchanged; the attribute refinement applies only to this resolution gate.
+This is not general trait resolution, semantic rename or a compiler.
 
 Each discharged occurrence adds a discriminated
 `plan.binding_proofs[]` record with `class:"ra_resolved"`: full original and final
@@ -345,6 +367,11 @@ anchors, contributing item IDs, original/adjusted receivers at both ends,
 original/final declaration identities (crate origin + stable written name
 anchor), classification, `source_access:true`, `final_access:true` and explicit
 configuration coverage. A plain function binding has null receiver fields.
+A required-binding attribute veto can separately produce a `ra_resolved` record
+with `classification:"context_attribute"`, an attribute declaration anchor and
+null receivers: this proves inert context at both revisions, **not** resolution
+of a dependent pattern/body. Written access checks and required visibility/module
+repairs still run before this context-only veto can discharge.
 `coverage.ra_resolved` counts these occurrences separately from prelude proofs,
 including records omitted during output fitting. Type identities/declarations
 are compared across revisions through the assembler's exact byte-origin map.
@@ -357,7 +384,16 @@ When queries are performed, `plan.integrity.semantic` is
 **"resolution performed for N decisions under one explicit configuration;
 compilation/equivalence not performed"**. Its configuration, analyzer version,
 source `snapshot_id`, `semantic_input_digest`, `final_overlay_digest` and explicit
-omissions scope every proof. Zero proved occurrences never means verified code.
+omissions scope every proof. `context_evaluations[]` adds deduplicated anchored
+records for reached context checks: `revision` (`original`/`final`), `crate_name`,
+`anchor` (exact path/range/text), `kind` (`attribute`, `cfg_predicate` or
+`module_macro`), `status` (`admitted`, `evaluated`, `inactive` or `skipped`),
+nullable predicate `value`, and `reason`. Reasons identify undeclared atoms,
+unsupported predicates, malformed/non-built-in derives, parser recovery or
+module macros; known predicates disclose both true and false values. The same
+coverage accompanies proofs and zero-proof results. Omissions explicitly state
+that checks after a veto and inactive payloads were not evaluated; this is not an
+exhaustive attribute inventory. Zero proved occurrences never means verified code.
 The semantic digest binds the source snapshot plus graph, editions, features,
 cfg atoms and analyzer identity; the overlay digest additionally binds all final
 virtual source bytes. Manifests are not inputs and are not freshness claims.
