@@ -304,6 +304,247 @@ fn relative_named_reexport_in_a_declaring_parent_matches_the_probe_shape() {
 }
 
 #[test]
+fn canonical_reexport_route_checks_module_visibility_from_the_destination() {
+    for (visibility, accessible) in [
+        ("", false),
+        ("pub ", true),
+        ("pub(crate) ", true),
+        ("pub(super) ", true),
+        ("pub(self) ", false),
+        ("pub(in crate) ", true),
+        ("pub(in crate::scheduler) ", true),
+        ("pub(in crate::scheduler::persistence) ", false),
+        ("pub(in super) ", true),
+        ("pub(in super::super) ", true),
+        ("pub(in self) ", false),
+        ("pub ( /* visibility trivia */ super ) ", true),
+    ] {
+        for form in ["bare", "path", "scoped", "grouped"] {
+            // Exercise each rewrite form at both access outcomes; the shared check
+            // handles the full visibility matrix for bare imports.
+            if form != "bare" && !matches!(visibility, "" | "pub(crate) ") {
+                continue;
+            }
+            for existing in [false, true] {
+                let repo = Fixture::generate();
+                repo.write("cases/layout/lib.rs", "mod scheduler;\n");
+                repo.write(
+                    "cases/layout/scheduler/mod.rs",
+                    "mod persistence;\nmod runtime;\n",
+                );
+                let module = format!("{visibility}mod foundation_types;");
+                let hop = "pub use foundation_types::VerificationStatus;";
+                repo.write(
+                    "cases/layout/scheduler/persistence/mod.rs",
+                    &format!("{module}\n{hop}\n"),
+                );
+                repo.write(
+                    "cases/layout/scheduler/persistence/foundation_types.rs",
+                    "pub enum VerificationStatus { Passed }\n",
+                );
+                repo.write(
+                    "cases/layout/scheduler/runtime/mod.rs",
+                    if existing {
+                        "mod operations;\nmod projections;\n"
+                    } else {
+                        "mod operations;\n"
+                    },
+                );
+                if existing {
+                    repo.write("cases/layout/scheduler/runtime/projections.rs", "");
+                }
+                let selected = match form {
+                    "bare" => {
+                        "fn selected(value: VerificationStatus) -> VerificationStatus { value }"
+                    }
+                    "path" => {
+                        "fn selected(value: crate::scheduler::persistence::VerificationStatus) {}"
+                    }
+                    "scoped" => {
+                        "fn selected() { use crate::scheduler::persistence::VerificationStatus; }"
+                    }
+                    _ => {
+                        "fn selected() { use crate::scheduler::persistence::{VerificationStatus}; }"
+                    }
+                };
+                let source = "cases/layout/scheduler/runtime/operations.rs";
+                repo.write(
+                    source,
+                    &format!(
+                        "use crate::scheduler::persistence::VerificationStatus;\n{selected}\n"
+                    ),
+                );
+                compile(&repo);
+                let mut args = request(&repo, source, selected);
+                args["moves"][0]["destination"] = if existing {
+                    json!({"kind":"existing","path":"cases/layout/scheduler/runtime/projections.rs"})
+                } else {
+                    json!({"kind":"new_sibling","path":"cases/layout/scheduler/runtime/projections.rs","parent_path":"cases/layout/scheduler/runtime/mod.rs"})
+                };
+                let result = run(&repo, args);
+                if accessible {
+                    compile(&apply(&repo, &result));
+                    assert!(!written(&result).is_empty(), "{result}");
+                    assert!(
+                        written(&result).iter().any(|r| r["after_text"]
+                            .as_str()
+                            .unwrap()
+                            .contains("foundation_types")),
+                        "{result}"
+                    );
+                } else {
+                    withheld(&result);
+                    assert!(written(&result).is_empty(), "{result}");
+                    assert!(
+                        !result["plan"]["rewrites"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|r| r["after_text"]
+                                .as_str()
+                                .unwrap()
+                                .contains("foundation_types")),
+                        "{result}"
+                    );
+                    let expected =
+                        anchor(&repo, "cases/layout/scheduler/persistence/mod.rs", &module);
+                    assert!(
+                        result["plan"]["decisions"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|d| {
+                                d["blocks_applicability"] == true
+                                    && d["reason"] == "visibility_scope_unproved"
+                                    && d["refusal_basis"].as_array().is_some_and(|bases| {
+                                        bases.iter().any(|b| {
+                                            b["class"] == "inaccessible_route:foundation_types"
+                                                && b["name"] == "foundation_types"
+                                                && b["anchor"]["path"] == expected["path"]
+                                                && b["anchor"]["range"] == expected["range"]
+                                        })
+                                    })
+                            }),
+                        "{result}"
+                    );
+                }
+                assert!(
+                    !result["plan"]["rewrites"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|r| r["kind"] == "visibility"),
+                    "route checking must not widen module visibility: {result}"
+                );
+                assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_route_checks_every_edge_and_private_parent_descendants() {
+    for (visibility, destination, accessible) in [
+        ("", "runtime", false),
+        ("", "store", true),
+        ("pub(in crate::unrelated) ", "store", false),
+    ] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod scheduler;\n");
+        repo.write(
+            "cases/layout/scheduler/mod.rs",
+            "mod store;\nmod runtime;\n",
+        );
+        let module = format!("{visibility}mod persistence;");
+        repo.write(
+            "cases/layout/scheduler/store/mod.rs",
+            &format!("{module}\npub use persistence::VerificationStatus;\nmod projections;\n"),
+        );
+        repo.write(
+            "cases/layout/scheduler/store/persistence/mod.rs",
+            "pub(crate) mod foundation_types;\npub use foundation_types::VerificationStatus;\n",
+        );
+        repo.write(
+            "cases/layout/scheduler/store/persistence/foundation_types.rs",
+            "pub enum VerificationStatus { Passed }\n",
+        );
+        repo.write(
+            "cases/layout/scheduler/runtime/mod.rs",
+            "mod operations;\nmod projections;\n",
+        );
+        repo.write("cases/layout/scheduler/store/projections.rs", "");
+        repo.write("cases/layout/scheduler/runtime/projections.rs", "");
+        let selected = "fn selected(value: VerificationStatus) -> VerificationStatus { value }";
+        let source = "cases/layout/scheduler/runtime/operations.rs";
+        repo.write(
+            source,
+            &format!("use crate::scheduler::store::VerificationStatus;\n{selected}\n"),
+        );
+        if visibility.is_empty() {
+            compile(&repo);
+        }
+        // The non-ancestor restriction is syntax-valid but deliberately not
+        // compiler-valid; it exercises conservative refusal of unproved scope.
+        let mut args = request(&repo, source, selected);
+        args["moves"][0]["destination"] = json!({"kind":"existing","path":format!("cases/layout/scheduler/{destination}/projections.rs")});
+        let result = run(&repo, args);
+        if accessible {
+            compile(&apply(&repo, &result));
+            assert!(!written(&result).is_empty(), "{result}");
+        } else {
+            withheld(&result);
+            assert!(written(&result).is_empty(), "{result}");
+            let expected = anchor(&repo, "cases/layout/scheduler/store/mod.rs", &module);
+            assert!(
+                result["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+                    .any(|b| {
+                        b["class"] == "inaccessible_route:persistence"
+                            && b["anchor"]["path"] == expected["path"]
+                            && b["anchor"]["range"] == expected["range"]
+                    }),
+                "{result}"
+            );
+        }
+    }
+}
+
+#[test]
+fn inaccessible_route_precedes_terminal_attribute_veto_and_emits_no_preview_import() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\nmod persistence;\n");
+    repo.write(
+        "cases/layout/persistence/mod.rs",
+        "mod foundation_types;\npub use foundation_types::VerificationStatus;\n",
+    );
+    repo.write(
+        "cases/layout/persistence/foundation_types.rs",
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum VerificationStatus { Passed }\n",
+    );
+    let selected = "fn selected(value: VerificationStatus) -> VerificationStatus { value }";
+    repo.write(
+        "cases/layout/source.rs",
+        &format!("use crate::persistence::VerificationStatus;\n{selected}\n"),
+    );
+    compile(&repo);
+    let result = run(&repo, request(&repo, "cases/layout/source.rs", selected));
+    withheld(&result);
+    assert!(written(&result).is_empty(), "{result}");
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+            .any(|b| b["class"] == "inaccessible_route:foundation_types"),
+        "{result}"
+    );
+}
+
+#[test]
 fn unsupported_reexport_routes_remain_blocked() {
     for (bridge, second, bindings, reason) in [
         (
