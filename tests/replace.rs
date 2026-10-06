@@ -157,7 +157,7 @@ fn multi_file_hunks_path_quotes_newlines_and_json_equivalence() {
     );
 }
 #[test]
-fn selection_noops_staleness_and_preselection_cap() {
+fn selection_noops_and_staleness() {
     let repo = Repo::new();
     let source = "fn f(){ x.unwrap(); y.unwrap(); }";
     repo.write("a.rs", source);
@@ -174,15 +174,157 @@ fn selection_noops_staleness_and_preselection_cap() {
     assert!(repo.apply(&result)["a.rs"].contains("y.unwrap()"));
     request.selection.as_mut().unwrap()[0].expected_text = "changed".into();
     assert_eq!(repo.run(request).error.unwrap().code, "STALE_SELECTION");
-    let source = format!("fn f(){{ {} }}", vec!["x.unwrap();"; 501].join(" "));
+}
+#[test]
+fn explicit_selection_on_thousand_match_scope_is_admitted() {
+    let repo = Repo::new();
+    let source = format!("fn f(){{ {} }}", "x.unwrap();".repeat(1000));
     repo.write("a.rs", &source);
     let mut request = repo.request("$a.unwrap()", "$a.expect(\"why\")");
     request.selection =
         Some(serde_json::from_value(json!([anchor("a.rs", &source, "x.unwrap()")])).unwrap());
-    blocked(&repo.run(request), "max_matches");
+    for cap in [500, 1] {
+        request.max_matches = cap;
+        let result = repo.run(request.clone());
+        assert_eq!(result.status, "complete", "{result:?}");
+        assert!(result.coverage.scope_exhaustive);
+        assert_eq!(result.counts.total_matches, Some(1000));
+        assert!(result.counts.total_is_exact);
+        assert_eq!(result.counts.observed_matches, 1000);
+        assert_eq!(result.counts.returned_matches, 1);
+        assert_eq!(result.plan.selected_count, Some(1));
+        assert_eq!(result.plan.matches.len(), 1);
+        assert_eq!(result.plan.edits.as_ref().unwrap().len(), 1);
+        assert_eq!(result.plan.integrity.semantic, "not_performed");
+        assert_eq!(
+            repo.apply(&result)["a.rs"],
+            source.replacen(".unwrap()", ".expect(\"why\")", 1)
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.0.join("a.rs")).unwrap(),
+            source
+        );
+    }
+}
+#[test]
+fn large_scope_selection_still_reports_typed_trivia_blocker() {
+    let repo = Repo::new();
+    let source = format!(
+        "fn f(){{ x.unwrap(/* keep */); {} }}",
+        "y.unwrap();".repeat(999)
+    );
+    repo.write("a.rs", &source);
     let mut request = repo.request("$a.unwrap()", "$a.expect(\"why\")");
-    request.max_matches = 501;
-    assert!(repo.run(request).plan.applicable);
+    request.selection = Some(
+        serde_json::from_value(json!([anchor("a.rs", &source, "x.unwrap(/* keep */)")])).unwrap(),
+    );
+    request.max_matches = 1;
+    let result = repo.run(request);
+    blocked(&result, "UNRETAINED_TRIVIA");
+    assert_eq!(result.plan.state, "blocked");
+    assert_eq!(result.counts.total_matches, Some(1000));
+    assert!(result.counts.total_is_exact);
+    assert_eq!(result.plan.selected_count, Some(1));
+    assert_eq!(result.plan.integrity.semantic, "not_performed");
+}
+#[test]
+fn no_selection_and_oversized_explicit_selection_still_honor_cap() {
+    let repo = Repo::new();
+    let source = format!("fn f(){{ {} }}", "x.unwrap();".repeat(1000));
+    repo.write("a.rs", &source);
+    let mut request = repo.request("$a.unwrap()", "$a.expect(\"why\")");
+    let result = repo.run(request.clone());
+    blocked(&result, "max_matches");
+    assert_eq!(result.status, "partial");
+    assert_eq!(result.plan.state, "incomplete");
+    assert_eq!(result.counts.observed_matches, 1000);
+    assert_eq!(result.counts.total_matches, None);
+    assert!(!result.counts.total_is_exact);
+    assert!(result.plan.matches.len() <= request.max_matches);
+
+    request.max_matches = 1000;
+    request.limits.text_bytes = 0;
+    request.context.before_lines = 0;
+    request.context.after_lines = 0;
+    let result = repo.run(request.clone());
+    assert!(result.plan.applicable, "{result:?}");
+    assert_eq!(result.plan.selected_count, Some(1000));
+    assert_eq!(result.counts.total_matches, Some(1000));
+    assert!(result.counts.total_is_exact);
+
+    let first = anchor("a.rs", &source, "x.unwrap()");
+    let start = source.rfind("x.unwrap()").unwrap();
+    let last = json!({"path":"a.rs","range":{"start_byte":start,"end_byte":start+"x.unwrap()".len()},"expected_text":"x.unwrap()"});
+    request.selection = Some(serde_json::from_value(json!([first, last])).unwrap());
+    request.max_matches = 1;
+    let result = repo.run(request.clone());
+    blocked(&result, "max_matches");
+    assert_eq!(result.plan.state, "incomplete");
+    assert!(result.plan.matches.len() <= 1);
+    request.max_matches = 2;
+    let result = repo.run(request);
+    assert!(result.plan.applicable, "{result:?}");
+    assert_eq!(result.plan.selected_count, Some(2));
+    assert_eq!(result.counts.returned_matches, 2);
+    assert_eq!(result.counts.total_matches, Some(1000));
+    assert!(result.counts.total_is_exact);
+}
+#[test]
+fn selection_counts_unselected_files_and_preserves_fail_closed_checks() {
+    let repo = Repo::new();
+    let source = format!("fn f(){{ {} }}", "x.unwrap();".repeat(600));
+    repo.write("a.rs", &source);
+    let other_source = format!("fn f(){{ {} }}", "y.unwrap();".repeat(400));
+    repo.write("b.rs", &other_source);
+    let mut request = repo.request("$a.unwrap()", "$a.expect(\"why\")");
+    request.selection =
+        Some(serde_json::from_value(json!([anchor("a.rs", &source, "x.unwrap()")])).unwrap());
+    let result = repo.run(request.clone());
+    assert!(result.plan.applicable, "{result:?}");
+    assert_eq!(result.counts.matched_files, 2);
+    assert_eq!(result.counts.total_matches, Some(1000));
+    assert!(result.counts.total_is_exact);
+    assert_eq!(result.plan.selected_count, Some(1));
+
+    let mut over_cap = request.clone();
+    over_cap
+        .selection
+        .as_mut()
+        .unwrap()
+        .push(serde_json::from_value(anchor("b.rs", &other_source, "y.unwrap()")).unwrap());
+    over_cap.max_matches = 1;
+    let result = repo.run(over_cap);
+    blocked(&result, "max_matches");
+    assert_eq!(result.counts.returned_matches, 1);
+
+    request.selection.as_mut().unwrap()[0].expected_text = "changed".into();
+    let result = repo.run(request.clone());
+    assert_eq!(result.error.unwrap().code, "STALE_SELECTION");
+    assert!(result.plan.edits.is_none() && result.plan.patch.is_none());
+    assert_eq!(result.counts.total_matches, Some(1000));
+    assert!(result.counts.total_is_exact);
+
+    request.selection = Some(vec![]);
+    let result = repo.run(request.clone());
+    assert!(result.plan.applicable);
+    assert_eq!(result.plan.selected_count, Some(0));
+    assert_eq!(result.plan.patch.as_deref(), Some(""));
+    assert!(result.plan.edits.unwrap().is_empty());
+    assert_eq!(result.counts.total_matches, Some(1000));
+    assert!(result.counts.total_is_exact);
+
+    request.limits.max_files = 1;
+    let result = repo.run(request);
+    blocked(&result, "scan_incomplete");
+    assert_eq!(result.counts.total_matches, None);
+    assert!(!result.counts.total_is_exact);
+
+    let result = repo.plan("$a.unwrap()", "$a.expect(\"why\")");
+    blocked(&result, "max_matches");
+    assert_eq!(result.counts.observed_matches, 600);
+    assert_eq!(result.counts.matched_files, 1);
+    assert_eq!(result.counts.total_matches, None);
+    assert!(!result.counts.total_is_exact);
 }
 #[test]
 fn syntax_refusal_nested_conflicts_templates_and_dollars() {

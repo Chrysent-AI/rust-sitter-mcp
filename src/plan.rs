@@ -59,7 +59,7 @@ pub struct ReplaceRequest {
     /// Omitted selects all scope matches; [] selects none. Unique original-byte anchors and exact expected_text required.
     pub selection: Option<Vec<SourceAnchor>>,
     pub trivia_overrides: Option<Vec<TriviaOverride>>,
-    /// Counts accepted scope matches BEFORE selection. Default 500, maximum 5000. Exceeding it withholds all artifacts even for a tiny explicit selection.
+    /// Caps selected matches, not unselected scope matches. Default 500, maximum 5000. Exceeding it withholds all artifacts; admitted selections keep exact totals after a complete bounded scan.
     #[serde(default = "default_max_matches")]
     pub max_matches: usize,
 }
@@ -376,11 +376,6 @@ fn build(
         }
         result.counts.matched_files += 1;
         result.counts.observed_matches += data.matches.len();
-        if result.counts.observed_matches > request.max_matches {
-            result.incomplete("max_matches");
-            return Ok(());
-        }
-        let lines = matching::Lines::new(&file.source);
         let mut chosen = Vec::new();
         for (index, candidate) in data.matches.iter().enumerate() {
             let anchor = SourceAnchor {
@@ -392,17 +387,24 @@ fn build(
                 expected_text: file.source[candidate.start..candidate.end].into(),
             };
             if request.selection.is_none() || anchors.remove(&anchor) {
-                result.plan.matches.push(matching::render(
-                    file,
-                    &data,
-                    candidate,
-                    (ordinal, index),
-                    &request.context,
-                    request.limits.text_bytes,
-                    &lines,
-                ));
                 chosen.push(index);
             }
+        }
+        if result.plan.matches.len() + chosen.len() > request.max_matches {
+            result.incomplete("max_matches");
+            return Ok(());
+        }
+        let lines = matching::Lines::new(&file.source);
+        for &index in &chosen {
+            result.plan.matches.push(matching::render(
+                file,
+                &data,
+                &data.matches[index],
+                (ordinal, index),
+                &request.context,
+                request.limits.text_bytes,
+                &lines,
+            ));
         }
         selected.push((ordinal, data, chosen));
     }
