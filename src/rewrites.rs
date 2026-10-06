@@ -15,6 +15,7 @@ pub(crate) struct Repair {
     pub range: ByteRange,
     pub after: String,
     pub kind: &'static str,
+    pub written_reexport: bool,
     pub target: RewriteTarget,
     pub item_ids: Vec<String>,
     pub anchors: Vec<SourceAnchor>,
@@ -127,6 +128,15 @@ fn canonical(context: &ModuleEvidence, name: &str) -> String {
     parts.push(name.into());
     parts.join("::")
 }
+fn attributed_use(node: Node<'_>) -> bool {
+    let mut previous = node.prev_named_sibling();
+    while let Some(comment) =
+        previous.filter(|n| matches!(n.kind(), "line_comment" | "block_comment"))
+    {
+        previous = comment.prev_named_sibling();
+    }
+    previous.is_some_and(|n| n.kind() == "attribute_item")
+}
 #[derive(Clone)]
 struct ImportBinding {
     path: String,
@@ -182,6 +192,7 @@ impl Analyzer<'_> {
                 && r.after == repair.after
                 && r.declaration_for == repair.declaration_for
         }) {
+            existing.written_reexport |= repair.written_reexport;
             for id in repair.item_ids {
                 if !existing.item_ids.contains(&id) {
                     existing.item_ids.push(id);
@@ -321,29 +332,91 @@ impl Analyzer<'_> {
             )?;
         self.resolve_use(&binding.path, &binding.module, node, &binding.leaf.path)
     }
+    fn reexports(&self, target: &str) -> Vec<&ImportBinding> {
+        self.imports
+            .iter()
+            .filter(|b| {
+                b.scope_range.is_none()
+                    && self.contexts.get(&b.path).is_some_and(|c| {
+                        c.unresolved.is_empty()
+                            && b.module == c.module_segments
+                            && canonical(c, &b.leaf.binding) == target
+                    })
+            })
+            .collect()
+    }
+    // Consumer-side routing only: never discharge a moved declaration's API need.
+    fn written_target(&self, need: &mut Need, target: &str) -> Option<(String, Vec<SourceAnchor>)> {
+        const MAX_REEXPORT_HOPS: usize = 8;
+        let mut target = target.to_owned();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut anchors = Vec::new();
+        loop {
+            if items::check(self.controls.0, self.controls.1).is_err() {
+                return None;
+            }
+            let bindings = self.reexports(&target);
+            if let Some((path, item)) = self.declaration(&target) {
+                if !bindings.is_empty() || !self.contexts[&path].unresolved.is_empty() {
+                    self.missing_target(need, &target);
+                    return None;
+                }
+                if !anchors.is_empty() {
+                    anchors.push(anchor(self.files, &path, &item.span.range));
+                }
+                return Some((target, anchors));
+            }
+            if !target.starts_with("crate::") && anchors.is_empty() {
+                return Some((target, anchors));
+            }
+            if !seen.insert(target.clone()) {
+                self.missing_target(need, &target);
+                need.message =
+                    "written re-export chain is cyclic; no terminal declaration evidence".into();
+                return None;
+            }
+            if anchors.len() == MAX_REEXPORT_HOPS {
+                self.missing_target(need, &target);
+                need.message = "written re-export chain exceeds the eight-hop evidence cap".into();
+                return None;
+            }
+            if bindings.len() != 1 {
+                self.missing_target(need, &target);
+                return None;
+            }
+            let binding = bindings[0];
+            let item = self.parsed[&binding.path]
+                .items
+                .iter()
+                .find(|i| i.span.range == binding.leaf.declaration)?;
+            if binding.conditioned || !matches!(item.visibility_key, "pub" | "pub(crate)") {
+                self.missing_target(need, &target);
+                return None;
+            }
+            let Some(next) = self.imported_target(binding) else {
+                self.missing_target(need, &target);
+                return None;
+            };
+            anchors.push(anchor(self.files, &binding.path, &binding.leaf.declaration));
+            target = next;
+        }
+    }
     fn missing_target(&self, need: &mut Need, target: &str) -> bool {
         need.reason = DecisionReason::ExternalOrMissingBinding;
-        if let Some(binding) = self.imports.iter().find(|b| {
-            b.leaf.public
-                && b.scope_range.is_none()
-                && self
-                    .contexts
-                    .get(&b.path)
-                    .is_some_and(|c| canonical(c, &b.leaf.binding) == target)
-        }) {
+        need.message = "needed target has no unique directly evidenced declaration or admitted written re-export chain".into();
+        if let Some(binding) = self.reexports(target).first() {
             need.reason = if binding.conditioned {
                 DecisionReason::ConditionalOrInheritedContext
             } else {
-                DecisionReason::PublicPathChange
+                DecisionReason::ExternalOrMissingBinding
             };
             need.category = if binding.conditioned {
                 "scope_dependency"
             } else {
-                "reexport_dependency"
+                "unsupported_dependency_form"
             };
             need.path = binding.path.clone();
             need.range = binding.leaf.declaration.clone();
-            need.message = "needed target is a written re-export/conditional exposure, not a directly evidenced declaration; explicit API/binding decision required".into();
         }
         false
     }
@@ -529,6 +602,7 @@ impl Analyzer<'_> {
                 range,
                 after: "pub(crate)".into(),
                 kind: "visibility",
+                written_reexport: false,
                 target: RewriteTarget::Source { anchor: a.clone() },
                 item_ids: ids.to_vec(),
                 anchors: vec![a],
@@ -556,7 +630,7 @@ impl Analyzer<'_> {
                 .into()
         }));
         self.add(Repair {
-            path: path.into(), range: span(at, at), after: "pub(crate) ".into(), kind: "visibility",
+            path: path.into(), range: span(at, at), after: "pub(crate) ".into(), kind: "visibility", written_reexport: false,
             target: RewriteTarget::Synthesis { path: path.into(), slot: "visibility_insert".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(parts.join("::")) },
             item_ids: ids.to_vec(), anchors: item.map(|i| vec![anchor(self.files, path, &i.span.range)]).unwrap_or_default(),
             rationale: "a proven written access is outside the declaration's parent lexical scope and descendants".into(),
@@ -571,7 +645,7 @@ impl Analyzer<'_> {
         binding: &str,
         target: &str,
         ids: &[String],
-        evidence: SourceAnchor,
+        evidence: (SourceAnchor, Vec<SourceAnchor>),
         references: Vec<SourceAnchor>,
     ) -> bool {
         if let Some(data) = self.parsed.get(path)
@@ -638,7 +712,8 @@ impl Analyzer<'_> {
             .get(path)
             .map(|data| crate::move_plan::ergonomics::import_boundary(data, source))
             .unwrap_or((source.len(), None));
-        let mut anchors = vec![evidence];
+        let written_reexport = !evidence.1.is_empty();
+        let mut anchors: Vec<_> = std::iter::once(evidence.0).chain(evidence.1).collect();
         if let Some(item) = boundary_item {
             anchors.push(anchor(self.files, path, &item.span.range));
         }
@@ -652,7 +727,7 @@ impl Analyzer<'_> {
         };
         let text = import_text(target, binding);
         self.add(Repair {
-            path: path.into(), range: span(at, at), after: text, kind: "import_insert",
+            path: path.into(), range: span(at, at), after: text, kind: "import_insert", written_reexport,
             target: RewriteTarget::Synthesis { path: path.into(), slot: "import".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(binding.into()) },
             item_ids: ids.to_vec(), anchors, rationale: format!("preserve the unique written binding {binding} through explicit {target}; insert after the last attached use, or before the first attached item; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false, import_module: None, import_scope: None,
         });
@@ -714,7 +789,8 @@ impl Analyzer<'_> {
                 local.extend(module.iter().cloned());
                 local.extend(parts.clone());
                 let candidate = local.join("::");
-                if self.declaration(&candidate).is_some() {
+                if self.declaration(&candidate).is_some() || !self.reexports(&candidate).is_empty()
+                {
                     return Some(candidate);
                 }
                 // External imports preserve written spelling; never follow another use binding.
@@ -752,6 +828,7 @@ impl Analyzer<'_> {
             range,
             after,
             kind,
+            written_reexport: false,
             target: RewriteTarget::Source { anchor: a.clone() },
             item_ids: need.item_ids.clone(),
             anchors: vec![a],
@@ -762,6 +839,29 @@ impl Analyzer<'_> {
             import_module: None,
             import_scope: None,
         });
+    }
+    fn path_evidence(&mut self, need: &Need, anchors: &[SourceAnchor]) {
+        if anchors.is_empty() {
+            return;
+        }
+        if let Some(repair) = self.repairs.iter_mut().find(|r| {
+            r.kind == "path"
+                && r.path == need.path
+                && r.range.start_byte <= need.range.start_byte
+                && r.range.end_byte >= need.range.end_byte
+        }) {
+            repair.written_reexport = true;
+            for a in anchors {
+                if !repair.anchors.contains(a) {
+                    self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
+                    if self.descriptor_bytes > 128 * 1024 * 1024 {
+                        self.exceeded = true;
+                        return;
+                    }
+                    repair.anchors.push(a.clone());
+                }
+            }
+        }
     }
     fn import_references(
         &mut self,
@@ -853,6 +953,19 @@ impl Analyzer<'_> {
         if aliases.is_empty() {
             aliases = self.imported(path, module, first);
         }
+        if aliases.len() == 1
+            && aliases[0].leaf.public
+            && !aliases[0].conditioned
+            && text == first
+            && items::lexical_with_import_proof(
+                node,
+                &self.files[path].source,
+                first,
+                self.controls,
+            ) == items::LexicalBinding::Absent
+        {
+            return self.resolve_in(path, module, text, false);
+        }
         if !aliases.is_empty() {
             if aliases.len() != 1
                 || aliases[0].conditioned
@@ -885,10 +998,7 @@ impl Analyzer<'_> {
     }
     fn use_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
         let source = &self.files[&need.path].source;
-        if node
-            .prev_named_sibling()
-            .is_some_and(|n| n.kind() == "attribute_item")
-        {
+        if attributed_use(node) {
             need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "scope_dependency";
             need.message = "affected import has unexamined attribute/conditional context".into();
@@ -909,7 +1019,10 @@ impl Analyzer<'_> {
         if leaves.is_empty() {
             return false;
         }
+        let repair_start = self.repairs.len();
         let mut mappings = Vec::new();
+        let mut declarations = Vec::new();
+        let mut reexports = Vec::new();
         for leaf in &leaves {
             let Some(old) = self.resolve_use(&need.path, &module, node, &leaf.path) else {
                 let first = leaf.path.split("::").next().unwrap_or("");
@@ -932,7 +1045,27 @@ impl Analyzer<'_> {
                 }
                 return false;
             };
-            let new = self.mapped(&old);
+            // Public exposures of moved items remain separate API decisions.
+            let (terminal, hops) = if leaf.public {
+                (old.clone(), Vec::new())
+            } else {
+                let Some(resolved) = self.written_target(need, &old) else {
+                    return false;
+                };
+                resolved
+            };
+            declarations.push(self.declaration(&terminal));
+            for a in hops {
+                if !reexports.contains(&a) {
+                    self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
+                    if self.descriptor_bytes > 128 * 1024 * 1024 {
+                        self.exceeded = true;
+                        return false;
+                    }
+                    reexports.push(a);
+                }
+            }
+            let new = self.mapped(&terminal);
             if old != new {
                 let parent = node.parent().expect("use scope");
                 let scope = (parent.kind() == "block")
@@ -1038,18 +1171,17 @@ impl Analyzer<'_> {
                 };
                 if let Some(replacement) = replacement {
                     self.source_repair(need, prefix_range.clone(), replacement, "use_path");
-                    for (old, _) in &mappings {
-                        if let Some((p, i)) = self.declaration(old)
-                            && !self.visibility_need(need, &p, &i, &using)
-                        {
+                    for (p, i) in declarations.iter().flatten() {
+                        if !self.visibility_need(need, p, i, &using) {
                             return false;
                         }
                     }
+                    self.use_evidence(repair_start, &reexports);
                     return true;
                 }
             }
         }
-        for (leaf, (old, new)) in leaves.iter().zip(mappings) {
+        for ((leaf, (old, new)), declaration) in leaves.iter().zip(mappings).zip(declarations) {
             if old == new && module == using {
                 continue;
             }
@@ -1072,12 +1204,15 @@ impl Analyzer<'_> {
                     };
                     let mut removal = leaf.leaf_range.clone();
                     let following = &source[removal.end_byte..list.end_byte - 1];
+                    let preceding = &source[list.start_byte + 1..removal.start_byte];
                     if let Some(at) = following.find(',')
                         && following[..at].trim().is_empty()
                     {
                         removal.end_byte += at + 1;
+                    } else if preceding.trim().is_empty() && following.trim().is_empty() {
+                        // A singleton named list has no delimiter to consume. Leave
+                        // its empty braces byte-exact and extract only the leaf.
                     } else {
-                        let preceding = &source[list.start_byte + 1..removal.start_byte];
                         let Some(at) = preceding.rfind(',') else {
                             return false;
                         };
@@ -1109,7 +1244,7 @@ impl Analyzer<'_> {
                         .unwrap_or_default();
                     if !node.parent().is_some_and(|p| p.kind() == "source_file") {
                         let scope = node.parent().expect("use scope");
-                        let repair = Repair { path:need.path.clone(),range:span(node.end_byte(), node.end_byte()),after:import_text(&new, &leaf.binding),kind:"import_insert",target:RewriteTarget::Synthesis {path:consumer.clone(),slot:"import".into(),items:self.contributors(&need.item_ids),boundary_role:None,parent_path:None,binding:Some(format!("{}@{}", leaf.binding, node.start_byte()))},item_ids:need.item_ids.clone(),anchors:vec![anchor(self.files, &need.path, &leaf.leaf_range)],rationale:"extract only the changed leaf into an explicit binding in its original lexical scope".into(),declaration_for:None,references,caller_override:false,import_module:Some(using.clone()),import_scope:Some(span(scope.start_byte(),scope.end_byte())) };
+                        let repair = Repair { path:need.path.clone(),range:span(node.end_byte(), node.end_byte()),after:import_text(&new, &leaf.binding),kind:"import_insert",written_reexport:false,target:RewriteTarget::Synthesis {path:consumer.clone(),slot:"import".into(),items:self.contributors(&need.item_ids),boundary_role:None,parent_path:None,binding:Some(format!("{}@{}", leaf.binding, node.start_byte()))},item_ids:need.item_ids.clone(),anchors:vec![anchor(self.files, &need.path, &leaf.leaf_range)],rationale:"extract only the changed leaf into an explicit binding in its original lexical scope".into(),declaration_for:None,references,caller_override:false,import_module:Some(using.clone()),import_scope:Some(span(scope.start_byte(),scope.end_byte())) };
                         if self.binding_collision(&repair, &leaf.binding, &using) {
                             need.reason = DecisionReason::LexicalContextUnproved;
                             need.category = "binding_collision";
@@ -1123,20 +1258,48 @@ impl Analyzer<'_> {
                         &leaf.binding,
                         &new,
                         &need.item_ids,
-                        anchor(self.files, &need.path, &leaf.leaf_range),
+                        (
+                            anchor(self.files, &need.path, &leaf.leaf_range),
+                            reexports.clone(),
+                        ),
                         references,
                     ) {
                         return false;
                     }
                 }
             }
-            if let Some((p, i)) = self.declaration(&old)
+            if let Some((p, i)) = declaration
                 && !self.visibility_need(need, &p, &i, &using)
             {
                 return false;
             }
         }
+        self.use_evidence(repair_start, &reexports);
         true
+    }
+    fn use_evidence(&mut self, start: usize, anchors: &[SourceAnchor]) {
+        if anchors.is_empty() {
+            return;
+        }
+        for repair in &mut self.repairs[start..] {
+            if !matches!(
+                repair.kind,
+                "use_path" | "import_insert" | "import_leaf_extract"
+            ) {
+                continue;
+            }
+            repair.written_reexport = true;
+            for a in anchors {
+                if !repair.anchors.contains(a) {
+                    self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
+                    if self.descriptor_bytes > 128 * 1024 * 1024 {
+                        self.exceeded = true;
+                        return;
+                    }
+                    repair.anchors.push(a.clone());
+                }
+            }
+        }
     }
     fn scoped_imports(
         &self,
@@ -1234,6 +1397,9 @@ impl Analyzer<'_> {
             need.reason = DecisionReason::ExternalOrMissingBinding;
             return false;
         };
+        let Some((old, reexports)) = self.written_target(need, &old) else {
+            return false;
+        };
         let Some((path, binding)) = self.declaration(&old) else {
             return self.missing_target(need, &old);
         };
@@ -1256,6 +1422,7 @@ impl Analyzer<'_> {
                 after,
                 "path",
             );
+            self.path_evidence(need, &reexports);
         }
         self.visibility_need(need, &path, &binding, &using)
     }
@@ -1921,6 +2088,9 @@ impl Analyzer<'_> {
             let Some(old) = self.imported_target(nearest[0]) else {
                 return false;
             };
+            let Some((old, _)) = self.written_target(need, &old) else {
+                return false;
+            };
             return if let Some((p, i)) = self.declaration(&old) {
                 self.visibility_need(need, &p, &i, &using)
             } else if old.starts_with("crate::") {
@@ -1939,17 +2109,9 @@ impl Analyzer<'_> {
             need.message = "several written declarations/imports compete for this binding".into();
             return false;
         }
-        if imports.len() == 1 && (imports[0].conditioned || imports[0].leaf.public) {
-            need.reason = if imports[0].conditioned {
-                DecisionReason::ConditionalOrInheritedContext
-            } else {
-                DecisionReason::PublicPathChange
-            };
-            need.category = if imports[0].conditioned {
-                "scope_dependency"
-            } else {
-                "reexport_dependency"
-            };
+        if imports.len() == 1 && imports[0].conditioned {
+            need.reason = DecisionReason::ConditionalOrInheritedContext;
+            need.category = "scope_dependency";
             need.message =
                 "needed import has conditional or public/chained exposure context".into();
             return false;
@@ -1959,8 +2121,13 @@ impl Analyzer<'_> {
                 canonical(&self.contexts[&need.path], name),
                 anchor(self.files, &need.path, &binding.span.range),
             )
-        } else if imports.len() == 1 && !imports[0].conditioned && !imports[0].leaf.public {
-            let Some(target) = self.imported_target(&imports[0]) else {
+        } else if imports.len() == 1 && !imports[0].conditioned {
+            let target = if imports[0].leaf.public {
+                Some(canonical(&self.contexts[&need.path], name))
+            } else {
+                self.imported_target(&imports[0])
+            };
+            let Some(target) = target else {
                 return false;
             };
             (
@@ -1968,6 +2135,9 @@ impl Analyzer<'_> {
                 anchor(self.files, &need.path, &imports[0].leaf.declaration),
             )
         } else {
+            return false;
+        };
+        let Some((old, reexports)) = self.written_target(need, &old) else {
             return false;
         };
         if let Some((_, binding)) = self.declaration(&old)
@@ -1994,12 +2164,13 @@ impl Analyzer<'_> {
                     target.clone(),
                     "path",
                 );
+                self.path_evidence(need, &reexports);
             } else if !self.import(
                 &consumer,
                 name,
                 &target,
                 &need.item_ids,
-                evidence,
+                (evidence, reexports),
                 vec![anchor(
                     self.files,
                     &need.path,
@@ -2078,9 +2249,7 @@ pub(crate) fn analyze(
                             path: path.clone(),
                             module: module.clone(),
                             leaf,
-                            conditioned: node
-                                .prev_named_sibling()
-                                .is_some_and(|n| n.kind() == "attribute_item"),
+                            conditioned: attributed_use(node),
                             scope_range: {
                                 let mut parent = node.parent();
                                 let mut scope = None;

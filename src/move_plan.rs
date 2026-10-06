@@ -2656,6 +2656,9 @@ fn assemble(
             .iter()
             .map(|a| format!("{}:{}..{}", a.path, a.range.start_byte, a.range.end_byte))
             .collect();
+        if repair.written_reexport {
+            audit.evidence.push("written_reexport".into());
+        }
         if repair.caller_override {
             audit.origin = "caller_override".into();
         }
