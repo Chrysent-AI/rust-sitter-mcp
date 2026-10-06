@@ -218,6 +218,98 @@ entire batch. Original bytes remain lossless, no `Cargo.toml` is read, and
 `semantic:"not_performed"` is unchanged. This option does not make idiomatic Rust
 relocation generally executable.
 
+### Opt-in bounded resolution
+
+`resolve_semantic` defaults to **false**. Omission or false preserves the existing
+response bytes, including `semantic:"not_performed"`, even when a configuration
+is supplied. To request resolution, include an explicit `semantic_configuration`
+in the same `move_item` request, for example:
+
+```json
+{
+  "resolve_semantic": true,
+  "semantic_configuration": {
+    "crates": [{
+      "name": "application",
+      "root_file": "src/lib.rs",
+      "edition": "2024",
+      "features": [],
+      "cfg": [],
+      "dependencies": []
+    }]
+  }
+}
+```
+
+This fragment augments the ordinary anchored move request; it is not a separate
+tool or stored plan. Each root must be an existing admitted Rust file; one root
+must equal `crate_root`. All admitted texts and the assembler's exact final
+virtual texts are ingested into request-owned pure rust-analyzer databases.
+No Cargo.toml/lockfile, sysroot, filesystem watcher, dependency cache, build
+script, executable override or proc-macro expander is loaded. Admit required
+dependency sources in `paths`/`globs` and add their roots explicitly, or their
+names stay unresolved. A dependency edge is
+`{"name":"external","crate_name":"dependency_root_name"}`; `name` is its extern
+prelude spelling and `crate_name` names another entry in `crates`. Crate names
+and roots must be unique; graphs are acyclic and capped at 32 crates with 32
+edges per crate. Editions are `2015`, `2018`, `2021` or `2024`.
+
+Each crate declares its selected `features`, `cfg` atoms and dependencies, with
+no implicit defaults. A cfg atom is `{"key":"unix","value":null}` or
+`{"key":"target_os","value":"linux"}`; each selected feature also sets
+`feature="name"`. These are caller-provided inputs, not discovered Cargo facts.
+There is no build-script environment, target data layout or implicit standard
+library source. Missing/invalid/incomplete graph evidence does not acknowledge
+away a blocker: the original typed needs remain.
+
+Only concrete, known receivers with preserved original **and adjusted** type
+identities qualify. The first scope resolves actual inherent functions (including
+associated calls), named fields, type/constructor paths and ordinary written
+function bindings. It checks the resolved declaration's actual impl ownership,
+not candidate iteration, and positive visibility from both the original and
+final lexical modules. Constructor fields must all be accessible. Receiver
+identities use reference adjustments, builtin names, written declaration anchors
+and concrete type arguments, not pretty-printed type strings or revision-local
+IDs. Generic function contexts, trait functions/trait objects, unknown inference,
+unsupported receiver shapes or const/lifetime substitutions, expanded/generated
+nodes and affected macro/attribute contexts retain their existing typed blockers.
+Macro-bearing function bodies unrelated to the selected occurrence and ordinary
+proc-macro registration elsewhere do not key refusal on the crate's kind.
+Existing macro/module-chain/cfg(test), API, trivia and required-repair vetoes are
+unchanged. This is not general trait resolution, semantic rename or a compiler.
+
+Each discharged occurrence adds a discriminated
+`plan.binding_proofs[]` record with `class:"ra_resolved"`: full original and final
+anchors, contributing item IDs, original/adjusted receivers at both ends,
+original/final declaration identities (crate origin + stable written name
+anchor), classification, `source_access:true`, `final_access:true` and explicit
+configuration coverage. A plain function binding has null receiver fields.
+`coverage.ra_resolved` counts these occurrences separately from prelude proofs,
+including records omitted during output fitting. Type identities/declarations
+are compared across revisions through the assembler's exact byte-origin map.
+The resolver neither edits source nor assembles an independent overlay; caller
+choices, imports, visibility repairs and simultaneous arrivals are included in
+the final view. Unmappable or changed identities refuse rather than guessing.
+
+When queries are performed, `plan.integrity.semantic` is
+`"resolution_performed"`. `plan.resolution_coverage.statement` says
+**"resolution performed for N decisions under one explicit configuration;
+compilation/equivalence not performed"**. Its configuration, analyzer version,
+source `snapshot_id`, `semantic_input_digest`, `final_overlay_digest` and explicit
+omissions scope every proof. Zero proved occurrences never means verified code.
+The semantic digest binds the source snapshot plus graph, editions, features,
+cfg atoms and analyzer identity; the overlay digest additionally binds all final
+virtual source bytes. Manifests are not inputs and are not freshness claims.
+All admitted source/ignore/mode/absence inputs are rechecked before applicability.
+This is an observational snapshot, not atomic or application-time freshness.
+
+Cancellation/deadlines use the existing request flag and admission permit, with
+a joined controller cancelling both live Salsa databases. Cancellation is
+cooperative, not a hard-latency promise; `BUSY` remains until owned work settles.
+Oversized proofs/coverage withhold all artifacts and account for omitted
+`binding_proofs`/`resolution_coverage`; the occurrence count survives. The
+unmodified default path performs no resolution and gains no new output fields.
+
 ### Supported units and ordinary layout
 
 Functions, structs, enums, unions, traits, whole impls (including anonymous impls), type aliases, consts and statics have `supported_unit` inventory eligibility. Their dependencies may still block relocation. Whole modules have `module_context` eligibility reasons; use/extern/foreign constructs have `scope_dependency`; macro definitions/invocations have `macro_dependency`; other significant units are explicitly unsupported. Attributes/docs are associated constituents, not independently selectable inventory units. Nested/body/member/partial selections are rejected.
@@ -353,7 +445,7 @@ Place that object in `rewrite_overrides:[…]`, not in a separate apply call. Th
 
 For decision field meanings and display-only labels, see [Consuming decisions and member labels](#consuming-decisions-and-member-labels).
 
-`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `decision_groups`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Every outcome discloses `semantic:"not_performed"`. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
+`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `decision_groups`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Default outcomes disclose `semantic:"not_performed"`; explicitly configured opt-in resolution uses the scoped evidence/label described above. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
 
 Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. `declaration_visibility_rewrite_id`, when present, resolves to the separately audited required visibility repair on either a synthesized or reused declaration. Root-private modules ordinarily already admit descendant consumers and are not blanket-widened. Source files remain present even when emptied.
 
@@ -419,9 +511,9 @@ membership. `root`, `snapshot_id`, coverage and omission counts remain available
 through the last tier. If even membership cannot fit, its exact group/reference
 omissions are disclosed; it is never approximated by a bounding range.
 
-The syntactic stage delivers design advice plus proven-complete patches for a
-narrow class of written Rust. Executable relocation of idiomatic Rust is the
-responsibility of the deferred semantic stage, not a guarantee of this stage.
+The default syntactic stage delivers design advice plus proven-complete patches
+for a narrow class of written Rust. Opt-in bounded resolution widens that class
+only for proved occurrences; general idiomatic Rust relocation is not guaranteed.
 
 Common limits/admission/cancellation apply. `max_moves` defaults to 500 (1–5,000) and counts the whole explicit list. Fixed work guards are 100,000 inventory descriptors, 100,000 relevant reference candidates and 128 MiB aggregate analysis descriptors, including conservatively accounted transient binding/evidence records. Effective guards, observed counts and reference coverage are reported; query-state limits do not apply to direct CST analysis. Mandatory anchors/artifacts/audit must fit the complete duplicated wire response. `text_bytes:0` omits descriptive slices, **not** freshness checks or artifact bytes. On overflow, all artifacts are withheld and preview-array omissions are explicit. Calls allocate no search cursor/series.
 

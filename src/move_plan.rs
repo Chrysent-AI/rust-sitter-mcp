@@ -2,6 +2,7 @@
 mod actions;
 pub(crate) mod ergonomics;
 mod prelude;
+mod semantic;
 use crate::{
     edit::{self, Edit},
     items::{self, DecisionReason, Item, ModuleEvidence, ParsedFile},
@@ -175,6 +176,10 @@ pub struct MoveRequest {
     /// Assume stable prelude types and unshadowed compiler-built-in derives.
     #[serde(default)]
     pub assume_standard_prelude: bool,
+    /// Resolve a bounded set of written occurrences under an explicit configuration.
+    #[serde(default)]
+    pub resolve_semantic: bool,
+    pub semantic_configuration: Option<semantic::Configuration>,
 }
 fn default_max_moves() -> usize {
     500
@@ -401,6 +406,14 @@ pub struct WorkLimits {
     pub query_state_limit_applicable: bool,
     pub reference_coverage: String,
 }
+/// Standard proofs keep their existing wire shape; resolution has its own evidence.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(untagged)]
+pub enum BindingProof {
+    Standard(prelude::BindingProof),
+    RaResolved(Box<semantic::Proof>),
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct MovePlan {
@@ -413,7 +426,9 @@ pub struct MovePlan {
     pub decision_groups: Vec<MoveDecisionGroup>,
     pub chain_diagnostics: Vec<items::ChainDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub binding_proofs: Vec<prelude::BindingProof>,
+    pub binding_proofs: Vec<BindingProof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_coverage: Option<semantic::ResolutionCoverage>,
     pub rewrites: Vec<Rewrite>,
     pub base_files: Vec<BaseFile>,
     pub blockers: Vec<Blocker>,
@@ -480,6 +495,7 @@ impl MoveEnvelope {
                 decision_groups: Vec::new(),
                 chain_diagnostics: Vec::new(),
                 binding_proofs: Vec::new(),
+                resolution_coverage: None,
                 rewrites: Vec::new(),
                 base_files: Vec::new(),
                 blockers: Vec::new(),
@@ -500,6 +516,63 @@ impl MoveEnvelope {
         result.status = "failed".into();
         result.error = Some(error);
         result
+    }
+    fn semantic_refusal(
+        &mut self,
+        request: &MoveRequest,
+        files: &BTreeMap<String, FileSnapshot>,
+        need: items::Need,
+    ) -> Result<(), DomainError> {
+        if self.plan.decisions.len() >= 100_000 {
+            return Err(DomainError::new(
+                "analysis_descriptor_bytes",
+                "decision cap reached",
+            ));
+        }
+        self.blocker(
+            &need.category.to_uppercase(),
+            &need.message,
+            Some(&need.path),
+            Some(need.range.clone()),
+        );
+        let action = need
+            .choice_target
+            .map(DecisionAction::rewrite)
+            .unwrap_or_else(|| DecisionAction::cause(need.reason));
+        let supported_choices = match &action {
+            DecisionAction::RequestField { choices, .. } => choices.clone(),
+            _ => Vec::new(),
+        };
+        let decision = Decision {
+            reason: need.reason,
+            next_action: action.next_action(),
+            action,
+            id: format!("d/{}", self.plan.decisions.len()),
+            category: need.category.into(),
+            anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)],
+            item_ids: need.item_ids,
+            evidence: vec![Lines::new(&files[&need.path].source).slice(
+                need.range.start_byte,
+                need.range.end_byte,
+                request.limits.text_bytes,
+            )],
+            unresolved_consequence: need.message,
+            resolution: if supported_choices.is_empty() {
+                "request_change_required"
+            } else {
+                "choice_available"
+            }
+            .into(),
+            supported_choices,
+            selected_choice: None,
+            blocks_applicability: true,
+            chain_diagnostic_ids: Vec::new(),
+            lexical_uncertainty: need.lexical_uncertainty,
+            removal_gap: None,
+        };
+        self.account(descriptor_bytes(&decision)?)?;
+        self.plan.decisions.push(decision);
+        Ok(())
     }
     fn account(&mut self, bytes: usize) -> Result<(), DomainError> {
         self.counts.analysis_descriptor_bytes += bytes;
@@ -919,6 +992,16 @@ impl MoveEnvelope {
         drop_preview!(trivia_decisions);
         drop_preview!(rewrites);
         drop_preview!(binding_proofs);
+        if self.plan.resolution_coverage.take().is_some() {
+            *self
+                .counts
+                .omissions
+                .entry("resolution_coverage".into())
+                .or_default() += 1;
+            if self.wire_bytes() <= self.limits.response_bytes {
+                return;
+            }
+        }
         drop_preview!(base_files);
         let links = self
             .plan
@@ -1722,7 +1805,7 @@ fn build(
     )?;
     result.account(analysis.descriptor_bytes)?;
     if request.assume_standard_prelude {
-        result.plan.binding_proofs = prelude::discharge(
+        let proofs = prelude::discharge(
             &files,
             &parsed,
             &tuples,
@@ -1732,21 +1815,28 @@ fn build(
             &mut analysis.needs,
             (deadline, cancelled),
         )?;
-        result.coverage.standard_prelude = result
-            .plan
-            .binding_proofs
+        result.coverage.standard_prelude = proofs
             .iter()
             .filter(|p| p.class == prelude::BindingProofClass::StandardPrelude)
             .count();
-        result.coverage.standard_builtin_derive = result
-            .plan
-            .binding_proofs
+        result.coverage.standard_builtin_derive = proofs
             .iter()
             .filter(|p| p.class == prelude::BindingProofClass::StandardBuiltinDerive)
             .count();
+        result
+            .plan
+            .binding_proofs
+            .extend(proofs.into_iter().map(BindingProof::Standard));
         if !result.plan.binding_proofs.is_empty() {
             result.account(descriptor_bytes(&result.plan.binding_proofs)?)?;
         }
+    }
+    let mut semantic_needs = Vec::new();
+    if request.resolve_semantic {
+        let (candidates, other): (Vec<_>, Vec<_>) =
+            analysis.needs.into_iter().partition(semantic::candidate);
+        semantic_needs = candidates;
+        analysis.needs = other;
     }
     for need in analysis.needs {
         items::check(deadline, cancelled)?;
@@ -1887,6 +1977,7 @@ fn build(
         });
     }
     result.account(descriptor_bytes(&result.plan.moves)?)?;
+    let mut overlay = BTreeMap::new();
     assemble(
         request,
         &files,
@@ -1895,8 +1986,40 @@ fn build(
         &mut creations,
         &analysis.repairs,
         (deadline, cancelled),
+        request.resolve_semantic.then_some(&mut overlay),
         result,
     )?;
+    if request.resolve_semantic {
+        if !semantic_needs.is_empty() && !overlay.is_empty() {
+            semantic::discharge(
+                request,
+                &files,
+                overlay,
+                &mut semantic_needs,
+                (deadline, cancelled),
+                result,
+            )?;
+            result.account(descriptor_bytes(&(
+                &result.plan.binding_proofs,
+                &result.plan.resolution_coverage,
+            ))?)?;
+        }
+        for need in semantic_needs {
+            result.semantic_refusal(request, &files, need)?;
+        }
+        for record in &mut result.plan.moves {
+            record.decision_ids = result
+                .plan
+                .decisions
+                .iter()
+                .filter(|d| d.item_ids.contains(&record.id))
+                .map(|d| d.id.clone())
+                .collect();
+        }
+        if !result.plan.blockers.is_empty() {
+            result.withhold();
+        }
+    }
     result.account(descriptor_bytes(&(
         &result.plan.rewrites,
         &result.plan.origins,
@@ -2439,6 +2562,7 @@ fn assemble(
     creations: &mut BTreeMap<String, Creation>,
     repairs: &[Repair],
     controls: (Instant, &AtomicBool),
+    overlay: Option<&mut BTreeMap<String, String>>,
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
     let (deadline, cancelled) = controls;
@@ -3243,6 +3367,18 @@ fn assemble(
             })
             .map(|t| t.id.clone())
             .collect();
+    }
+    if let Some(overlay) = overlay {
+        overlay.extend(
+            files
+                .iter()
+                .map(|(path, file)| (path.clone(), file.source.clone())),
+        );
+        overlay.extend(
+            outputs
+                .iter()
+                .map(|(path, (text, _))| (path.clone(), text.clone())),
+        );
     }
     // IDs were request-local while assembling; sort final audits deterministically and remap all links.
     items::check(deadline, cancelled)?;

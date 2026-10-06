@@ -60,6 +60,44 @@ fn final_recheck_detects_creation_layout_source_ignore_and_mode_races() {
 }
 
 #[test]
+fn semantic_declaration_sources_are_rechecked_before_publication() {
+    let repo = Fixture::generate();
+    let text = "fn selected(value: crate::Value) -> u32 { value.read() }";
+    repo.write(
+        "cases/layout/lib.rs",
+        "mod source; pub struct Value; impl Value { pub fn read(&self) -> u32 { 7 } }",
+    );
+    repo.write("cases/layout/source.rs", text);
+    let request: MoveRequest = serde_json::from_value(json!({
+        "repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],
+        "resolve_semantic":true,
+        "semantic_configuration":{"crates":[{"name":"fixture","root_file":"cases/layout/lib.rs","edition":"2024","features":[],"cfg":[],"dependencies":[]}]},
+        "moves":[{"item":move_artifacts::anchor(&repo,"cases/layout/source.rs",text),"destination":{"kind":"new_sibling","path":"cases/layout/moved.rs","parent_path":"cases/layout/lib.rs"}}]
+    })).unwrap();
+    let before = run(&repo.0, request.clone(), &AtomicBool::new(false));
+    assert!(before.plan.applicable, "{before:?}");
+    assert_eq!(before.coverage.ra_resolved, 1);
+    let stale = run_with_recheck(&repo.0, request, &AtomicBool::new(false), || {
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source; pub struct Value; impl Value { pub fn read(&self) -> u32 { 99 } }",
+        );
+    });
+    assert!(!stale.plan.applicable);
+    assert!(
+        stale
+            .truncation_reasons
+            .iter()
+            .any(|r| r == "SOURCE_CHANGED")
+    );
+    assert!(
+        stale.plan.edits.is_none()
+            && stale.plan.created_files.is_none()
+            && stale.plan.patch.is_none()
+    );
+}
+
+#[test]
 fn stopped_decision_grouping_clears_decisions_and_links_with_accounted_omissions() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\nmod destination;\n");

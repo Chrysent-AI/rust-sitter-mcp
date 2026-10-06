@@ -33,6 +33,9 @@ pub struct MoveCoverage {
     /// Number of unshadowed compiler-built-in derive names discharged.
     #[serde(skip_serializing_if = "is_zero")]
     pub standard_builtin_derive: usize,
+    /// Occurrences discharged by pure RA resolution, independent of caller assumptions.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub ra_resolved: usize,
     /// Excluded item/glob pairs by written-route reason, not semantic absence proof.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub glob_exclusions: BTreeMap<String, usize>,
