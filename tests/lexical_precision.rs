@@ -681,6 +681,88 @@ fn written_competitors_and_mixed_or_patterns_retain_move_uncertainty() {
     }
 }
 #[test]
+fn module_macro_generated_pattern_competitors_block_even_unused_arguments() {
+    for (evidence, value_type) in [
+        (
+            "macro_rules! declare { () => { const binding: u8 = 0; }; } declare!();",
+            "u8",
+        ),
+        (
+            "macro_rules! declare { () => { enum Visible { binding, Other } use Visible::binding; }; } declare!{}",
+            "Visible",
+        ),
+    ] {
+        for arm in ["true", "{ let _ = binding; true }"] {
+            let moved = format!(
+                "fn moved(value: [{value_type}; 1]) -> bool {{ match value {{ [binding] => {arm}, _ => false }} }}"
+            );
+            let (definition, invocation) = evidence.split_at(evidence.rfind("declare!").unwrap());
+            for source in [
+                format!("{evidence}\n{moved}\n"),
+                format!("{definition}\n{moved}\n{invocation}\n"),
+            ] {
+                let repo = spawner_precision::load(&source);
+                compile(&repo);
+                let result = run(&repo, request(&repo, &moved));
+                withheld(&result);
+                assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+                let at = source.find("[binding]").unwrap() + 1;
+                let decision = result["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|d| {
+                        d["reason"] == "lexical_context_unproved"
+                            && d["lexical_uncertainty"]["reason"]
+                                == "identifier_pattern_binding_or_constant"
+                            && d["anchors"][0]["range"]["start_byte"] == at
+                    })
+                    .unwrap_or_else(|| panic!("{source}: {result}"));
+                assert_eq!(decision["blocks_applicability"], true);
+                assert_eq!(decision["anchors"][0]["expected_text"], "binding");
+                assert_eq!(
+                    decision["lexical_uncertainty"]["scope"]["kind"],
+                    "match_arm"
+                );
+                assert_eq!(
+                    decision["lexical_uncertainty"]["pattern"]["range"],
+                    json!({"start_byte":at,"end_byte":at + "binding".len()})
+                );
+                assert_eq!(decision["refusal_basis"][0]["class"], "lexical_uncertainty");
+            }
+        }
+    }
+}
+#[test]
+fn missing_and_foreign_scoped_pattern_paths_remain_move_needs() {
+    for path in ["imaginary::Missing", "external::Variant"] {
+        let moved = format!(
+            "fn moved(value: u8) -> bool {{ match value {{ {path} => true, _ => false }} }}"
+        );
+        let repo = spawner_precision::load(&moved);
+        let result = run(&repo, request(&repo, &moved));
+        withheld(&result);
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["blocks_applicability"] == true
+                    && d["anchors"][0]["expected_text"] == path),
+            "{result}"
+        );
+        assert!(
+            !result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "lexical_context_unproved"),
+            "{result}"
+        );
+    }
+}
+#[test]
 fn local_import_proof_does_not_bypass_a_nearer_ambiguous_pattern() {
     let source = "fn selected() {}\nfn caller(pair: (fn(),)) { use crate::subagent::spawner::selected; { let (selected,) = pair; selected(); } }\n";
     let repo = spawner_precision::load(source);

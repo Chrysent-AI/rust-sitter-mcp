@@ -311,6 +311,57 @@ fn pattern_proof<'a>(
         PatternProof::Disjoint
     })
 }
+/// Potential constants in moved patterns remain dependencies even when the arm
+/// never reads the name. Reuse the binder proof; do not treat forced binders or
+/// constructor paths as ambiguous pattern arguments.
+pub(crate) fn pattern_uncertainty(
+    path: &str,
+    node: Node<'_>,
+    source: &str,
+    controls: (Instant, &AtomicBool),
+) -> Result<Option<LexicalAssessment>, DomainError> {
+    let name = source[node.byte_range()].trim_start_matches("r#");
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        check(controls.0, controls.1)?;
+        if (matches!(
+            parent.kind(),
+            "let_declaration" | "parameter" | "let_condition" | "match_arm" | "for_expression"
+        ) && parent.child_by_field_name("pattern") == Some(child))
+            || parent.kind() == "closure_parameters"
+        {
+            if let PatternProof::Unproved(
+                LexicalReason::IdentifierPatternBindingOrConstant,
+                witness,
+            ) = pattern_proof(
+                child,
+                source,
+                name,
+                matches!(
+                    parent.kind(),
+                    "let_declaration" | "parameter" | "closure_parameters"
+                ),
+                controls,
+            )? && witness == node
+                && super::pattern_name_competes(child, source, name, controls)?
+            {
+                return Ok(Some(uncertain(
+                    path,
+                    name,
+                    parent,
+                    LexicalReason::IdentifierPatternBindingOrConstant,
+                    Some(witness),
+                )));
+            }
+            return Ok(None);
+        }
+        if matches!(parent.kind(), "block" | "source_file") {
+            break;
+        }
+        child = parent;
+    }
+    Ok(None)
+}
 fn assess_pattern(
     path: &str,
     scope: Node<'_>,

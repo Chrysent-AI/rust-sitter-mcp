@@ -644,6 +644,47 @@ fn written_pattern_competitors_are_hoisted_and_module_scoped() {
     }
 }
 #[test]
+fn module_macros_keep_pattern_arguments_uncertain_in_their_own_scope() {
+    for evidence in [
+        "macro_rules! declare { () => { const selected: u8 = 0; }; } declare!();",
+        "macro_rules! declare { () => { enum Visible { selected, Other } use Visible::selected; }; } declare!{}",
+        "declare![];",
+    ] {
+        let (definition, invocation) = evidence.split_at(evidence.rfind("declare!").unwrap());
+        for source in [
+            format!("{evidence} fn f() {{ match value {{ [selected] => selected, _ => 0 }} }}"),
+            format!("{definition} fn f() {{ let [selected] = value; selected; }} {invocation}"),
+            format!(
+                "mod child {{ {evidence} fn f() {{ {{ let [selected] = value; selected; }} }} }}"
+            ),
+            format!(
+                "struct Record; impl Record {{ {evidence} fn f() {{ let [selected] = value; selected; }} }}"
+            ),
+        ] {
+            let assessment = assess(&source, "selected", false);
+            assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+            assert_eq!(
+                assessment.uncertainty.unwrap().reason,
+                LexicalReason::IdentifierPatternBindingOrConstant,
+                "{source}"
+            );
+        }
+    }
+    for source in [
+        "declare!(); mod child { fn f() { let [selected] = value; selected; } }",
+        "mod sibling { declare!(); } fn f() { let [selected] = value; selected; }",
+        "fn unrelated() { declare!(); } fn f() { let [selected] = value; selected; }",
+        "fn f() { { declare!(); } let [selected] = value; selected; }",
+        "macro_rules! declare { () => { const selected: u8 = 0; }; } fn f() { let [selected] = value; selected; }",
+    ] {
+        assert_eq!(
+            assess(source, "selected", false).binding,
+            LexicalBinding::Independent,
+            "{source}"
+        );
+    }
+}
+#[test]
 fn scoped_paths_are_disjoint_and_let_else_keeps_failure_outside_binding_scope() {
     for source in [
         "fn f() { match value { Outcome::Pass => selected(), _ => {} } }",
