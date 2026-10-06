@@ -95,7 +95,7 @@ fn wrong_binary_root_blocks_both_destination_forms_and_library_root_moves() {
         assert_eq!(wrong, client.call("move_item", request.clone()));
         request["crate_root"] = json!(LIB_ROOT);
         let correct = client.call("move_item", request);
-        assert_eq!(correct["schema_version"], 1);
+        assert_eq!(correct["schema_version"], 2);
         assert_eq!(correct["plan"]["applicable"], true, "{correct}");
         assert!(
             correct["plan"]["chain_diagnostics"]

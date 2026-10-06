@@ -416,6 +416,10 @@ references. Advice lists decision IDs individually. Move groups encode exact
 contiguous runs, e.g. `decision_ids:[{"first_id":"d/0","count":2},
 {"first_id":"d/3","count":1}]` names only `d/0`, `d/1`, `d/3`, not `d/2`.
 A run increments the numeric suffix of the first ID; run counts sum to group count.
+This run encoding applies to **every** `move_item` response (blocked and
+applicable) and is the reason `move_item` envelopes publish `schema_version: 2`
+(v1 listed decision IDs as plain strings; v2 is otherwise shape-compatible).
+`suggest_split` and the search tools remain on schema version 1.
 Move groups additionally contain `unresolved_consequence` and `actions[]`: one
 routing summary for the group, including the request tool/field/purpose/choices,
 selection-change fields/instruction, or unsupported construct/instruction.
