@@ -9,6 +9,8 @@ Use the rust-sitter-mcp MCP server to split, extract, or reorganize Rust code. D
 
 **Not for:** semantic renames (requires type knowledge), inline `mod x { ... }` body extraction, cross-crate moves, macro-body refactoring, or same-file reordering. The engine is syntactic only — it never claims your code compiles.
 
+**Set expectations first.** On idiomatic Rust — functions calling methods, prelude types (`Option`, `String`), `#[derive]`/proc-macro attributes, macro invocations (`println!`, `vec!`, `format!`), or consumers inside inline `#[cfg(test)]` modules — most selections block with `unsupported_in_engine` routes. For such files the realistic deliverable is a **design report** (inventory + grouping), not an applicable patch; the engine's sweet spot is macro-free library units (plain consts, undecorated items). `supported_unit` eligibility counts overstate what is actually movable. A file whose bulk is one large `impl` cannot be split by whole-item moves at all — methods are not items.
+
 ## Workflow checklist
 
 - [ ] 1. Call `suggest_split` on the target file → get inventory + drafts
@@ -32,7 +34,9 @@ Use the rust-sitter-mcp MCP server to split, extract, or reorganize Rust code. D
 - `crate_root`: a Rust source file that declares the module tree (NOT Cargo.toml). For a library crate use `src/lib.rs`; for a binary use `src/main.rs`. If the file sits in a subdirectory, use the root that actually declares its chain.
 - `source_path`: the file to analyze (Git-root-relative)
 
-Use `paths` to keep discovery to the smallest useful scope; include `crate_root`, the source, and any files needed for module-chain or written-binding evidence. Omitting `paths` permits repository-wide discovery (large repos can return enormous decision lists); narrowing away required evidence makes the advice incomplete.
+Use `paths` to keep discovery to the smallest useful scope; include `crate_root`, the source, and any files needed for module-chain or written-binding evidence. Omitting `paths` permits repository-wide discovery (large repos can return enormous decision lists); narrowing away required evidence makes the advice incomplete. For a `new_sibling` destination, admit its **directory literal** — e.g. creating `src/tui/new.rs` means `paths: ["src/lib.rs", "src/tui"]` — never the absent filename (`PATH_NOT_FOUND`, `INVALID_DESTINATION`). Note: cross-module binding decisions are usually a minority; most decisions on a big file are intra-file, so narrowing `paths` often does NOT shrink the response.
+
+**Response budget:** files over ~3,000 lines routinely exceed the default 2 MiB response cap — drafts, decisions, even `advice["root"]` can be silently withheld (`truncation_reasons: ["response_bytes"]`, `root: null`). If that happens, retry with `limits: {"response_bytes": 8388608}` (up to 16 MiB). When your client saves a truncated response to a file, parse that artifact with `jq`/python instead of eyeballing the preview.
 
 ## Step 2: Triage and edit the advice
 
@@ -42,7 +46,7 @@ Before choosing a draft, inspect `status`, `coverage`, `counts.omissions`, `trun
 - `drafts[]`: up to two proposals. Inspect `groups[].rationale`, `groups[].confidence` (confidence is per group, not per draft), sizes, and warnings.
 - `decisions[]`: items needing attention (cross-references, visibility, ambiguity).
 
-With no drafts, read `draft_eligibility.reasons` and `chain_diagnostics`: this can mean recovery, insufficient items, or unsupported layout — not necessarily the absence of a useful conceptual split.
+With no drafts, read `draft_eligibility.reasons` and `chain_diagnostics`: `response_bytes` means raise the response budget (above); a `no_admitted_nonconflicting_name…` reason usually means the file is already modularized or has too few movable units — a no-draft result there is a legitimate "nothing to do". A `destination: null` group in a draft is the **retain set** — those items stay; omit them from `moves`.
 
 Drafts are advisory; you choose the final grouping:
 - Join `drafts[].groups[].item_ids` to `inventory[].id` (IDs, not names, are keys)
@@ -59,7 +63,7 @@ For each item to move, build its anchor from the **exact original bytes** and by
 ```python
 from pathlib import Path
 by_id = {item["id"]: item for item in advice["inventory"]}
-root = Path(advice["root"])  # canonical Git root returned by the tool
+root = advice["root"]  # canonical Git root; if null, the response was truncated — recover the budget first
 moves = []
 for item_id, destination in chosen_groups:
     item = by_id[item_id]
@@ -72,9 +76,11 @@ for item_id, destination in chosen_groups:
     })
 ```
 
+Run the extraction as a script — **never transcribe `expected_text` from display output**; truncation and multibyte characters will corrupt it (`STALE_SELECTION`).
+
 If `span.text` is `null` or `text_omitted: true`, you must obtain complete bytes this way — display text may be truncated.
 
-**Probe before large batches.** Submit 1–2 representative items first. If the probe blocks with `member_or_constructor_unproved` or `external_or_missing_binding` on the items' own bodies — method calls (`x.len()`), prelude types (`Option`, `String`), external-crate names — every similar item will block too: that is the syntactic-only boundary, not a recoverable error. Rethink the selection or approach before spending a large call.
+**Probe before large batches.** Submit 1–2 representative items first. If the probe blocks with any `unsupported_in_engine` route — `member_or_constructor_unproved`, `external_or_missing_binding`, `macro_context_unexamined`, `lexical_context_unproved`, `glob_binding_unproved`, `conditional_or_inherited_context` — on the items' own bodies (method calls, prelude/external types, macro invocations, `#[derive]` attributes) **or their consumers** (call sites inside macros, `tokio::select!`, inline test modules), every similar item will block too: that is the syntactic-only boundary, not a recoverable error. Rethink the selection or produce a design report before spending a large call.
 
 Submit all moves as **one batch** (the server plans them together, all-or-nothing):
 
