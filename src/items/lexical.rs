@@ -355,11 +355,12 @@ fn lexical_context(
     boundary: Option<Node<'_>>,
     statement_macros: bool,
 ) -> Result<LexicalAssessment, DomainError> {
-    // Both a direct invocation and an expression-statement wrapper can expand
-    // to block items. Written syntax does not establish expression-only output.
+    // Direct invocations, macro expression statements and unexamined outer
+    // attributes can introduce block items, visible even before the expansion.
     // Audit enclosing blocks before any local proof or nested-item boundary.
+    // The test-risk scan ignores only standalone macros, not attribute uncertainty.
     let mut child = node;
-    while statement_macros && let Some(parent) = child.parent() {
+    while let Some(parent) = child.parent() {
         check(controls.0, controls.1)?;
         if matches!(parent.kind(), "source_file" | "mod_item") {
             break;
@@ -368,11 +369,27 @@ fn lexical_context(
             for i in 0..parent.named_child_count() {
                 check(controls.0, controls.1)?;
                 let statement = parent.named_child(i as u32).expect("statement");
-                if statement.kind() == "macro_invocation"
-                    || (statement.kind() == "expression_statement"
-                        && statement
-                            .named_child(0)
-                            .is_some_and(|n| n.kind() == "macro_invocation"))
+                if statement.kind() == "attribute_item"
+                    && (statement.has_error()
+                        || statement.is_missing()
+                        || !super::context_independent_attribute(&source[statement.byte_range()]))
+                {
+                    // Doc comments are inert comment nodes; derive spellings alone
+                    // do not establish built-in macro identity in this lexical scope.
+                    return Ok(uncertain(
+                        path,
+                        name,
+                        parent,
+                        LexicalReason::ConditionalLocalContext,
+                        Some(statement),
+                    ));
+                }
+                if statement_macros
+                    && (statement.kind() == "macro_invocation"
+                        || (statement.kind() == "expression_statement"
+                            && statement
+                                .named_child(0)
+                                .is_some_and(|n| n.kind() == "macro_invocation")))
                 {
                     let mut assessment = uncertain(
                         path,
