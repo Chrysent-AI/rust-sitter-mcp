@@ -103,8 +103,13 @@ pub(crate) fn test_consumer(
 ) -> Result<bool, DomainError> {
     let hoist_risk = need.lexical_uncertainty.as_ref().is_some_and(|witness| {
         witness.reason == lexical::LexicalReason::UnsupportedPattern
-            && witness.witness_relation
-                == Some(lexical::WitnessRelation::StatementMacroBeforeReference)
+            && matches!(
+                witness.witness_relation,
+                Some(
+                    lexical::WitnessRelation::StatementMacroBeforeReference
+                        | lexical::WitnessRelation::BlockMacroMayIntroduceItems
+                )
+            )
     });
     if need.attribute_range.is_some()
         || need.choice_target.is_some()

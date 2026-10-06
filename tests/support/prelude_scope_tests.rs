@@ -64,7 +64,8 @@ fn body_macro_veto_is_occurrence_local_not_signature_or_batch_wide() {
     for (selected, proofs) in [
         ("fn selected(input: Option<u8>) { introduce!(); }", 1),
         ("fn selected() { introduce!(); let value: Option<u8>; }", 0),
-        ("fn selected() { let value: Option<u8>; introduce!(); }", 1),
+        ("fn selected() { let value: Option<u8>; introduce!(); }", 0),
+        ("fn selected() { let value: Option<u8>; introduce!{} }", 0),
         (
             "fn selected() { { introduce!(); } let value: Option<u8>; }",
             1,
@@ -75,7 +76,15 @@ fn body_macro_veto_is_occurrence_local_not_signature_or_batch_wide() {
         ),
         (
             "fn selected() { { let value: Option<u8>; } introduce!(); }",
-            1,
+            0,
+        ),
+        (
+            "fn selected() { fn inner(_: Option<u8>) {} introduce!(); }",
+            0,
+        ),
+        (
+            "fn selected() { { fn inner(_: Option<u8>) {} } introduce!(); }",
+            0,
         ),
     ] {
         let repo = fixture(selected);
@@ -92,14 +101,26 @@ fn body_macro_veto_is_occurrence_local_not_signature_or_batch_wide() {
                 .iter()
                 .find(|d| d["anchors"][0]["expected_text"] == "Option")
                 .unwrap();
+            let relation =
+                if selected.find("introduce!").unwrap() < selected.find("Option").unwrap() {
+                    "statement_macro_before_reference"
+                } else {
+                    "block_macro_may_introduce_items"
+                };
             assert_eq!(
                 decision["lexical_uncertainty"]["witness_relation"],
-                "statement_macro_before_reference"
+                relation
             );
-            assert_eq!(
-                decision["refusal_basis"][0]["class"],
-                "chain_macro_statement"
-            );
+            let basis = decision["refusal_basis"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["class"] == "chain_macro_statement")
+                .unwrap();
+            let range = &basis["anchor"]["range"];
+            let start = range["start_byte"].as_u64().unwrap() as usize;
+            let end = range["end_byte"].as_u64().unwrap() as usize;
+            assert!(["introduce!();", "introduce!{}"].contains(&&selected[start..end]));
         }
     }
     let record = "struct Record { option: Option<u8> }";
@@ -117,6 +138,36 @@ fn body_macro_veto_is_occurrence_local_not_signature_or_batch_wide() {
     );
     withheld(&result);
     assert_eq!(proof_count(&result), 1, "{result}");
+}
+
+#[test]
+fn no_implicit_prelude_in_an_unrelated_inline_module_retains_chain_refusal() {
+    let record = "struct Record { option: Option<u8> }";
+    for file in ["lib.rs", "source.rs", "destination.rs"] {
+        let repo = fixture(record);
+        let path = format!("cases/layout/{file}");
+        let old = fs::read_to_string(repo.0.join(&path)).unwrap();
+        repo.write(
+            &path,
+            &format!("{old}\nmod isolated {{ #![no_implicit_prelude] }}"),
+        );
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, record, existing())]))),
+        );
+        // The prelude audit no longer promotes this control (unit-tested), but
+        // the independent module-identity audit still refuses scope attributes.
+        assert_eq!(proof_count(&result), 0, "{file}: {result}");
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "module_chain_failure"),
+            "{result}"
+        );
+    }
 }
 
 #[test]
