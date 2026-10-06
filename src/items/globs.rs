@@ -244,6 +244,66 @@ impl<'a> GlobRoutes<'a> {
         }
         Ok(Some(target))
     }
+    /// True includes unknown routes: only a written negative proof permits exclusion.
+    fn may_forward_binding(
+        &self,
+        module: &Module,
+        route: &str,
+        affected: &[&str],
+        name: &str,
+        depth: usize,
+    ) -> Result<bool, DomainError> {
+        check(self.controls.0, self.controls.1)?;
+        if depth > 16 {
+            return Ok(true);
+        }
+        let (prefix, binding) = route.rsplit_once("::").unwrap_or(("self", route));
+        let binding = binding.trim().trim_start_matches("r#");
+        let target = match self.resolve(module, prefix, depth)? {
+            Some(Target::Module(target)) => target,
+            Some(Target::Enum) => return Ok(false),
+            None => return Ok(true),
+        };
+        if affected.contains(&target.path.as_str()) && binding == name {
+            return Ok(true);
+        }
+        let Some(data) = self.parsed.get(&target.path) else {
+            return Ok(true);
+        };
+        let Some(scope) = self.scope(&target, &data.tree) else {
+            return Ok(true);
+        };
+        if data.tree.root_node().has_error() {
+            return Ok(true);
+        }
+        let source = &self.files[&target.path].source;
+        for i in 0..scope.named_child_count() {
+            check(self.controls.0, self.controls.1)?;
+            let node = scope.named_child(i as u32).expect("scope child");
+            if node.kind() == "macro_invocation" {
+                return Ok(true);
+            }
+            if node.kind() == "use_declaration" {
+                if use_facts(node, source, self.controls)?.0 {
+                    return Ok(true);
+                }
+                for leaf in use_leaves(node, source, self.controls)? {
+                    if leaf.binding.trim_start_matches("r#") == binding
+                        && self.may_forward_binding(
+                            &target,
+                            &leaf.path,
+                            affected,
+                            name,
+                            depth + 1,
+                        )?
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
     fn lexical(&self, path: &str, node: Node<'_>) -> Module {
         let mut inline = Vec::new();
         let mut parent = node.parent();
@@ -267,15 +327,17 @@ impl<'a> GlobRoutes<'a> {
     ) -> Result<bool, DomainError> {
         Ok(self.assess(path, node, &[target], None)?.1)
     }
-    /// None means uncertain/reachable, and must not discharge a candidate.
+    /// No exclusion means uncertain/reachable. The boolean also retains forwarded
+    /// binding candidates whose alias spelling is absent from the conservative seed.
     pub(crate) fn exclusion(
         &self,
         path: &str,
         node: Node<'_>,
         affected: &[&str],
         name: &str,
-    ) -> Result<Option<&'static str>, DomainError> {
-        Ok(self.assess(path, node, affected, Some(name))?.0)
+    ) -> Result<(Option<&'static str>, bool), DomainError> {
+        let (reason, _, forwarded) = self.assess(path, node, affected, Some(name))?;
+        Ok((reason, forwarded))
     }
     fn assess(
         &self,
@@ -283,14 +345,16 @@ impl<'a> GlobRoutes<'a> {
         node: Node<'_>,
         affected: &[&str],
         name: Option<&str>,
-    ) -> Result<(Option<&'static str>, bool), DomainError> {
+    ) -> Result<(Option<&'static str>, bool, bool), DomainError> {
         let source = &self.files[path].source;
         let module = self.lexical(path, node);
+        let imported_names = use_facts(node, source, self.controls)?.1;
         let mut stack = vec![(node, String::new())];
         let mut reason = "different_written_module";
         let mut found = false;
         let mut uncertain = false;
         let mut reachable = false;
+        let mut forwarded = false;
         while let Some((node, prefix)) = stack.pop() {
             check(self.controls.0, self.controls.1)?;
             if node.kind() == "scoped_use_list" {
@@ -353,7 +417,8 @@ impl<'a> GlobRoutes<'a> {
                             affected.contains(&target.path.as_str()) && target.inline.is_empty();
                         uncertain |= affected.contains(&target.path.as_str());
                         // A different module may forward the moved binding. Do not
-                        // discharge wildcard/re-export or same-name import chains.
+                        // discharge wildcard/re-export, same-name, or explicitly
+                        // imported alias chains.
                         if let Some(data) = self.parsed.get(&target.path)
                             && let Some(scope) = self.scope(&target, &data.tree)
                         {
@@ -372,6 +437,20 @@ impl<'a> GlobRoutes<'a> {
                                         || use_leaves(import, text, self.controls)?
                                             .iter()
                                             .any(|l| name == Some(l.binding.as_str()));
+                                    if let Some(name) = name {
+                                        for leaf in use_leaves(import, text, self.controls)? {
+                                            if imported_names
+                                                .iter()
+                                                .any(|n| n == leaf.binding.trim_start_matches("r#"))
+                                                && self.may_forward_binding(
+                                                    &target, &leaf.path, affected, name, 0,
+                                                )?
+                                            {
+                                                uncertain = true;
+                                                forwarded = true;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -424,6 +503,10 @@ impl<'a> GlobRoutes<'a> {
                 }
             }
         }
-        Ok(((found && !uncertain).then_some(reason), reachable))
+        Ok((
+            (found && !uncertain).then_some(reason),
+            reachable,
+            forwarded,
+        ))
     }
 }
