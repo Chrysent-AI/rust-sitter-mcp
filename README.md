@@ -26,15 +26,35 @@ Every mutating tool returns a **plan** (`applicable` / `blocked` / `incomplete`)
 
 Requires: Rust toolchain per [`rust-toolchain.toml`](rust-toolchain.toml), Git 2.39+, and a C11 compiler for the bundled tree-sitter grammars.
 
+Install the binary with cargo (from this repository):
+
+```sh
+cargo install --locked --git https://github.com/sdkks/rust-sitter-mcp
+```
+
+Or from a checkout:
+
 ```sh
 git clone https://github.com/sdkks/rust-sitter-mcp.git
 cd rust-sitter-mcp
 make install        # installs hooks + gate tools, verifies, builds and installs the binary
+# or just the binary:
+cargo install --locked --path .
 ```
 
-Or manually: `cargo install --locked --path .`
+The server speaks MCP over stdio and takes no arguments — every tool call names its target via `repo_path`.
 
 ## Configure (MCP client)
+
+The server is a plain stdio binary (`rust-sitter-mcp`), so any MCP client that launches local servers works. Pick your harness:
+
+### pi
+
+```sh
+pi mcp add rust-sitter-mcp -- rust-sitter-mcp
+```
+
+Or edit `~/.pi/agent/mcp.json` (user) or `.pi/mcp.json` (project):
 
 ```json
 {
@@ -43,6 +63,83 @@ Or manually: `cargo install --locked --path .`
   }
 }
 ```
+
+### Codex CLI
+
+```sh
+codex mcp add rust-sitter-mcp -- rust-sitter-mcp
+```
+
+Or in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.rust-sitter-mcp]
+command = "rust-sitter-mcp"
+```
+
+### Claude Code
+
+```sh
+claude mcp add rust-sitter-mcp -- rust-sitter-mcp
+```
+
+### Cursor
+
+Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project):
+
+```json
+{
+  "mcpServers": {
+    "rust-sitter-mcp": { "command": "rust-sitter-mcp" }
+  }
+}
+```
+
+### Zed
+
+In `~/.config/zed/settings.json`:
+
+```json
+{
+  "context_servers": {
+    "rust-sitter-mcp": {
+      "command": "rust-sitter-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### Windsurf
+
+In `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "rust-sitter-mcp": { "command": "rust-sitter-mcp" }
+  }
+}
+```
+
+### VS Code (GitHub Copilot)
+
+In `.vscode/mcp.json` (workspace):
+
+```json
+{
+  "servers": {
+    "rust-sitter-mcp": {
+      "type": "stdio",
+      "command": "rust-sitter-mcp"
+    }
+  }
+}
+```
+
+### Any other stdio MCP client
+
+Any client that launches local stdio servers works — the command is `rust-sitter-mcp` with no arguments. Client schemas differ (e.g. VS Code uses `servers` + `type`; Cursor/Windsurf use `mcpServers`); follow your client's local-server documentation for the entry shape.
 
 Every tool call takes an explicit `repo_path` (any file or directory inside the target Git worktree); the server resolves the canonical root and never falls back to ambient directories.
 
