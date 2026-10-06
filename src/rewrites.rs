@@ -438,10 +438,9 @@ impl Analyzer<'_> {
         for attribute in &item.attributes {
             let text =
                 &self.files[path].source[attribute.range.start_byte..attribute.range.end_byte];
-            if !(text.starts_with("#[allow(")
-                || text.starts_with("#[repr(")
-                || matches!(text, "#[inline]" | "#[inline(always)]" | "#[inline(never)]"))
-            {
+            // Inner attributes on a required binding remain an inherited-scope
+            // boundary. Sharing the outer allowlist must not relax that guard.
+            if text.starts_with("#![") || !items::context_independent_attribute(text) {
                 need.reason = DecisionReason::ConditionalOrInheritedContext;
                 need.category = "scope_dependency";
                 need.path = path.into();
@@ -1463,6 +1462,7 @@ impl Analyzer<'_> {
             })
             .then(|| repair.target.clone());
         Need {
+            attribute_range: None,
             reason: if reason == DecisionReason::FinalAliasConflict && choice_target.is_none() {
                 DecisionReason::DestinationBindingConflict
             } else {
@@ -1641,10 +1641,11 @@ impl Analyzer<'_> {
                                             "lexical alias evidence guard reached",
                                         ));
                                     }
-                                    failures.push(Need {reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),lexical_uncertainty:assessment.uncertainty,category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or unproved at an anchored access".into(),item_ids:repair.item_ids.clone()});
+                                    failures.push(Need {attribute_range:None,reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),lexical_uncertainty:assessment.uncertainty,category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or unproved at an anchored access".into(),item_ids:repair.item_ids.clone()});
                                 }
                             }
                             let need = Need {
+                                attribute_range: None,
                                 reason: DecisionReason::UnsupportedConstruct,
                                 choice_target: None,
                                 lexical_uncertainty: None,

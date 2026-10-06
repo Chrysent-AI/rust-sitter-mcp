@@ -2,6 +2,8 @@
 mod chain_fixture;
 #[path = "support/move_chain_tests.rs"]
 mod chain_tests;
+#[path = "support/derive_tests.rs"]
+mod derive_tests;
 #[path = "support/fixture_gen.rs"]
 mod fixture_gen;
 #[path = "support/move_artifacts.rs"]

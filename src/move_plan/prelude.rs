@@ -30,6 +30,9 @@ pub struct MoveCoverage {
     /// Number of discharged occurrences, including omitted proof records.
     #[serde(skip_serializing_if = "is_zero")]
     pub standard_prelude: usize,
+    /// Number of unshadowed compiler-built-in derive names discharged.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub standard_builtin_derive: usize,
     /// Excluded item/glob pairs by written-route reason, not semantic absence proof.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub glob_exclusions: BTreeMap<String, usize>,
@@ -48,11 +51,12 @@ impl std::ops::DerefMut for MoveCoverage {
         &mut self.scan
     }
 }
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(rename_all = "snake_case")]
 pub enum BindingProofClass {
     StandardPrelude,
+    StandardBuiltinDerive,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -68,11 +72,15 @@ pub struct BindingProof {
 #[derive(Clone, Default)]
 struct Shadows {
     context_unproved: bool,
-    names: [bool; 5],
+    names: [bool; 14],
+    derive_veto: bool,
+    derives: BTreeMap<(String, usize, usize), usize>,
 }
 impl Shadows {
     fn merge(&mut self, other: &Self) {
         self.context_unproved |= other.context_unproved;
+        self.derive_veto |= other.derive_veto;
+        self.derives.extend(other.derives.clone());
         for (name, other) in self.names.iter_mut().zip(other.names) {
             *name |= other;
         }
@@ -80,19 +88,44 @@ impl Shadows {
     fn name(&mut self, text: &str) {
         if let Some(index) = STANDARD_PRELUDE
             .iter()
+            .chain(items::BUILTIN_DERIVES.iter())
             .position(|(name, _)| *name == text.trim_start_matches("r#"))
         {
             self.names[index] = true;
         }
     }
     fn refuses(&self, index: usize) -> bool {
-        self.context_unproved || self.names[index]
+        self.context_unproved
+            || self.names[index]
+            || self.derive_veto
+            || self.derives.values().any(|i| self.refuses_derive(*i))
+    }
+    fn refuses_derive(&self, index: usize) -> bool {
+        self.context_unproved || self.names[STANDARD_PRELUDE.len() + index]
+    }
+    fn attribute(&mut self, path: &str, node: Node<'_>, source: &str) {
+        if items::context_independent_attribute(&source[node.byte_range()]) {
+            return;
+        }
+        if let Some(names) = items::derive_names(node, source) {
+            for (index, range) in names {
+                if let Some(index) = index {
+                    self.derives
+                        .insert((path.into(), range.start_byte, range.end_byte), index);
+                } else {
+                    self.derive_veto = true;
+                }
+            }
+        } else {
+            self.context_unproved = true;
+        }
     }
 }
 
 /// Module scans visit immediate statements only; item scans include their lexical
 /// body conservatively. Inline modules are always separate binding scopes.
 fn shadows(
+    path: &str,
     node: Node<'_>,
     source: &str,
     descend: bool,
@@ -130,9 +163,8 @@ fn shadows(
                         n.kind() == "mod_item" && n.child_by_field_name("body").is_some()
                     });
                 if !child_attribute {
-                    // Includes no_std/no_core/no_implicit_prelude, cfg and derives.
-                    found.context_unproved |=
-                        !items::context_independent_attribute(&source[current.byte_range()]);
+                    // Derive identity is checked only after both chains merge.
+                    found.attribute(path, current, source);
                 }
                 continue;
             }
@@ -242,13 +274,14 @@ struct ScopedShadows {
 }
 impl ScopedShadows {
     fn collect(
+        path: &str,
         node: Node<'_>,
         source: &str,
         descend: bool,
         controls: (Instant, &AtomicBool),
     ) -> Result<Self, DomainError> {
         let mut result = Self {
-            root: shadows(node, source, descend, controls)?,
+            root: shadows(path, node, source, descend, controls)?,
             inline: BTreeMap::new(),
         };
         let mut stack = vec![node];
@@ -258,14 +291,12 @@ impl ScopedShadows {
                 .then(|| current.child_by_field_name("body"))
                 .flatten()
             {
-                let mut found = shadows(body, source, descend, controls)?;
+                let mut found = shadows(path, body, source, descend, controls)?;
                 let mut previous = current.prev_named_sibling();
                 while let Some(attribute) = previous {
                     match attribute.kind() {
                         "attribute_item" => {
-                            found.context_unproved |= !items::context_independent_attribute(
-                                &source[attribute.byte_range()],
-                            );
+                            found.attribute(path, attribute, source);
                         }
                         "line_comment" | "block_comment" => {}
                         _ => break,
@@ -348,7 +379,13 @@ pub(super) fn discharge(
         items::check(controls.0, controls.1)?;
         modules.insert(
             path.clone(),
-            ScopedShadows::collect(data.tree.root_node(), &files[path].source, false, controls)?,
+            ScopedShadows::collect(
+                path,
+                data.tree.root_node(),
+                &files[path].source,
+                false,
+                controls,
+            )?,
         );
     }
     // Proposed imports are also visible bindings. Never let a fallback race a
@@ -367,7 +404,13 @@ pub(super) fn discharge(
                 .entry(path.clone())
                 .or_default()
                 .root
-                .merge(&shadows(tree.root_node(), &repair.after, true, controls)?);
+                .merge(&shadows(
+                    path,
+                    tree.root_node(),
+                    &repair.after,
+                    true,
+                    controls,
+                )?);
         }
     }
     // New sibling declarations bind names in their written parent too.
@@ -395,7 +438,23 @@ pub(super) fn discharge(
             .root_node()
             .named_descendant_for_byte_range(item.span.range.start_byte, item.span.range.end_byte)
             .expect("selected item");
-        let found = ScopedShadows::collect(node, &files[path].source, true, controls)?;
+        let mut found = ScopedShadows::collect(path, node, &files[path].source, true, controls)?;
+        // Leading outer attributes lie outside the item anchor, but arrive with
+        // it and must participate in the destination's expansion audit.
+        for attribute in &item.attributes {
+            items::check(controls.0, controls.1)?;
+            if attribute.range.end_byte <= item.span.range.start_byte
+                && let Some(node) = parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(
+                        attribute.range.start_byte,
+                        attribute.range.end_byte,
+                    )
+            {
+                found.root.attribute(path, node, &files[path].source);
+            }
+        }
         arrivals
             .entry(destination.clone())
             .or_default()
@@ -409,7 +468,7 @@ pub(super) fn discharge(
             .root
             .merge(found);
     }
-    let mut proofs = Vec::new();
+    let mut proofs = BTreeMap::new();
     let mut remaining = Vec::new();
     let mut proof_bytes = 0;
     for need in needs.drain(..) {
@@ -430,44 +489,137 @@ pub(super) fn discharge(
                 && item.span.range.start_byte <= need.range.start_byte
                 && item.span.range.end_byte >= need.range.end_byte
         });
-        if need.reason == DecisionReason::ExternalOrMissingBinding
-            && let (Some(index), Some((path, item, destination))) = (candidate, selection)
-            && !chain_shadows(path, node, contexts, &modules, false).refuses(index)
-            && !chain_shadows(
-                destination,
-                None,
-                final_contexts,
-                &final_modules,
-                !files.contains_key(destination),
-            )
-            .refuses(index)
-            && !item_shadows[&item.id].visible(node).refuses(index)
-            && !arrivals[destination].refuses(index)
-        {
-            let proof = BindingProof {
-                class: BindingProofClass::StandardPrelude,
-                anchor: SourceAnchor {
-                    path: need.path,
-                    expected_text: source[need.range.start_byte..need.range.end_byte].into(),
-                    range: need.range,
-                },
-                item_ids: need.item_ids,
-                destination_path: destination.clone(),
-                standard_path: STANDARD_PRELUDE[index].1.into(),
-                basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary source/destination chains and written batch scopes examined without competing imports, globs, declarations, generic/local/pattern bindings, prelude-disabling attributes, conditional/recovered context or macros; no import synthesized; semantic checking not performed".into(),
-            };
-            proof_bytes += serde_json::to_vec(&proof).expect("proof JSON").len();
-            if proof_bytes > 128 * 1024 * 1024 || proofs.len() >= 100_000 {
-                return Err(DomainError::new(
-                    "analysis_descriptor_bytes",
-                    "prelude proof guard reached",
-                ));
+        let Some((path, item, destination)) = selection else {
+            remaining.push(need);
+            continue;
+        };
+        let context_node = need
+            .attribute_range
+            .as_ref()
+            .and_then(|range| {
+                parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(range.start_byte, range.end_byte)
+            })
+            .or(node);
+        let mut visible = chain_shadows(path, context_node, contexts, &modules, false);
+        visible.merge(&chain_shadows(
+            destination,
+            None,
+            final_contexts,
+            &final_modules,
+            !files.contains_key(destination),
+        ));
+        visible.merge(&item_shadows[&item.id].visible(context_node));
+        visible.merge(&arrivals[destination]);
+        // Record contextual derives too: an attribute on a retained declaration
+        // can be the veto that otherwise prevents a moved type reference.
+        let mut derive_identity_unproved = false;
+        if candidate.is_some() || need.attribute_range.is_some() {
+            for ((path, start, end), index) in &visible.derives {
+                items::check(controls.0, controls.1)?;
+                let derive_node = parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(*start, *end);
+                if visible.refuses_derive(*index)
+                    || chain_shadows(path, derive_node, contexts, &modules, false)
+                        .refuses_derive(*index)
+                {
+                    derive_identity_unproved = true;
+                    continue;
+                }
+                record_proof(
+                    BindingProof {
+                        class: BindingProofClass::StandardBuiltinDerive,
+                        anchor: SourceAnchor {
+                            path: path.clone(),
+                            expected_text: files[path].source[*start..*end].into(),
+                            range: crate::result::ByteRange {
+                                start_byte: *start,
+                                end_byte: *end,
+                            },
+                        },
+                        item_ids: need.item_ids.clone(),
+                        destination_path: destination.clone(),
+                        standard_path: items::BUILTIN_DERIVES[*index].1.into(),
+                        basis: "caller enabled assume_standard_prelude; bare compiler-built-in derive name; complete ordinary source/destination visible chains and written batch scopes examined without competing same-spelling macro/item/use-leaf bindings or globs, prelude-disabling attributes, conditional/recovered context or unexamined macros; standard-defined expansion introduces no module-scope binding; other derive names remain vetoes; no import synthesized; semantic checking not performed".into(),
+                    },
+                    &mut proofs,
+                    &mut proof_bytes,
+                )?;
             }
-            proofs.push(proof);
-        } else {
+        }
+        let derive_discharged = need.reason == DecisionReason::ConditionalOrInheritedContext
+            && need.attribute_range.as_ref().is_some_and(|range| {
+                parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(range.start_byte, range.end_byte)
+                    .and_then(|attribute| items::derive_names(attribute, source))
+                    .is_some_and(|names| {
+                        names
+                            .iter()
+                            .all(|(index, _)| index.is_some_and(|i| !visible.refuses_derive(i)))
+                    })
+            });
+        if need.reason == DecisionReason::ExternalOrMissingBinding
+            && let Some(index) = candidate
+            && !visible.refuses(index)
+            && !derive_identity_unproved
+        {
+            record_proof(
+                BindingProof {
+                    class: BindingProofClass::StandardPrelude,
+                    anchor: SourceAnchor {
+                        path: need.path,
+                        expected_text: source[need.range.start_byte..need.range.end_byte].into(),
+                        range: need.range,
+                    },
+                    item_ids: need.item_ids,
+                    destination_path: destination.clone(),
+                    standard_path: STANDARD_PRELUDE[index].1.into(),
+                    basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary source/destination chains and written batch scopes examined without competing imports, globs, declarations, generic/local/pattern bindings, prelude-disabling attributes, conditional/recovered context or macros; any contextual derives separately audited as unshadowed compiler built-ins; no import synthesized; semantic checking not performed".into(),
+                },
+                &mut proofs,
+                &mut proof_bytes,
+            )?;
+        } else if !derive_discharged {
             remaining.push(need);
         }
     }
     *needs = remaining;
-    Ok(proofs)
+    Ok(proofs.into_values().collect())
+}
+
+fn record_proof(
+    mut proof: BindingProof,
+    proofs: &mut BTreeMap<(String, usize, usize, String), BindingProof>,
+    bytes: &mut usize,
+) -> Result<(), DomainError> {
+    let key = (
+        proof.anchor.path.clone(),
+        proof.anchor.range.start_byte,
+        proof.anchor.range.end_byte,
+        proof.destination_path.clone(),
+    );
+    if let Some(prior) = proofs.get(&key) {
+        *bytes -= serde_json::to_vec(prior).expect("proof JSON").len();
+        for id in &prior.item_ids {
+            if !proof.item_ids.contains(id) {
+                proof.item_ids.push(id.clone());
+            }
+        }
+        proof.item_ids.sort();
+    }
+    *bytes += serde_json::to_vec(&proof).expect("proof JSON").len();
+    proofs.insert(key, proof);
+    if *bytes > 128 * 1024 * 1024 || proofs.len() > 100_000 {
+        return Err(DomainError::new(
+            "analysis_descriptor_bytes",
+            "prelude proof guard reached",
+        ));
+    }
+    Ok(())
 }
