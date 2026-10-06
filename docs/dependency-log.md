@@ -1,5 +1,25 @@
 # Dependency decisions
 
+## 2026-10-06 — ra_ap_hir 0.0.357
+
+HIR is the chosen structured method/type/visibility boundary; the shared comparison and exact coordinated pin rationale follow below.
+
+## 2026-10-06 — ra_ap_base_db 0.0.357
+
+Explicit crate graph and immutable source-root/text input APIs, directly used instead of a Cargo loader. Same maintenance, license, MSRV, feature and coordinated-upgrade decision as HIR below.
+
+## 2026-10-06 — ra_ap_syntax 0.0.357
+
+Byte-addressed ASTs for admitted occurrences and declaration anchors. Using the aligned parser avoids a cross-version AST contract; same vetted release and default-off features as HIR below.
+
+## 2026-10-06 — ra_ap_ide_db 0.0.357
+
+Structured, in-process resolution over application-admitted immutable texts and an explicit crate graph. Each directly used crate is pinned to `=0.0.357`, with `default-features = false` and no `in-rust-tree`. `cargo +1.98.1 info` verified each package's MIT OR Apache-2.0 license and Rust 1.98 minimum before manifest edits; the tested toolchain is 1.98.1. Same-day registry research records the October 5 release, active weekly July–October cadence, and no currently yanked releases in the examined RA histories (syntax: 3.44M total / 623K recent downloads; IDE: 1.57M / 284K). This reuses the completed registry research, not an independent metadata refresh for each subcrate.
+
+Candidates: [pure HIR](https://crates.io/crates/ra_ap_hir) plus [RootDatabase](https://crates.io/crates/ra_ap_ide_db) wins for structured receiver, declaration and visibility evidence without caller-code execution. [IDE](https://crates.io/crates/ra_ap_ide) plus [load-cargo](https://crates.io/crates/ra_ap_load-cargo) adds unnecessary UI layers, project/tool execution and watcher/proc-macro machinery. [External LSP](https://rust-analyzer.github.io/book/contributing/architecture.html) has a stable protocol but no verified structured access/receiver proof contract; compilation executes caller scripts/macros and is not an identity proof. No loader, project auto-discovery, VFS watcher or executable proc-macro expander is introduced. FileSet/VfsPath are in-memory identifiers, not filesystem watchers. Base-db owns graph/text inputs; syntax owns byte-addressed ASTs; HIR resolves facts; ide_db supplies the concrete database. Adoption tests exercise all four API boundaries.
+
+The published ide_db locked non-dev Darwin graph measured 133 package-version nodes (22 RA packages), not the application's incremental weight; the merged locked non-dev Darwin graph measures 193 package-version nodes and is policy-checked at adoption. Resolution adds 111 packages and unifies unicode-ident to 1.0.24 because the pinned RA lexer requires that exact version; no unrelated manifest requirements are changed. Root MIT/Apache licenses fit the application; the human-approved transitive `rustc_apfloat` license requires the explicit `Apache-2.0 WITH LLVM-exception` allowance. No CC0 loader dependency is needed. Exact coordinated 0.x pins follow the Tree-sitter deliberate-upgrade precedent: RA AST, Salsa, graph and inference APIs are unstable together. Upgrades require API/source verification, semantic/refusal replay, and all dependency gates; no floating RA upgrades or blanket unused-dependency exemptions.
+
 ## 2026-10-04 — similar 3.2.0
 
 Generation-only line diffs: `similar = { version = "3.2", default-features = false, features = ["text"] }`, caret stable-major requirement with Cargo.lock and deliberate upgrades. `cargo info similar@3.2.0` reverified Apache-2.0, MSRV 1.85 (fits 1.97.1), and features before the manifest edit. Same-day registry comparison records Aug 17 update; 3.1.0–3.2.0 April–August cadence, 209.9M total/54.6M recent downloads, chosen version not yanked. Fresh crates.io API fetch returned 403; maintenance/non-yanked evidence is the completed same-day registry research, not an invented refresh. Candidates: [similar](https://crates.io/crates/similar), [diffy](https://crates.io/crates/diffy), [flickzeug](https://crates.io/crates/flickzeug), [imara-diff](https://crates.io/crates/imara-diff). The first wins for explicit generation/header/context APIs; diffy/flickzeug's parsing/application features are unnecessary, and imara-diff requires more low-level framing. Installed 3.2.0 `src/udiff.rs` verifies three-line context, verbatim labels and missing-newline hints; application code owns Git path quoting/framing. `cargo tree -e no-dev -p similar` shows no transitive dependencies with these features. License/advisory/source checks run through the introducing commit's gates. Git compatibility is verified in disposable fixtures, never by runtime application.
