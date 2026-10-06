@@ -10,9 +10,15 @@ use std::sync::atomic::AtomicBool;
 
 fn moved(repo: &Fixture, source: &str, root: &str) -> Value {
     let before = observe(&repo.0);
+    let source_text = std::fs::read_to_string(repo.0.join(source)).unwrap();
+    let selected = if source_text.starts_with("pub fn selected() {}") {
+        "pub fn selected() {}"
+    } else {
+        "fn selected() {}"
+    };
     let request: MoveRequest = serde_json::from_value(json!({
         "repo_path": repo.0, "crate_root": root, "paths": ["cases/layout"],
-        "moves": [{"item": anchor(repo, source, "fn selected() {}"),
+        "moves": [{"item": anchor(repo, source, selected),
             "destination": {"kind": "new_sibling", "path": "cases/layout/target.rs", "parent_path": root}}],
         "limits": {"diagnostic_count": 100000}
     })).unwrap();
@@ -136,6 +142,84 @@ fn indirect_and_local_alias_globs_are_not_discharged_as_unrelated() {
     );
     let result = moved(&repo, "cases/layout/source.rs", "cases/layout/lib.rs");
     assert!(!glob_anchors(&result).is_empty(), "{result}");
+}
+
+#[test]
+fn child_glob_importing_a_private_alias_still_refuses_moves() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source; mod bridge;\n");
+    repo.write("cases/layout/source.rs", "pub fn selected() {}\n");
+    repo.write(
+        "cases/layout/bridge.rs",
+        "use crate::source::selected as alias;\npub mod child { use super::{alias, *}; }\n",
+    );
+    let result = moved(&repo, "cases/layout/source.rs", "cases/layout/lib.rs");
+    assert_eq!(
+        glob_anchors(&result),
+        ["use super::{alias, *};"],
+        "{result}"
+    );
+    assert_eq!(result["plan"]["applicable"], false, "{result}");
+    assert!(result["plan"]["patch"].is_null());
+    assert!(result["coverage"]["glob_exclusions"].is_null(), "{result}");
+}
+
+#[test]
+fn child_glob_importing_a_nested_private_alias_still_refuses_moves() {
+    let repo = Fixture::generate();
+    repo.write(
+        "cases/layout/lib.rs",
+        "mod source; mod bridge; mod forwarding;\n",
+    );
+    repo.write("cases/layout/source.rs", "pub fn selected() {}\n");
+    repo.write(
+        "cases/layout/bridge.rs",
+        "use crate::source::selected as first_alias;\n",
+    );
+    repo.write(
+        "cases/layout/forwarding.rs",
+        "use crate::bridge::first_alias as second_alias;\npub mod child { use super::{second_alias, *}; }\n",
+    );
+    let result = moved(&repo, "cases/layout/source.rs", "cases/layout/lib.rs");
+    assert_eq!(
+        glob_anchors(&result),
+        ["use super::{second_alias, *};"],
+        "{result}"
+    );
+    assert_eq!(result["plan"]["applicable"], false, "{result}");
+    assert!(result["plan"]["patch"].is_null());
+    assert!(result["coverage"]["glob_exclusions"].is_null(), "{result}");
+}
+
+#[test]
+fn explicitly_imported_unrelated_aliases_remain_excluded() {
+    for route in [
+        "crate::unrelated::independent",
+        "crate::bridge::first_alias",
+    ] {
+        let repo = Fixture::generate();
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source; mod unrelated; mod bridge; mod forwarding;\n",
+        );
+        repo.write("cases/layout/source.rs", "fn selected() {}\n");
+        repo.write("cases/layout/unrelated.rs", "fn independent() {}\n");
+        repo.write(
+            "cases/layout/bridge.rs",
+            "use crate::unrelated::independent as first_alias;\n",
+        );
+        repo.write(
+            "cases/layout/forwarding.rs",
+            &format!("use {route} as alias;\npub mod child {{ use super::{{alias, *}}; }}\n"),
+        );
+        let result = moved(&repo, "cases/layout/source.rs", "cases/layout/lib.rs");
+        assert!(glob_anchors(&result).is_empty(), "{route}: {result}");
+        assert_eq!(result["plan"]["applicable"], true, "{route}: {result}");
+        assert_eq!(
+            result["coverage"]["glob_exclusions"]["different_written_module"], 1,
+            "{route}: {result}"
+        );
+    }
 }
 
 #[test]

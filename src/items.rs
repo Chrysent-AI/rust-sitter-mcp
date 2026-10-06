@@ -1161,10 +1161,13 @@ pub fn dependencies(
                     } else {
                         None
                     };
-                    let glob_exclusion = if use_evidence.as_ref().is_some_and(|f| f.0) {
+                    let (glob_exclusion, glob_forwarding) = if use_evidence
+                        .as_ref()
+                        .is_some_and(|f| f.0)
+                    {
                         glob_routes.exclusion(path, current, &[source_path, destination], name)?
                     } else {
-                        None
+                        (None, false)
                     };
                     if let Some(reason) = glob_exclusion {
                         *glob_exclusions.entry(reason.into()).or_default() += 1;
@@ -1173,7 +1176,8 @@ pub fn dependencies(
                         && (names.iter().any(|s| s == name)
                             || (*glob
                                 && glob_exclusion.is_none()
-                                && names.iter().any(|s| module_spellings.contains(s))))
+                                && (glob_forwarding
+                                    || names.iter().any(|s| module_spellings.contains(s)))))
                     {
                         let public = visibility_key(current, other_source, deadline, cancelled)?
                             != "private";
