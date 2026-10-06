@@ -18,6 +18,10 @@ pub fn install(repo: &Fixture) {
 }
 
 pub const MACRO_ROOT: &str = include_str!("../fixtures/chain-refusals/macro-root.rs");
+pub const MACRO_NESTED_INPUT: &str =
+    include_str!("../fixtures/chain-refusals/macro-nested-input.rs");
+pub const MACRO_NESTED_OUTPUT: &str =
+    include_str!("../fixtures/chain-refusals/macro-nested-output.rs");
 pub const INNER_ATTR_ROOT: &str = include_str!("../fixtures/chain-refusals/inner-attr-root.rs");
 pub const INNER_ATTR_NESTED: &str = include_str!("../fixtures/chain-refusals/inner-attr-nested.rs");
 

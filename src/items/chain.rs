@@ -151,6 +151,10 @@ impl ModuleAnalysis {
                         if matches!(token.kind(), "line_comment" | "block_comment") {
                             continue;
                         }
+                        // Inspect nested groups independently; never join tokens across delimiters.
+                        if token.kind() == "token_tree" {
+                            stack.push(token);
+                        }
                         if let [Some(keyword), Some(name)] = previous
                             && keyword.kind() == "mod"
                             && name.kind() == "identifier"

@@ -947,7 +947,12 @@ fn macro_root_advice_names_tokens_without_claiming_expansion() {
     repo.write("cases/refusals/branch.rs", "mod leaf;\n");
     repo.write(source, "fn selected() {}\nfn retained() {}\n");
     let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/refusals"],"limits":{"diagnostic_count":1000}});
-    for written in [chain_fixture::MACRO_ROOT, "emit_modules!(mod branch;);\n"] {
+    for (written, declaration) in [
+        (chain_fixture::MACRO_ROOT, "mod branch;"),
+        ("emit_modules!(mod branch;);\n", "mod branch;"),
+        (chain_fixture::MACRO_NESTED_INPUT, "mod branch;"),
+        (chain_fixture::MACRO_NESTED_OUTPUT, "mod branch {}"),
+    ] {
         repo.write(root, written);
         let before = observe(&repo.0);
         let result = run(&repo, request.clone());
@@ -963,12 +968,16 @@ fn macro_root_advice_names_tokens_without_claiming_expansion() {
         let range = &diagnostic["declaration"]["range"];
         let text = &written[range["start_byte"].as_u64().unwrap() as usize
             ..range["end_byte"].as_u64().unwrap() as usize];
-        assert_eq!(text, "mod branch;");
+        assert_eq!(text, declaration);
         assert_eq!(observe(&repo.0), before);
     }
     for written in [
         "macro_rules! matcher_only { (mod branch;) => { fn other() {} }; }\n",
+        "macro_rules! matcher_only { ((mod branch;)) => { fn other() {} }; }\n",
         "emit!(\"mod branch;\"); // mod branch;\n",
+        "emit!({ \"mod branch;\" });\n",
+        "emit!(mod (branch) ;);\n",
+        "emit!({ mod } { branch; });\n",
     ] {
         repo.write(root, written);
         let result = run(&repo, request.clone());
