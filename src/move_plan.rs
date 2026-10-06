@@ -1706,7 +1706,10 @@ fn build(
         contexts,
         (deadline, cancelled),
         &mut result.counts.reference_candidates,
-        &mut result.counts.analysis_descriptor_bytes,
+        (
+            &mut result.counts.analysis_descriptor_bytes,
+            &mut result.coverage.glob_exclusions,
+        ),
     )?;
     result.counts.reference_candidates = candidates;
     let mut analysis = rewrites::analyze(

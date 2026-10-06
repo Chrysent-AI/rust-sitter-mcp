@@ -1111,10 +1111,17 @@ fn build(
             request.limits.text_bytes,
         ));
     }
+    let glob_routes = items::GlobRoutes::new(
+        &files,
+        &parsed,
+        &request.crate_root,
+        (controls.deadline, controls.cancelled),
+    )?;
     signals::collect(
         source,
         &parsed[&source.path],
         contexts.get(&source.path),
+        &glob_routes,
         &lines,
         controls,
         result,

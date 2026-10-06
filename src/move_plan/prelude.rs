@@ -30,6 +30,9 @@ pub struct MoveCoverage {
     /// Number of discharged occurrences, including omitted proof records.
     #[serde(skip_serializing_if = "is_zero")]
     pub standard_prelude: usize,
+    /// Excluded item/glob pairs by written-route reason, not semantic absence proof.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub glob_exclusions: BTreeMap<String, usize>,
 }
 fn is_zero(value: &usize) -> bool {
     *value == 0
