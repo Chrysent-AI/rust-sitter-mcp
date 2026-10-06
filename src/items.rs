@@ -1,5 +1,6 @@
 //! Written top-level inventory and ordinary module evidence. No manifest or semantic resolver.
 mod chain;
+mod globs;
 mod lexical;
 use crate::{
     matching::Lines,
@@ -11,6 +12,7 @@ pub use chain::{
     ChainDiagnostic, ChainLocation, ChainOrigin, ChainReason, ChainRole, ModuleAnalysis,
 };
 pub(crate) use chain::{declaration_reasons, finalize_chain};
+pub(crate) use globs::GlobRoutes;
 pub use lexical::LexicalUncertainty;
 pub(crate) use lexical::{
     LexicalBinding, lexical_assessment, lexical_binding, lexical_with_import_proof,
@@ -767,9 +769,16 @@ pub fn dependencies(
     contexts: &BTreeMap<String, ModuleEvidence>,
     controls: (Instant, &AtomicBool),
     candidates: &mut usize,
-    analysis_bytes: &mut usize,
+    evidence: (&mut usize, &mut BTreeMap<String, usize>),
 ) -> Result<(Vec<Need>, usize), DomainError> {
     let (deadline, cancelled) = controls;
+    let (analysis_bytes, glob_exclusions) = evidence;
+    let root = contexts
+        .values()
+        .next()
+        .map(|c| c.crate_root.as_str())
+        .unwrap_or("");
+    let glob_routes = GlobRoutes::new(files, parsed, root, controls)?;
     let mut needs = Vec::new();
     let mut seen_needs = 0;
     for (index, (path, item, destination)) in selected.iter().enumerate() {
@@ -1095,17 +1104,10 @@ pub fn dependencies(
             // Alias declarations alone are not affected consumers. Retain their spellings
             // for conservative glob relevance; written uses of the moved name are checked below.
             for (path, data) in parsed {
-                for item in &data.items {
+                let mut stack = vec![data.tree.root_node()];
+                while let Some(node) = stack.pop() {
                     check(deadline, cancelled)?;
-                    if item.kind == "use_declaration" {
-                        let node = data
-                            .tree
-                            .root_node()
-                            .named_descendant_for_byte_range(
-                                item.span.range.start_byte,
-                                item.span.range.end_byte,
-                            )
-                            .expect("use");
+                    if node.kind() == "use_declaration" {
                         for leaf in use_leaves(node, &files[path].source, controls)? {
                             if leaf
                                 .path
@@ -1114,6 +1116,13 @@ pub fn dependencies(
                             {
                                 module_spellings.insert(leaf.binding);
                             }
+                        }
+                    } else if !matches!(
+                        node.kind(),
+                        "macro_invocation" | "macro_definition" | "line_comment" | "block_comment"
+                    ) {
+                        for i in 0..node.named_child_count() {
+                            stack.push(node.named_child(i as u32).expect("child"));
                         }
                     }
                 }
@@ -1152,9 +1161,19 @@ pub fn dependencies(
                     } else {
                         None
                     };
+                    let glob_exclusion = if use_evidence.as_ref().is_some_and(|f| f.0) {
+                        glob_routes.exclusion(path, current, &[source_path, destination], name)?
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = glob_exclusion {
+                        *glob_exclusions.entry(reason.into()).or_default() += 1;
+                    }
                     if let Some((glob, names)) = &use_evidence
                         && (names.iter().any(|s| s == name)
-                            || (*glob && names.iter().any(|s| module_spellings.contains(s))))
+                            || (*glob
+                                && glob_exclusion.is_none()
+                                && names.iter().any(|s| module_spellings.contains(s))))
                     {
                         let public = visibility_key(current, other_source, deadline, cancelled)?
                             != "private";

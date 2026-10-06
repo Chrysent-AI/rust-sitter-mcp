@@ -347,6 +347,7 @@ fn test_scope(
     node: Node<'_>,
     source: &str,
     controls: Controls<'_>,
+    routes: &items::GlobRoutes<'_>,
 ) -> Result<Option<TestScope>, DomainError> {
     if item.kind != "mod_item"
         || !item.attributes.iter().any(|a| {
@@ -390,27 +391,7 @@ fn test_scope(
                 scope.shadowed.insert(binding);
             }
         }
-        let mut stack = vec![child];
-        while let Some(n) = stack.pop() {
-            controls.check()?;
-            if n.kind() == "use_wildcard" {
-                let text: String = source[n.byte_range()]
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .collect();
-                let list_path = n
-                    .parent()
-                    .filter(|p| p.kind() == "use_list")
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.child_by_field_name("path"));
-                scope.super_glob |= text == "super::*"
-                    || (text == "*"
-                        && list_path.is_some_and(|p| source[p.byte_range()].trim() == "super"));
-            }
-            for i in 0..n.named_child_count() {
-                stack.push(n.named_child(i as u32).expect("use child"));
-            }
-        }
+        scope.super_glob |= routes.reaches_file(&item.path, child, &item.path)?;
     }
     Ok(Some(scope))
 }
@@ -418,6 +399,7 @@ fn references(
     source: &FileSnapshot,
     data: &ParsedFile,
     module: Option<&items::ModuleEvidence>,
+    routes: &items::GlobRoutes<'_>,
     lines: &Lines<'_>,
     controls: Controls<'_>,
     result: &mut SuggestSplitEnvelope,
@@ -447,7 +429,7 @@ fn references(
         controls.check()?;
         let item = &result.inventory[owner];
         let root = item_node(data, item);
-        let tests = test_scope(item, root, &source.source, controls)?;
+        let tests = test_scope(item, root, &source.source, controls, routes)?;
         if matches!(
             item.kind.as_str(),
             "use_declaration" | "extern_crate_declaration" | "macro_definition"
@@ -731,6 +713,7 @@ pub(super) fn collect(
     source: &FileSnapshot,
     data: &ParsedFile,
     module: Option<&items::ModuleEvidence>,
+    routes: &items::GlobRoutes<'_>,
     lines: &Lines<'_>,
     controls: Controls<'_>,
     result: &mut SuggestSplitEnvelope,
@@ -738,7 +721,7 @@ pub(super) fn collect(
     named_groups(result, controls)?;
     sections(result, controls)?;
     shared_headings(&source.source, result, controls)?;
-    references(source, data, module, lines, controls, result)?;
+    references(source, data, module, routes, lines, controls, result)?;
     for index in 0..result.inventory.len() {
         controls.check()?;
         let item = &result.inventory[index];
