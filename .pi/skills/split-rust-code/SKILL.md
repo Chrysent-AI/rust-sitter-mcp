@@ -74,6 +74,8 @@ for item_id, destination in chosen_groups:
 
 If `span.text` is `null` or `text_omitted: true`, you must obtain complete bytes this way — display text may be truncated.
 
+**Probe before large batches.** Submit 1–2 representative items first. If the probe blocks with `member_or_constructor_unproved` or `external_or_missing_binding` on the items' own bodies — method calls (`x.len()`), prelude types (`Option`, `String`), external-crate names — every similar item will block too: that is the syntactic-only boundary, not a recoverable error. Rethink the selection or approach before spending a large call.
+
 Submit all moves as **one batch** (the server plans them together, all-or-nothing):
 
 ```json
@@ -120,6 +122,7 @@ Keep or recheck original base bytes/modes plus `created_files[].must_be_absent` 
 - **Items inside inline `mod x { ... }` blocks cannot be extracted** — only direct top-level units are movable.
 - **The engine serializes calls** — a second concurrent call returns `BUSY`. Wait, then retry.
 - **Trailing newlines are not part of an item's syntax anchor** — inventory byte ranges exclude them.
+- **Some MCP clients stringify object parameters** — if a call fails validation with `must be object` (or you see `"limits": "null"` in the error echo), your client serialized `context`/`limits`/`globs` or an explicit `null` into a JSON string. Omit optional object parameters entirely; server defaults apply. Never pass explicit nulls.
 - **A complete draft is not move safety** — membership completeness and eligibility say nothing about cross-references, visibility, or macro context. That analysis happens in `move_item`.
 
 ## Reference files
