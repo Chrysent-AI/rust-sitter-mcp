@@ -102,6 +102,53 @@ pub struct DraftProvenance {
     pub draft_id: String,
     pub source_snapshot_id: String,
 }
+/// Shared limits with an explicit diagnostic count controlling rewrite exemplars.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(transparent)]
+pub struct MoveLimits {
+    inner: Limits,
+    #[serde(skip)]
+    diagnostic_count_explicit: bool,
+}
+impl<'de> Deserialize<'de> for MoveLimits {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let diagnostic_count_explicit = value.get("diagnostic_count").is_some();
+        let inner = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            inner,
+            diagnostic_count_explicit,
+        })
+    }
+}
+impl std::ops::Deref for MoveLimits {
+    type Target = Limits;
+    fn deref(&self) -> &Limits {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for MoveLimits {
+    fn deref_mut(&mut self) -> &mut Limits {
+        &mut self.inner
+    }
+}
+impl From<MoveLimits> for Limits {
+    fn from(limits: MoveLimits) -> Self {
+        limits.inner
+    }
+}
+impl MoveLimits {
+    fn rewrite_preview_count(&self) -> usize {
+        if self.diagnostic_count_explicit
+            || self.diagnostic_count != Limits::default().diagnostic_count
+        {
+            self.diagnostic_count
+        } else {
+            4
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
@@ -114,12 +161,15 @@ pub struct MoveRequest {
     #[serde(default)]
     pub context: Context,
     #[serde(default)]
-    pub limits: Limits,
+    pub limits: MoveLimits,
     #[serde(default = "default_max_moves")]
     pub max_moves: usize,
     pub trivia_overrides: Option<Vec<MoveTriviaOverride>>,
     pub rewrite_overrides: Option<Vec<RewriteOverride>>,
     pub draft_provenance: Option<DraftProvenance>,
+    /// Include trivia for unselected items in blocked previews (default false).
+    #[serde(default)]
+    pub include_unselected_trivia: bool,
 }
 fn default_max_moves() -> usize {
     500
@@ -160,6 +210,8 @@ pub struct MoveTriviaDecision {
     pub item_ids: Vec<String>,
     pub target_item_id: Option<String>,
     pub origin_ids: Vec<String>,
+    #[serde(skip)]
+    selection_relevant: bool,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -197,7 +249,7 @@ pub enum DecisionRoute {
     SelectionChangeRequired,
     UnsupportedInEngine,
 }
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(tag = "route", rename_all = "snake_case")]
 pub enum DecisionAction {
@@ -228,6 +280,20 @@ pub struct DecisionGroup {
     pub blocks_applicability: bool,
     pub decision_ids: Vec<String>,
     pub count: usize,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct MoveDecisionGroup {
+    #[serde(flatten)]
+    pub summary: DecisionGroup,
+    /// Complete routing guidance, without per-decision replay anchors.
+    pub actions: Vec<DecisionAction>,
+}
+impl std::ops::Deref for MoveDecisionGroup {
+    type Target = DecisionGroup;
+    fn deref(&self) -> &Self::Target {
+        &self.summary
+    }
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -325,7 +391,7 @@ pub struct MovePlan {
     pub moves: Vec<MoveRecord>,
     pub trivia_decisions: Vec<MoveTriviaDecision>,
     pub decisions: Vec<Decision>,
-    pub decision_groups: Vec<DecisionGroup>,
+    pub decision_groups: Vec<MoveDecisionGroup>,
     pub chain_diagnostics: Vec<items::ChainDiagnostic>,
     pub rewrites: Vec<Rewrite>,
     pub base_files: Vec<BaseFile>,
@@ -523,7 +589,15 @@ impl MoveEnvelope {
     }
     fn finish_decision_groups(&mut self, groups: Result<Vec<DecisionGroup>, DomainError>) {
         match groups {
-            Ok(groups) => self.plan.decision_groups = groups,
+            Ok(groups) => {
+                self.plan.decision_groups = groups
+                    .into_iter()
+                    .map(|summary| MoveDecisionGroup {
+                        summary,
+                        actions: Vec::new(),
+                    })
+                    .collect();
+            }
             Err(error) => {
                 // Grouping stopped: publish neither ungrouped decisions nor dangling audit links.
                 for (name, count) in [
@@ -576,6 +650,85 @@ impl MoveEnvelope {
                 } else {
                     self.incomplete(&error.code);
                 }
+            }
+        }
+    }
+    fn shape_diagnostics(&mut self, include_unselected_trivia: bool, rewrite_count: usize) {
+        // Preserve authoritative anchors; repeated display slices add no source evidence.
+        for decision in &mut self.plan.decisions {
+            decision.evidence.retain(|evidence| {
+                !decision.anchors.iter().any(|anchor| {
+                    anchor.range == evidence.range
+                        && anchor.expected_text.len() == evidence.text_bytes
+                        && evidence
+                            .text
+                            .as_ref()
+                            .is_none_or(|text| text == &anchor.expected_text)
+                })
+            });
+        }
+        for group in &mut self.plan.decision_groups {
+            for decision in &self.plan.decisions {
+                if decision.category == group.category
+                    && decision.reason == group.reason
+                    && decision.action.route() == group.route
+                    && decision.blocks_applicability == group.blocks_applicability
+                {
+                    let action = decision.action.summary();
+                    if !group.actions.contains(&action) {
+                        group.actions.push(action);
+                    }
+                }
+            }
+        }
+        if self.plan.applicable {
+            return;
+        }
+        if !include_unselected_trivia {
+            let before = self.plan.trivia_decisions.len();
+            self.plan
+                .trivia_decisions
+                .retain(|trivia| trivia.selection_relevant);
+            let omitted = before - self.plan.trivia_decisions.len();
+            if omitted > 0 {
+                *self
+                    .counts
+                    .omissions
+                    .entry("trivia_decisions".into())
+                    .or_default() += omitted;
+                self.truncation_reasons.push("trivia_scope".into());
+            }
+        }
+        if self.plan.decisions.len() > self.limits.diagnostic_count {
+            let omitted = self.plan.decisions.len() - self.limits.diagnostic_count;
+            let chain_links: usize = self.plan.decisions[self.limits.diagnostic_count..]
+                .iter()
+                .map(|d| d.chain_diagnostic_ids.len())
+                .sum();
+            self.plan.decisions.truncate(self.limits.diagnostic_count);
+            *self.counts.omissions.entry("decisions".into()).or_default() += omitted;
+            if chain_links > 0 {
+                *self
+                    .counts
+                    .omissions
+                    .entry("chain_diagnostic_references".into())
+                    .or_default() += chain_links;
+            }
+            self.truncation_reasons.push("diagnostic_count".into());
+        }
+        // Interrupted assembly may leave preview rewrites before it records their count.
+        self.counts.rewrites =
+            self.plan.rewrites.len() + self.counts.omissions.get("rewrites").copied().unwrap_or(0);
+        if self.plan.rewrites.len() > rewrite_count {
+            let omitted = self.plan.rewrites.len() - rewrite_count;
+            self.plan.rewrites.truncate(rewrite_count);
+            *self.counts.omissions.entry("rewrites".into()).or_default() += omitted;
+            if !self
+                .truncation_reasons
+                .iter()
+                .any(|r| r == "diagnostic_count")
+            {
+                self.truncation_reasons.push("diagnostic_count".into());
             }
         }
     }
@@ -737,7 +890,7 @@ fn run_with_recheck(
     before_recheck: impl FnOnce(),
 ) -> MoveEnvelope {
     let started = Instant::now();
-    let mut result = MoveEnvelope::empty(request.limits.clone());
+    let mut result = MoveEnvelope::empty(request.limits.clone().into());
     result.effective_work_limits.max_moves = request.max_moves;
     if let Err(error) = build(launch, &request, cancelled, before_recheck, &mut result) {
         if matches!(
@@ -779,6 +932,10 @@ fn run_with_recheck(
         ),
     );
     result.finish_decision_groups(groups);
+    result.shape_diagnostics(
+        request.include_unselected_trivia,
+        request.limits.rewrite_preview_count(),
+    );
     result.fit();
     if result.plan.applicable
         && let Err(error) = items::check(
@@ -794,6 +951,10 @@ fn run_with_recheck(
             result.plan.state = "blocked".into();
             result.withhold();
         }
+        result.shape_diagnostics(
+            request.include_unselected_trivia,
+            request.limits.rewrite_preview_count(),
+        );
         result.fit();
     }
     tracing::info!(tool="move_item", elapsed_ms=started.elapsed().as_millis(), status=%result.status, selected=?result.plan.selected_count, error=?result.error.as_ref().map(|e| &e.code), "move plan finished");
@@ -871,7 +1032,18 @@ fn build(
     before_recheck: impl FnOnce(),
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
-    request.limits.validate()?;
+    // Moves can request every decision up to the existing whole-call decision guard.
+    // Other tools retain Limits' smaller diagnostic maximum.
+    let mut display_limits = request.limits.clone();
+    display_limits.diagnostic_count = display_limits.diagnostic_count.min(256);
+    display_limits.validate()?;
+    if request.limits.diagnostic_count > 100_000 {
+        return Err(error(
+            "INVALID_PARAMS",
+            "move diagnostic_count is 0–100000",
+            "limits.diagnostic_count",
+        ));
+    }
     if !(1..=5000).contains(&request.max_moves)
         || request.context.before_lines > 20
         || request.context.after_lines > 20
@@ -904,12 +1076,12 @@ fn build(
         paths: request.paths.clone(),
         globs: request.globs.clone(),
         context: request.context.clone(),
-        limits: request.limits.clone(),
+        limits: request.limits.clone().into(),
         page_size: 100,
         cursor: None,
     };
     let scope = Scope::new(root, &scan_request)?;
-    let mut scan = SearchEnvelope::empty(request.limits.clone());
+    let mut scan = SearchEnvelope::empty(request.limits.clone().into());
     let (files, snapshot) = scope::discover(&scope, &mut scan, deadline, cancelled)?;
     result.coverage = scan.coverage;
     result.skipped = scan.skipped;
@@ -1615,7 +1787,7 @@ fn build(
             return Ok(());
         }
     }
-    let mut recheck = SearchEnvelope::empty(request.limits.clone());
+    let mut recheck = SearchEnvelope::empty(request.limits.clone().into());
     let (_, fresh) = scope::discover(&scope, &mut recheck, deadline, cancelled)?;
     if fresh != snapshot || !recheck.coverage.scope_exhaustive {
         result.incomplete("SOURCE_CHANGED");
@@ -1814,6 +1986,14 @@ fn collect_trivia(
                     .collect(),
                 target_item_id: target.map(|i| selected[i].item.id.clone()),
                 origin_ids: Vec::new(),
+                selection_relevant: owned.is_some()
+                    || !choices.is_empty()
+                    || (t.owner_range().is_none_or(|owner| owner.is_empty())
+                        && choice_relevant
+                        && !data.items.iter().any(|item| {
+                            item.span.range.start_byte <= t.range.start
+                                && item.span.range.end_byte >= t.range.end
+                        })),
             });
             result.account(descriptor_bytes(&result.plan.trivia_decisions.last())?)?;
             if t.classification == "ambiguous" {

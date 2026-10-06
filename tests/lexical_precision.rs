@@ -680,6 +680,16 @@ fn mandatory_lexical_witnesses_survive_display_caps_or_are_explicitly_omitted() 
     let repo = spawner_precision::load(&source);
     let mut args = request(&repo, "fn selected() {}");
     args["limits"]["diagnostic_count"] = json!(0);
+    let counts_only = run(&repo, args.clone());
+    withheld(&counts_only);
+    assert_eq!(counts_only["plan"]["decisions"], json!([]));
+    assert_eq!(counts_only["counts"]["omissions"]["decisions"], 200);
+    assert_eq!(counts_only["plan"]["decision_groups"][0]["count"], 200);
+    assert_eq!(
+        counts_only["plan"]["decision_groups"][0]["reason"],
+        "lexical_context_unproved"
+    );
+    args["limits"]["diagnostic_count"] = json!(256);
     let result = run(&repo, args.clone());
     withheld(&result);
     assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 200);

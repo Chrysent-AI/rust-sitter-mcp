@@ -170,7 +170,7 @@ impl Server {
         let failure = |limits, error| move_wire(MoveEnvelope::failed(limits, error));
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
             return failure(
-                request.limits,
+                request.limits.into(),
                 DomainError::new(
                     "BUSY",
                     "another engine call is running; retry after it finishes",
@@ -186,7 +186,7 @@ impl Server {
             active.flags.push(Arc::downgrade(&flag));
         }
         let engine = self.engine.clone();
-        let limits = request.limits.clone();
+        let limits = request.limits.clone().into();
         let worker_flag = flag.clone();
         let mut job = tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -484,7 +484,17 @@ impl ServerHandler for Server {
                     .map_err(|e| e.to_string())
             }
         };
-        if let Err(message) = decoded {
+        if let Err(mut message) = decoded {
+            if message.starts_with("invalid type: string ")
+                && (message.contains("expected struct ")
+                    || message.contains("expected a map")
+                    || message.contains("expected internally tagged enum ")
+                    || message.starts_with("invalid type: string \"null\","))
+            {
+                // Leave room for the hint inside DomainError's bounded message.
+                message = message.chars().take(800).collect();
+                message.push_str(" (a client may have stringified an object parameter; omit optional object parameters instead of passing null)");
+            }
             if request.name == "suggest_split" {
                 return Ok(suggest_wire(SuggestSplitEnvelope::failed(
                     Limits::default(),

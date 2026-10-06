@@ -1,5 +1,47 @@
 use super::*;
 
+fn linked_move(result: &Value) {
+    let diagnostics = &result["plan"]["chain_diagnostics"];
+    let decisions = &result["plan"]["decisions"];
+    if result["counts"]["omissions"]["decisions"]
+        .as_u64()
+        .unwrap_or(0)
+        == 0
+    {
+        chain_fixture::linked(diagnostics, decisions);
+        return;
+    }
+    for decision in decisions.as_array().unwrap() {
+        for id in decision["chain_diagnostic_ids"].as_array().unwrap() {
+            assert!(
+                diagnostics
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["id"] == *id)
+            );
+        }
+    }
+    let groups: Vec<_> = result["plan"]["decision_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["reason"] == "module_chain_failure")
+        .collect();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| g["count"].as_u64().unwrap() as usize)
+            .sum::<usize>(),
+        diagnostics.as_array().unwrap().len()
+    );
+    assert!(
+        groups
+            .iter()
+            .all(|g| !g["actions"].as_array().unwrap().is_empty())
+    );
+}
+
 #[test]
 fn wrong_binary_root_blocks_both_destination_forms_and_library_root_moves() {
     use chain_fixture::*;
@@ -39,9 +81,16 @@ fn wrong_binary_root_blocks_both_destination_forms_and_library_root_moves() {
                 .iter()
                 .any(|d| d["role"] == role && d["requested_path"] == path)
         );
-        linked(
-            &wrong["plan"]["chain_diagnostics"],
-            &wrong["plan"]["decisions"],
+        linked_move(&wrong);
+        assert_eq!(wrong["plan"]["decisions"], json!([]));
+        assert_eq!(wrong["counts"]["omissions"]["decisions"], 2);
+        let actions = wrong["plan"]["decision_groups"][0]["actions"]
+            .as_array()
+            .unwrap();
+        assert!(
+            actions
+                .iter()
+                .any(|a| a["field"] == "crate_root" && a["purpose"] == "submit_for_analysis")
         );
         assert_eq!(wrong, client.call("move_item", request.clone()));
         request["crate_root"] = json!(LIB_ROOT);
@@ -169,10 +218,14 @@ fn chain_failure_decisions_survive_capped_blockers_and_preserve_error_boundaries
             .iter()
             .any(|d| d["reason"] == "path_attribute" && d["role"] == "destination")
     );
-    chain_fixture::linked(
-        &result["plan"]["chain_diagnostics"],
-        &result["plan"]["decisions"],
-    );
+    linked_move(&result);
+    assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 1);
+    let actions = result["plan"]["decision_groups"][0]["actions"]
+        .as_array()
+        .unwrap();
+    for construct in ["conditional_declaration", "path_attribute"] {
+        assert!(actions.iter().any(|a| a["construct"] == construct));
+    }
     request["globs"] = json!(["cases/layout/source.rs", "cases/layout/destination.rs"]);
     let root_error = run(&repo, request);
     code(&root_error, "STALE_SELECTION");
@@ -236,10 +289,7 @@ fn missing_unadmitted_and_inherited_source_hops_do_not_blame_a_clean_destination
         assert_eq!(diagnostic["requested_path"], source);
         assert_eq!(diagnostic["at_file_path"], at);
         assert_eq!(diagnostic["relation"], relation);
-        chain_fixture::linked(
-            &result["plan"]["chain_diagnostics"],
-            &result["plan"]["decisions"],
-        );
+        linked_move(&result);
     }
     repo.write(branch, "mod leaf;\n");
     let good = run(&repo, args);
