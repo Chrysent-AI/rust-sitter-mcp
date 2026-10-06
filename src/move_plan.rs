@@ -1,5 +1,6 @@
 //! One simultaneous, read-only relocation plan with itemized written-binding repairs.
 mod actions;
+mod prelude;
 use crate::{
     edit::{self, Edit},
     items::{self, DecisionReason, Item, ModuleEvidence, ParsedFile},
@@ -170,6 +171,9 @@ pub struct MoveRequest {
     /// Include trivia for unselected items in blocked previews (default false).
     #[serde(default)]
     pub include_unselected_trivia: bool,
+    /// Assume the stable standard prelude for unshadowed type references only.
+    #[serde(default)]
+    pub assume_standard_prelude: bool,
 }
 fn default_max_moves() -> usize {
     500
@@ -405,6 +409,8 @@ pub struct MovePlan {
     pub decisions: Vec<Decision>,
     pub decision_groups: Vec<MoveDecisionGroup>,
     pub chain_diagnostics: Vec<items::ChainDiagnostic>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub binding_proofs: Vec<prelude::BindingProof>,
     pub rewrites: Vec<Rewrite>,
     pub base_files: Vec<BaseFile>,
     pub blockers: Vec<Blocker>,
@@ -422,7 +428,7 @@ pub struct MoveEnvelope {
     pub root: Option<String>,
     pub snapshot_id: Option<String>,
     pub status: String,
-    pub coverage: Coverage,
+    pub coverage: prelude::MoveCoverage,
     pub counts: MoveCounts,
     pub limits: Limits,
     pub effective_work_limits: WorkLimits,
@@ -442,7 +448,7 @@ impl MoveEnvelope {
             root: None,
             snapshot_id: None,
             status: "complete".into(),
-            coverage: Coverage::default(),
+            coverage: prelude::MoveCoverage::default(),
             counts: MoveCounts::default(),
             limits,
             effective_work_limits: WorkLimits {
@@ -470,6 +476,7 @@ impl MoveEnvelope {
                 decisions: Vec::new(),
                 decision_groups: Vec::new(),
                 chain_diagnostics: Vec::new(),
+                binding_proofs: Vec::new(),
                 rewrites: Vec::new(),
                 base_files: Vec::new(),
                 blockers: Vec::new(),
@@ -909,6 +916,7 @@ impl MoveEnvelope {
         drop_preview!(origins);
         drop_preview!(trivia_decisions);
         drop_preview!(rewrites);
+        drop_preview!(binding_proofs);
         drop_preview!(base_files);
         let links = self
             .plan
@@ -1189,7 +1197,7 @@ fn build(
     let scope = Scope::new(root, &scan_request)?;
     let mut scan = SearchEnvelope::empty(request.limits.clone().into());
     let (files, snapshot) = scope::discover(&scope, &mut scan, deadline, cancelled)?;
-    result.coverage = scan.coverage;
+    result.coverage.scan = scan.coverage;
     result.skipped = scan.skipped;
     result.truncation_reasons = scan.truncation_reasons;
     result.counts.discovered_files = scan.counts.discovered_files;
@@ -1696,7 +1704,7 @@ fn build(
         &mut result.counts.analysis_descriptor_bytes,
     )?;
     result.counts.reference_candidates = candidates;
-    let analysis = rewrites::analyze(
+    let mut analysis = rewrites::analyze(
         request,
         &files,
         &parsed,
@@ -1708,6 +1716,22 @@ fn build(
         &mut result.counts.reference_candidates,
     )?;
     result.account(analysis.descriptor_bytes)?;
+    if request.assume_standard_prelude {
+        result.plan.binding_proofs = prelude::discharge(
+            &files,
+            &parsed,
+            &tuples,
+            contexts,
+            &new_contexts,
+            &analysis.repairs,
+            &mut analysis.needs,
+            (deadline, cancelled),
+        )?;
+        result.coverage.standard_prelude = result.plan.binding_proofs.len();
+        if !result.plan.binding_proofs.is_empty() {
+            result.account(descriptor_bytes(&result.plan.binding_proofs)?)?;
+        }
+    }
     for need in analysis.needs {
         items::check(deadline, cancelled)?;
         if result.plan.decisions.len() == 100_000 {

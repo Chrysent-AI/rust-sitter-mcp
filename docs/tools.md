@@ -148,6 +148,45 @@ A batch creating one sibling, with a privately synthesized parent declaration:
 
 These are independent calls against the initial files, not sequential application instructions. Both items reach the new file in original source order, despite reversed request entries. For multiple sources at the same insertion point, source-file groups follow their first appearance in `moves`, then items follow original byte order. Existing destinations default to actual top-level EOF. Optional `before_item` is a full unselected destination-item anchor; insertion precedes its attached leading run, never detaches its attributes/docs. A file can simultaneously supply and receive items; all edits use original coordinates.
 
+### Opt-in standard-prelude assumptions
+
+`assume_standard_prelude` is a request-level boolean, default `false`. Omission or
+`false` preserves the written-only response bytes. There is no corresponding
+`suggest_split` option. Set it to `true` for a batch to discharge otherwise-missing
+**type-position** `Option`, `Result`, `Box`, `Vec` and `String` references using a
+hand-authored, edition-independent subset of the standard prelude:
+https://doc.rust-lang.org/std/prelude/v1/index.html
+
+This is a caller assumption, not written-import or semantic proof. Each discharged
+occurrence appears separately in `plan.binding_proofs` with `class:"standard_prelude"`,
+a complete source `anchor`, `item_ids`, `destination_path`, `standard_path` and
+per-occurrence `basis`. `coverage.standard_prelude` counts those occurrences, not
+imports or items. Both fields are omitted when no occurrence is discharged;
+schema version remains 2 because the fields are additive. The count survives
+response fitting; omitted proof records are disclosed in `counts.omissions.binding_proofs`,
+and a response that cannot carry the full applicable audit withholds all artifacts.
+
+The source **and** destination/batch visible module chains must be complete and
+free of competing explicit use-leaves, relevant globs and same-name written
+declarations. Inline-module evidence is scoped to each reference's enclosing
+module chain: a child or sibling module's imports, declarations and outer
+attributes (including `#[cfg(test)] mod tests { use super::*; }`) do not shadow a
+parent reference. Existing destinations are checked at their top-level insertion
+scope. Selected item bodies are scanned conservatively for same-name generic,
+local and pattern bindings and for conditional/recovered or macro context;
+simultaneous arrivals and planned written-import repairs are also checked.
+Inherited `#![no_implicit_prelude]`, `#![no_std]`, `#![no_core]`, conditional attributes,
+derives and unexamined macros refuse the fallback. Refusal preserves existing typed
+needs; it is not an override. A proven written binding still uses ordinary repair
+logic, including explicit standard-library imports, never a prelude proof.
+
+No import is synthesized: the destination is assumed to have the same implicit
+prelude. Constructors, associated calls, methods, macros and derives remain outside
+the bridge. All other collisions, missing context and blockers still apply to the
+entire batch. Original bytes remain lossless, no `Cargo.toml` is read, and
+`semantic:"not_performed"` is unchanged. This option does not make idiomatic Rust
+relocation generally executable.
+
 ### Supported units and ordinary layout
 
 Functions, structs, enums, unions, traits, whole impls (including anonymous impls), type aliases, consts and statics have `supported_unit` inventory eligibility. Their dependencies may still block relocation. Whole modules have `module_context` eligibility reasons; use/extern/foreign constructs have `scope_dependency`; macro definitions/invocations have `macro_dependency`; other significant units are explicitly unsupported. Attributes/docs are associated constituents, not independently selectable inventory units. Nested/body/member/partial selections are rejected.
@@ -218,7 +257,7 @@ Every path/use change, import insertion or leaf extraction, visibility repair, s
 
 Defaults use complete CST paths and use leaves, not equal-looking text in comments, strings or token trees. Explicit aliases survive; grouped imports use an unchanged prefix, a shared prefix edit, or comment-free leaf extraction with unrelated leaves/trivia preserved. Local and inline-module import extraction keeps the original binding scope. Only necessary imports are synthesized; equivalent destination bindings are reused and shared needs are deduplicated. Items moving together do not create artificial cross-module imports or visibility changes.
 
-Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Ordinary tuple/slice/constructor/struct binding positions are compared against the queried spelling: disjoint written names do not create uncertainty for every spelling in that scope. Explicit `mut`/`ref` binders and ordinary struct shorthand can prove independent locals; a matching plain identifier in a composite or refutable pattern still requires binding-versus-constant evidence. For/match/if-let/while-let patterns are checked only where their bindings are in scope, not in initializers, other arms or an if-let's else branch. Unsupported patterns, let chains, relevant local imports, macros and recovered/conditional lexical contexts remain anchored uncertainty. No macro expansion, prelude inference or semantic resolution is performed. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports.
+Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Ordinary tuple/slice/constructor/struct binding positions are compared against the queried spelling: disjoint written names do not create uncertainty for every spelling in that scope. Explicit `mut`/`ref` binders and ordinary struct shorthand can prove independent locals; a matching plain identifier in a composite or refutable pattern still requires binding-versus-constant evidence. For/match/if-let/while-let patterns are checked only where their bindings are in scope, not in initializers, other arms or an if-let's else branch. Unsupported patterns, let chains, relevant local imports, macros and recovered/conditional lexical contexts remain anchored uncertainty. No macro expansion or semantic resolution is performed. Prelude assumptions are limited to the explicit opt-in type-position bridge described above. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports on the default path.
 
 Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged absolute ancestor restrictions survive. Only a proven insufficient access receives `pub(crate)`. Relative restrictions whose scope changes, private fields/tuple constructors, members, associated/type-directed references, chained re-exports, relevant globs/macros, conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro outside the relevant binding context is not by itself a veto.
 
