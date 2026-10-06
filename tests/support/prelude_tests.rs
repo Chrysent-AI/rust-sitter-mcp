@@ -16,6 +16,17 @@ fn proof_count(result: &Value, name: &str) -> usize {
         })
         .unwrap_or(0)
 }
+// Disclosure changes metadata sizes, never the prior refusal/patch/proof fields.
+fn refusal_behavior(mut value: Value) -> Vec<u8> {
+    for decision in value["plan"]["decisions"].as_array_mut().unwrap() {
+        decision.as_object_mut().unwrap().remove("refusal_basis");
+    }
+    value["counts"]
+        .as_object_mut()
+        .unwrap()
+        .remove("analysis_descriptor_bytes");
+    serde_json::to_vec(&value).unwrap()
+}
 fn existing() -> Value {
     json!({"kind":"existing","path":"cases/layout/destination.rs"})
 }
@@ -147,8 +158,8 @@ fn prelude_shadow_refusal_at_source_destination_and_parent() {
         let mut off = args;
         off["assume_standard_prelude"] = json!(false);
         assert_eq!(
-            run(&repo, off),
-            on,
+            refusal_behavior(run(&repo, off)),
+            refusal_behavior(on),
             "fallback changed refused response for {path}: {prefix}"
         );
     }
@@ -220,7 +231,11 @@ fn prelude_inline_module_needs_use_only_their_enclosing_scopes() {
             assert_eq!(proof_count(&result, "Option"), 0, "{result}");
             let mut off = args;
             off["assume_standard_prelude"] = json!(false);
-            assert_eq!(run(&repo, off), result, "{selected}");
+            assert_eq!(
+                refusal_behavior(run(&repo, off)),
+                refusal_behavior(result),
+                "{selected}"
+            );
         }
     }
 }
@@ -258,7 +273,11 @@ fn prelude_batch_child_scopes_stay_disjoint_and_own_contexts_refuse() {
         assert_eq!(proof_count(&result, "Option"), 0, "{result}");
         let mut off = args;
         off["assume_standard_prelude"] = json!(false);
-        assert_eq!(run(&repo, off), result, "{selected}");
+        assert_eq!(
+            refusal_behavior(run(&repo, off)),
+            refusal_behavior(result),
+            "{selected}"
+        );
     }
 }
 
@@ -301,7 +320,11 @@ fn prelude_generic_local_pattern_and_batch_shadows_never_become_assumptions() {
         assert_eq!(proof_count(&on, "Option"), 0, "{on}");
         let mut off = args;
         off["assume_standard_prelude"] = json!(false);
-        assert_eq!(run(&repo, off), on, "{selected}");
+        assert_eq!(
+            refusal_behavior(run(&repo, off)),
+            refusal_behavior(on),
+            "{selected}"
+        );
     }
     let selected = "struct Record { option: Option<u8> }";
     let repo = fixture(selected);

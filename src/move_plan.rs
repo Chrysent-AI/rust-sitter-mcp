@@ -247,6 +247,8 @@ pub struct Decision {
     pub chain_diagnostic_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_uncertainty: Option<items::LexicalUncertainty>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refusal_basis: Vec<items::RefusalBasis>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removal_gap: Option<ergonomics::RemovalGapChoice>,
 }
@@ -527,8 +529,9 @@ impl MoveEnvelope {
         &mut self,
         request: &MoveRequest,
         files: &BTreeMap<String, FileSnapshot>,
-        need: items::Need,
+        mut need: items::Need,
     ) -> Result<(), DomainError> {
+        need.disclose_refusal();
         if self.plan.decisions.len() >= 100_000 {
             return Err(DomainError::new(
                 "analysis_descriptor_bytes",
@@ -574,6 +577,7 @@ impl MoveEnvelope {
             blocks_applicability: true,
             chain_diagnostic_ids: Vec::new(),
             lexical_uncertainty: need.lexical_uncertainty,
+            refusal_basis: need.refusal_basis,
             removal_gap: None,
         };
         self.account(descriptor_bytes(&decision)?)?;
@@ -648,6 +652,14 @@ impl MoveEnvelope {
                 blocks_applicability: true,
                 chain_diagnostic_ids: vec![diagnostic.id.clone()],
                 lexical_uncertainty: None,
+                refusal_basis: vec![items::RefusalBasis::new(
+                    "unresolved_chain",
+                    diagnostic
+                        .declaration
+                        .as_ref()
+                        .map_or(&diagnostic.at_file_path, |d| &d.path),
+                    diagnostic.declaration.as_ref().map(|d| d.range.clone()),
+                )],
                 removal_gap: None,
             };
             self.account(descriptor_bytes(&(&diagnostic, &decision))?)?;
@@ -681,6 +693,7 @@ impl MoveEnvelope {
             blocks_applicability: true,
             chain_diagnostic_ids: Vec::new(),
             lexical_uncertainty: None,
+            refusal_basis: Vec::new(),
             removal_gap: None,
         };
         self.account(descriptor_bytes(&decision)?)?;
@@ -1878,8 +1891,9 @@ fn build(
         semantic_needs = candidates;
         analysis.needs = other;
     }
-    for need in analysis.needs {
+    for mut need in analysis.needs {
         items::check(deadline, cancelled)?;
+        need.disclose_refusal();
         if result.plan.decisions.len() == 100_000 {
             return Err(DomainError::new(
                 "analysis_descriptor_bytes",
@@ -1931,6 +1945,7 @@ fn build(
             blocks_applicability: !acknowledged,
             chain_diagnostic_ids: Vec::new(),
             lexical_uncertainty: need.lexical_uncertainty,
+            refusal_basis: need.refusal_basis,
             removal_gap: None,
         };
         result.account(descriptor_bytes(&decision)?)?;
@@ -2048,6 +2063,10 @@ fn build(
                 &result.plan.binding_proofs,
                 &result.plan.resolution_coverage,
             ))?)?;
+        } else if overlay.is_empty() {
+            for need in &mut semantic_needs {
+                need.refuse_at_occurrence("semantic_overlay_unavailable");
+            }
         }
         for need in semantic_needs {
             result.semantic_refusal(request, &files, need)?;
@@ -2331,7 +2350,7 @@ fn collect_trivia(
                     },
                     purpose: DecisionPurpose::ReviewDefault,
                 };
-                result.plan.decisions.push(Decision { reason: DecisionReason::OrdinaryTriviaChoice, next_action: action.next_action(), action, id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None, removal_gap: None });
+                result.plan.decisions.push(Decision { reason: DecisionReason::OrdinaryTriviaChoice, next_action: action.next_action(), action, id: format!("d/{}", result.plan.decisions.len()), category: "trivia_ownership".into(), anchors: vec![original_anchor], item_ids: target.into_iter().map(|i| selected[i].item.id.clone()).collect(), evidence: Vec::new(), unresolved_consequence: "ordinary ambiguous trivia stays in its original gap unless explicitly carried".into(), resolution: "choice_available".into(), supported_choices: if choice_relevant { vec!["keep_in_place".into(), "carry_with_item".into()] } else { vec!["keep_in_place".into()] }, selected_choice: Some(if target.is_some() { "carry_with_item" } else { "keep_in_place" }.into()), blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None, refusal_basis: Vec::new(), removal_gap: None });
                 result.account(descriptor_bytes(&result.plan.decisions.last())?)?;
             }
         }
@@ -2509,7 +2528,7 @@ fn rewrite(
             anchors.first().map(|a| a.range.clone()),
         );
         let route = DecisionAction::rewrite(target.clone());
-        let decision = Decision { reason: DecisionReason::RequiredRewriteRetained, next_action: route.next_action(), action: route, id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new(), lexical_uncertainty:None, removal_gap:None };
+        let decision = Decision { reason: DecisionReason::RequiredRewriteRetained, next_action: route.next_action(), action: route, id:id.clone(), category:category.into(), anchors, item_ids:ids.to_vec(), evidence:Vec::new(), unresolved_consequence:"the required binding/path/declaration/access is absent after the selected retain choice; all artifacts withheld".into(), resolution:"choice_available".into(), supported_choices:vec!["accept_default".into(), "replace".into()], selected_choice:Some("retain".into()), blocks_applicability:true, chain_diagnostic_ids:Vec::new(), lexical_uncertainty:None, refusal_basis:Vec::new(), removal_gap:None };
         result.account(descriptor_bytes(&decision)?)?;
         result.plan.decisions.push(decision);
         decision_ids.push(id);

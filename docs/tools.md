@@ -714,6 +714,21 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   `reason:"lexical_context_unproved"`: that means uncertainty, not a proven
   collision. Witnesses survive `text_bytes:0`; if mandatory evidence cannot fit,
   the result is incomplete and decisions/artifacts are withheld with omissions.
+- For retained `move_item` needs, refusal basis is disclosed per need in additive
+  `refusal_basis:[{class,anchor:{path,range?},name?}]` records. Classes include
+  `chain_macro_statement`, `derive_veto`, `shadow`, `conditional_context`,
+  `glob_import`, `unresolved_chain`, `syntax_recovery`, `lexical_uncertainty`
+  and the occurrence-level fallback `written_binding_unproved`. `name` identifies
+  a competing spelling; written witnesses use original half-open byte coordinates,
+  while unresolved files and synthesized bindings omit `range` rather than invent
+  offsets. Lexical detail remains in `lexical_uncertainty`. Semantic refusals name
+  the failed proof stage (`semantic_configuration_unproved`,
+  `semantic_overlay_unavailable`, `semantic_mapping_unproved`,
+  `semantic_source_fact_unproved`, `semantic_final_fact_unproved` or
+  `semantic_identity_unproved`), anchored at the original occurrence; these stages
+  do not claim a finer rust-analyzer internal cause. Inspect these records when
+  an opt-in emits zero proofs. Disclosure does not relax vetoes or introduce
+  overrides; capped decision exemplars retain the existing omission accounting.
 - `action.route` provides one of three additive routes:
   - `request_field` names `tool`, the actual `field`, supported `choices`, and
     `purpose` (`resolve_decision`, `review_default` or `submit_for_analysis`).

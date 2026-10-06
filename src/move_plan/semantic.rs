@@ -281,6 +281,7 @@ pub fn discharge(
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
     let Some(config) = &request.semantic_configuration else {
+        configuration_refusal(needs);
         return Ok(());
     };
     let (deadline, cancelled) = controls;
@@ -290,6 +291,7 @@ pub fn discharge(
         .iter()
         .any(|c| c.root_file == request.crate_root)
     {
+        configuration_refusal(needs);
         return Ok(());
     }
     let original: BTreeMap<_, _> = files
@@ -302,10 +304,12 @@ pub fn discharge(
     let final_digest = crate::scope::hash_serialized(root, &(&digest, &overlay), controls)?;
     let Some(old) = Inputs::new(original, config, controls) else {
         items::check(deadline, cancelled)?;
+        configuration_refusal(needs);
         return Ok(());
     };
     let Some(new) = Inputs::new(overlay, config, controls) else {
         items::check(deadline, cancelled)?;
+        configuration_refusal(needs);
         return Ok(());
     };
     let coverage = ResolutionCoverage {
@@ -336,6 +340,12 @@ pub fn discharge(
             .map(|proof| super::BindingProof::RaResolved(Box::new(proof))),
     );
     Ok(())
+}
+
+fn configuration_refusal(needs: &mut [Need]) {
+    for need in needs {
+        need.refuse_at_occurrence("semantic_configuration_unproved");
+    }
 }
 
 fn controlled(
@@ -470,17 +480,21 @@ fn evaluate(
 ) -> Result<Vec<Proof>, DomainError> {
     let mut proofs = Vec::new();
     let mut retained = Vec::new();
-    for need in needs.drain(..) {
+    for mut need in needs.drain(..) {
         items::check(controls.0, controls.1)?;
         let anchor = SourceAnchor {
             path: need.path.clone(),
             range: need.range.clone(),
             expected_text: old.texts[&need.path][need.range.start_byte..need.range.end_byte].into(),
         };
+        let mut refusal_class = "semantic_mapping_unproved";
         let proof = (|| {
             let final_anchor = mapped(&anchor, origins, new)?;
+            refusal_class = "semantic_source_fact_unproved";
             let before = fact(old, &anchor)?;
+            refusal_class = "semantic_final_fact_unproved";
             let after = fact(new, &final_anchor)?;
+            refusal_class = "semantic_identity_unproved";
             if before.classification != after.classification
                 || before.declaration != normalize(&after.declaration, origins, old)?
             {
@@ -517,6 +531,7 @@ fn evaluate(
         if let Some(proof) = proof {
             proofs.push(proof);
         } else {
+            need.refuse_at_occurrence(refusal_class);
             retained.push(need);
         }
     }
