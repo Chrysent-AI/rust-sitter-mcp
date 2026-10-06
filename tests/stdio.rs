@@ -61,6 +61,75 @@ fn real_stdio_query() {
         let tool = advertised.iter().find(|t| t["name"] == name).unwrap();
         assert!(tool["outputSchema"].is_object());
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        let description = tool["description"].as_str().unwrap();
+        for phrase in [
+            "Use for:",
+            "Does NOT:",
+            "Example arguments",
+            "repo_path: the Git repository directory",
+            "paths: optional scope narrowing",
+            "Workflow:",
+            "Safety:",
+            "Advanced details:",
+        ] {
+            assert!(
+                description.contains(phrase),
+                "{name} missing {phrase}: {description}"
+            );
+        }
+        let examples: Vec<_> = description
+            .lines()
+            .filter(|line| line.starts_with('{'))
+            .collect();
+        assert_eq!(examples.len(), 1, "{name} needs one complete JSON example");
+        let example: Value = serde_json::from_str(examples[0]).unwrap();
+        assert_eq!(example["repo_path"], ".");
+        assert!(example["paths"].is_array());
+        let phrases: &[&str] = match name {
+            "search" => &[
+                "collect::<Vec<_>>()",
+                "use search_query instead",
+                "send it as cursor with every other argument unchanged",
+                "replace's selection parameter",
+                "Empty results do not prove absence in generated code",
+            ],
+            "search_query" => &[
+                "(function_item) @match",
+                "reusing a name does not require equal source text",
+                "#rust-arity?",
+                "No property predicates or directives",
+                "An empty search does not prove absence in generated code",
+            ],
+            "replace" => &[
+                "First call search to find matches",
+                "Omitted or null selection means all matches, [] means none",
+                "before selection",
+                "withhold ALL artifacts",
+                "semantic checking is not_performed",
+                "verify unchanged base bytes",
+            ],
+            "move_item" => &[
+                "not a Cargo.toml",
+                "inline-module destination",
+                "full current bytes",
+                "plan.applicable:true",
+            ],
+            "suggest_split" => &[
+                "not a Cargo.toml",
+                "source_path: the Git-root-relative existing .rs file to analyze",
+                "submit chosen items as move_item anchors",
+                "no patch, edit, creation content, execution handle, stored plan",
+                "Banner adjacency never assigns ownership",
+                "semantic checking is not_performed",
+            ],
+            _ => unreachable!(),
+        };
+        for phrase in phrases {
+            assert!(
+                description.contains(phrase),
+                "{name} missing {phrase}: {description}"
+            );
+        }
     }
     let move_tool = advertised
         .iter()
@@ -84,11 +153,11 @@ fn real_stdio_query() {
         "Unique ordinary module and written-binding evidence",
         "itemized import/path repairs",
         "necessary pub(crate) access repairs",
-        "replayable anchored alternatives",
-        "Required crate_root is caller-selected",
-        "not an inferred Cargo target",
+        "published full target in rewrite_overrides",
+        "crate_root: a Rust source file path like 'src/lib.rs' or 'src/main.rs'",
+        "The server does not infer a root from Cargo",
         "unsupported or uncertain dependencies block the entire batch",
-        "blocked previews are not applicable artifacts",
+        "Blocked previews are not applicable artifacts",
         "published together or withheld",
         "Semantic checking is not_performed",
         "never writes, formats, compiles or applies changes",
