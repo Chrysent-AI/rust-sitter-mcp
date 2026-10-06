@@ -140,8 +140,8 @@ pub(crate) fn decision_groups<'a>(
             decision_ids: vec![id.into()],
             count: 1,
         };
-        // Advice retains its cause-only summaries. Move groups collapse only identical
-        // causes, routing summaries and consequences; replay targets stay in decisions.
+        // Collapse only identical causes, routing summaries and consequences when
+        // supplied; per-occurrence anchors stay in the full decisions.
         let detail = consequence.map(|text| {
             (
                 serde_json::to_string(&action.summary()).expect("action JSON"),
@@ -174,7 +174,7 @@ pub(crate) fn decision_groups<'a>(
     Ok(groups.into_values().collect())
 }
 
-pub(super) fn id_runs(ids: &[String]) -> Vec<DecisionIdRun> {
+pub(crate) fn id_runs(ids: &[String]) -> Vec<DecisionIdRun> {
     let mut runs: Vec<DecisionIdRun> = Vec::new();
     let mut previous = None;
     for id in ids {

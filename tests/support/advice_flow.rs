@@ -34,12 +34,42 @@ pub fn complete(result: &Value) {
         .iter()
         .map(|s| s["id"].as_str().unwrap())
         .collect();
-    let decisions: BTreeSet<_> = result["decisions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|d| d["id"].as_str().unwrap())
-        .collect();
+    assert_eq!(result["schema_version"], 2);
+    let mut decisions = BTreeSet::new();
+    for group in result["decision_groups"].as_array().unwrap() {
+        let mut count = 0;
+        for run in group["decision_ids"].as_array().unwrap() {
+            let first = run["first_id"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("d/")
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+            let length = run["count"].as_u64().unwrap() as usize;
+            assert!(length > 0);
+            count += length;
+            for index in first..first + length {
+                assert!(decisions.insert(format!("d/{index}")));
+            }
+        }
+        assert_eq!(group["count"], count);
+        assert_eq!(group["actions"].as_array().unwrap().len(), 1);
+        assert_eq!(group["actions"][0]["route"], group["route"]);
+        assert!(group["unresolved_consequence"].is_string());
+    }
+    assert_eq!(result["counts"]["decisions"], decisions.len());
+    let detail = result["decisions"].as_array().unwrap();
+    assert_eq!(
+        detail.len()
+            + result["counts"]["omissions"]["decisions"]
+                .as_u64()
+                .unwrap_or(0) as usize,
+        decisions.len()
+    );
+    for decision in detail {
+        assert!(decisions.contains(decision["id"].as_str().unwrap()));
+    }
     for item in inventory {
         for id in item["signal_ids"].as_array().unwrap() {
             assert!(signals.contains(id.as_str().unwrap()));

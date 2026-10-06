@@ -162,8 +162,9 @@ Ordinary children of the root or an existing `mod.rs` reside in that file's dire
 
 Both tools expose additive `chain_diagnostics[]`: at the top level of `suggest_split`,
 and inside `move_item`'s `plan`. A related `module_context` decision links them through
-`chain_diagnostic_ids[]`. These mandatory explanations are independent of the displayed
-`diagnostic_count` cap. Schema version 1, legacy no-draft reasons, blocker codes and
+`chain_diagnostic_ids[]`. These mandatory explanations are independent of the generic
+scan diagnostic cap. Per-occurrence decision links can be omitted by the advice/move
+detail cap, with exact link omissions and group routing retained. Legacy no-draft reasons, blocker codes and
 bad-request error codes are unchanged.
 
 Each diagnostic echoes the caller's `crate_root`, `requested_path` and `role`
@@ -374,7 +375,8 @@ Every group, including retain groups and groups with zero observed risks, also h
 The counts are **observed advice decision records**, counted once per cause per
 participating group, not guesses at dependencies or the number of blocked items.
 All five named causes and `other_local` are present even at zero; their sum equals
-`decision_ids.length`, and every ID resolves to a same-response decision. Item-free
+`decision_ids.length`. Every ID belongs to a same-response `decision_groups` run;
+individual detail records may be omitted and counted. Item-free
 inherited source concerns apply to every group. Nonblocking trivia choices and
 batch-dependent cross-group reference reviews are excluded. `member_call` includes
 written field/member access; `external_binding` covers bare references with no
@@ -407,10 +409,31 @@ These signals project the existing conditional-consumer decision reason;
 **execution behavior is unchanged**: same-file cfg(test) consumers still block
 relocation in `move_item`. No cfg override or safe relocation mode is introduced.
 
-These fields and the new signal kind are additive: `suggest_split` stays on schema
-version 1, and `semantic:"not_performed"` is unchanged.
+Risk fields and signal kinds are unchanged by counts-first response shaping;
+`semantic:"not_performed"` is unchanged. `suggest_split` publishes schema version 2
+because decision-group IDs now use exact runs rather than strings.
 
-Every `unresolved_decision_ids[]` entry resolves to a same-response `decisions[]` record with anchored display descriptors, evidence, unresolved consequence and next action. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
+By default, `decisions[]` contains one full anchored exemplar per identical
+cause/route/consequence group, bounded by `limits.diagnostic_count` (default 64).
+The groups retain all analyzed IDs and counts, with a consequence and one routing
+summary each. `counts.omissions.decisions` counts withheld detail records exactly;
+`diagnostic_count` appears in `truncation_reasons` when detail is capped. This
+presentation cap alone does **not** make analysis incomplete or withhold full
+drafts: memberships, `expected_to_block` counts and links, and `assessment_scope`
+are computed from the complete collected evidence before capping.
+
+An **explicit** `limits.diagnostic_count` (0–100,000 for advice) returns the first N
+full decisions in original ID order, retaining their original fields and anchor
+bytes. Even an explicit 64 requests 64 records instead of one exemplar per group;
+omitting this field, including when other limits are provided, keeps the compact
+profile. Use `limits:{"diagnostic_count":100000,"response_bytes":16777216}` for
+large full-detail responses. Overall response/work limits still apply. Counts-only
+`diagnostic_count:0` keeps complete group routing and exact omission counts.
+
+Every `unresolved_decision_ids[]` entry belongs to a same-response `decision_groups`
+run. Expanded `decisions[]` records provide the per-occurrence anchored display
+descriptors, evidence, unresolved consequence and next action; consult omissions
+rather than assuming that every detail record is present. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
 
 When output fitting withholds full drafts, `draft_summaries[]` retains each draft's
 ID, source snapshot, group kind/destination path, complete `item_ids` and unresolved
@@ -477,31 +500,33 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
 Both tools also publish `decision_groups[]` (inside `plan` for moves). Each group
 contains `category`, `reason`, `route`, `blocks_applicability`, `decision_ids` and
 `count`. These sorted cause summaries count decision records, not guessed
-references. Advice lists decision IDs individually. Move groups encode exact
+references. Both move and advice groups encode exact
 contiguous runs, e.g. `decision_ids:[{"first_id":"d/0","count":2},
 {"first_id":"d/3","count":1}]` names only `d/0`, `d/1`, `d/3`, not `d/2`.
 A run increments the numeric suffix of the first ID; run counts sum to group count.
 This run encoding applies to **every** `move_item` response (blocked and
-applicable) and is the reason `move_item` envelopes publish `schema_version: 2`
-(v1 listed decision IDs as plain strings; v2 is otherwise shape-compatible).
-`suggest_split` and the search tools remain on schema version 1.
-Move groups additionally contain `unresolved_consequence` and `actions[]`: one
+applicable) and **every** `suggest_split` response. Both publish `schema_version: 2`
+(v1 listed group decision IDs as plain strings). Search tools remain on schema
+version 1. Draft/risk decision IDs remain individual strings and can be joined to
+the exact runs even when per-occurrence detail is omitted.
+Both tools' groups additionally contain `unresolved_consequence` and `actions[]`: one
 routing summary for the group, including the request tool/field/purpose/choices,
 selection-change fields/instruction, or unsupported construct/instruction.
 These are routing summaries, **not replay targets**: request-field actions have
-null `target`, `trivia` and `target_item`. Raise the move diagnostic limit and
+null `target`, `trivia` and `target_item`. Raise the tool's diagnostic limit and
 obtain full original anchors to replay a particular choice. This guidance remains
 available even with `diagnostic_count:0`, including when different chain causes
-share a group. Advice's group wire shape and complete decision links are unchanged.
+share a group. Groups merge only identical category/cause/route/blocking state,
+routing summary and consequence, never just a broad category.
 
-Groups are finalized before move detail capping and even when advice has no
+Groups are finalized before either tool's detail capping and even when advice has no
 drafts. Follow returned detail records for anchors, unique evidence, item links
 and chain diagnostics; consult omission counts when detail is capped. Group
 counts and IDs cover all analyzed decisions, including omitted detail. Mandatory
 evidence or overall response overflow marks the result incomplete and withholds
 artifacts/full drafts. Complete groups outlive preview detail and are omitted only
-at the final tier with exact group/reference omissions. Schema
-version 1 and the existing decision fields remain available.
+at the final tier with exact group/reference omissions. Existing individual decision
+fields remain available through explicit detail expansion.
 
 Draft groups carry `item_ids`, not member-name strings. Join every ID to
 `inventory[].id`, including the retain group and context-sensitive units. Count
@@ -618,7 +643,7 @@ Eligibility precedence: oversized → binary (NUL in first 8,192 bytes) → non-
 | `limits.time_budget_ms` | 60,000 | 300,000 (minimum 1) |
 | `limits.query_state_limit` | 4,096 | 65,536 |
 | `limits.response_bytes` | 2 MiB | 16 MiB (minimum 64 KiB) |
-| `limits.diagnostic_count` | 64 | 256; 100,000 for `move_item` (minimum 0) |
+| `limits.diagnostic_count` | 64 | 256; 100,000 for `move_item` and `suggest_split` detail (minimum 0) |
 | `limits.text_bytes` | 8 KiB | 64 KiB (minimum 0) |
 
 Other bounds are positive. Partial option objects use defaults for omitted settings; unknown fields are rejected. Raw query size is at most 64 KiB, 64 patterns/64 capture names. Sugar size is at most 64 KiB, 4,096 significant IR nodes and 64 metavariable occurrences. Decoded arguments are at most 8 MiB. Per-file query execution permits at most 100,000 candidate matches and 128 MiB of capture/range descriptors. Unfinished file matches are discarded. One engine call is admitted at a time (`BUSY` instead of unbounded queueing); blocking work uses at most four worker-local parsers/cursors. Cancellation/deadlines are cooperative; OS/Git I/O can outlast them.

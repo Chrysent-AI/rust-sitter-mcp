@@ -701,7 +701,8 @@ fn mandatory_lexical_witnesses_survive_display_caps_or_are_explicitly_omitted() 
     assert!(result["plan"]["decisions"].as_array().unwrap().is_empty());
     assert_eq!(result["counts"]["omissions"]["decisions"], 200);
 
-    let request: SuggestSplitRequest = serde_json::from_value(json!({"repo_path":repo.0,"crate_root":"cases/precision/lib.rs","source_path":SOURCE,"paths":["cases/precision"],"limits":{"text_bytes":0,"diagnostic_count":0,"response_bytes":65536}})).unwrap();
+    // Explicit expansion requests every witness; counts-only advice now fits by design.
+    let request: SuggestSplitRequest = serde_json::from_value(json!({"repo_path":repo.0,"crate_root":"cases/precision/lib.rs","source_path":SOURCE,"paths":["cases/precision"],"limits":{"text_bytes":0,"diagnostic_count":256,"response_bytes":65536}})).unwrap();
     let before = observe(&repo.0);
     let result = Engine::new(repo.0.clone())
         .unwrap()

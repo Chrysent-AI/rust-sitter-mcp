@@ -7,7 +7,9 @@ mod tests;
 use crate::{
     items::{self, DecisionReason, Item, ParsedFile},
     matching::Lines,
-    move_plan::{Confidence, DecisionAction, DecisionGroup, decision_groups},
+    move_plan::{
+        Confidence, DecisionAction, DecisionGroup, DecisionIdRun, decision_groups, id_runs,
+    },
     plan::Integrity,
     result::*,
     scope::{self, FileSnapshot, Scope},
@@ -16,7 +18,7 @@ use crate::{
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::atomic::AtomicBool,
     time::{Duration, Instant},
@@ -35,10 +37,52 @@ pub struct SuggestSplitRequest {
     #[serde(default)]
     pub context: Context,
     #[serde(default)]
-    pub limits: Limits,
+    pub limits: AdviceLimits,
     /// Bounds displayed membership, not an execution selection. Default 500; 1–5000.
     #[serde(default = "default_max_items")]
     pub max_items: usize,
+}
+/// Shared scan/display limits; an explicit diagnostic count expands advice detail.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(transparent)]
+pub struct AdviceLimits {
+    inner: Limits,
+    #[serde(skip)]
+    diagnostic_count_explicit: bool,
+}
+impl<'de> Deserialize<'de> for AdviceLimits {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let diagnostic_count_explicit = value.get("diagnostic_count").is_some();
+        let inner = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            inner,
+            diagnostic_count_explicit,
+        })
+    }
+}
+impl std::ops::Deref for AdviceLimits {
+    type Target = Limits;
+    fn deref(&self) -> &Limits {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for AdviceLimits {
+    fn deref_mut(&mut self) -> &mut Limits {
+        &mut self.inner
+    }
+}
+impl From<AdviceLimits> for Limits {
+    fn from(limits: AdviceLimits) -> Self {
+        limits.inner
+    }
+}
+impl AdviceLimits {
+    fn expanded(&self) -> bool {
+        self.diagnostic_count_explicit
+            || self.diagnostic_count != Limits::default().diagnostic_count
+    }
 }
 fn default_max_items() -> usize {
     500
@@ -129,6 +173,21 @@ pub struct AdviceDecision {
     pub chain_diagnostic_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_uncertainty: Option<items::LexicalUncertainty>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct AdviceDecisionGroup {
+    #[serde(flatten)]
+    pub summary: DecisionGroup<Vec<DecisionIdRun>>,
+    pub unresolved_consequence: String,
+    /// Complete route guidance without per-occurrence execution targets.
+    pub actions: Vec<DecisionAction>,
+}
+impl std::ops::Deref for AdviceDecisionGroup {
+    type Target = DecisionGroup<Vec<DecisionIdRun>>;
+    fn deref(&self) -> &Self::Target {
+        &self.summary
+    }
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -275,7 +334,7 @@ pub struct SuggestSplitEnvelope {
     pub impl_contexts: Vec<ImplContext>,
     pub signals: Vec<Signal>,
     pub decisions: Vec<AdviceDecision>,
-    pub decision_groups: Vec<DecisionGroup>,
+    pub decision_groups: Vec<AdviceDecisionGroup>,
     pub drafts: Vec<Draft>,
     /// Non-executable membership summaries when output fitting withholds full drafts.
     pub draft_summaries: Vec<DraftMembership>,
@@ -285,7 +344,7 @@ pub struct SuggestSplitEnvelope {
 impl SuggestSplitEnvelope {
     pub fn empty(limits: Limits) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             tool: "suggest_split".into(),
             advisory: true,
             root: None,
@@ -341,6 +400,39 @@ impl SuggestSplitEnvelope {
     fn omit(&mut self, key: &str, count: usize) {
         if count != 0 {
             *self.counts.omissions.entry(key.into()).or_default() += count;
+        }
+    }
+    fn shape_decisions(&mut self, limits: &AdviceLimits) {
+        let before = self.decisions.len();
+        let chain_links: usize = self
+            .decisions
+            .iter()
+            .map(|d| d.chain_diagnostic_ids.len())
+            .sum();
+        if limits.expanded() {
+            self.decisions.truncate(limits.diagnostic_count);
+        } else {
+            // One full exemplar per cause/route/consequence, in original ID order.
+            let exemplars: BTreeSet<_> = self
+                .decision_groups
+                .iter()
+                .take(limits.diagnostic_count)
+                .map(|g| g.decision_ids[0].first_id.as_str())
+                .collect();
+            self.decisions.retain(|d| exemplars.contains(d.id.as_str()));
+        }
+        self.omit("decisions", before - self.decisions.len());
+        self.omit(
+            "chain_diagnostic_references",
+            chain_links
+                - self
+                    .decisions
+                    .iter()
+                    .map(|d| d.chain_diagnostic_ids.len())
+                    .sum::<usize>(),
+        );
+        if before != self.decisions.len() {
+            self.truncation_reasons.push("diagnostic_count".into());
         }
     }
     fn withhold(&mut self) {
@@ -602,10 +694,7 @@ impl SuggestSplitEnvelope {
             self.omit("decision_groups", self.decision_groups.len());
             self.omit(
                 "decision_group_references",
-                self.decision_groups
-                    .iter()
-                    .map(|g| g.decision_ids.len())
-                    .sum(),
+                self.decision_groups.iter().map(|g| g.count).sum(),
             );
             self.decision_groups.clear();
         }
@@ -708,11 +797,14 @@ fn run_with_recheck(
         deadline: started + Duration::from_millis(request.limits.time_budget_ms.min(300_000)),
         cancelled,
     };
-    let mut result = SuggestSplitEnvelope::empty(request.limits.clone());
+    let mut result = SuggestSplitEnvelope::empty(request.limits.clone().into());
     result.effective_work_limits.max_items = request.max_items;
     let outcome = build(launch, &request, controls, before_recheck, &mut result)
         .and_then(|()| drafts::finalize(&mut result, controls))
-        .and_then(|()| result.fit(controls))
+        .and_then(|()| {
+            result.shape_decisions(&request.limits);
+            result.fit(controls)
+        })
         .and_then(|()| controls.check());
     if let Err(error) = outcome {
         // A stopped collector may still have provisional IDs. Never publish partial linked
@@ -725,11 +817,7 @@ fn run_with_recheck(
         result.omit("decision_groups", result.decision_groups.len());
         result.omit(
             "decision_group_references",
-            result
-                .decision_groups
-                .iter()
-                .map(|g| g.decision_ids.len())
-                .sum(),
+            result.decision_groups.iter().map(|g| g.count).sum(),
         );
         result.decision_groups.clear();
         result.omit(
@@ -784,7 +872,7 @@ fn run_with_recheck(
             let root = result.root.take();
             let snapshot = result.snapshot_id.take();
             let coverage = std::mem::take(&mut result.coverage);
-            result = SuggestSplitEnvelope::empty(request.limits.clone());
+            result = SuggestSplitEnvelope::empty(request.limits.clone().into());
             result.root = root;
             result.snapshot_id = snapshot;
             result.coverage = coverage;
@@ -804,7 +892,17 @@ fn build(
     before_recheck: impl FnOnce(),
     result: &mut SuggestSplitEnvelope,
 ) -> Result<(), DomainError> {
-    request.limits.validate()?;
+    let mut scan_limits: Limits = request.limits.clone().into();
+    // The scan's generic diagnostic limit remains bounded independently of advice detail.
+    scan_limits.diagnostic_count = scan_limits.diagnostic_count.min(256);
+    scan_limits.validate()?;
+    if request.limits.diagnostic_count > 100_000 {
+        return Err(field_error(
+            "INVALID_PARAMS",
+            "advice diagnostic_count is 0–100000",
+            "limits.diagnostic_count",
+        ));
+    }
     if !(1..=5000).contains(&request.max_items)
         || request.context.before_lines > 20
         || request.context.after_lines > 20
@@ -836,12 +934,12 @@ fn build(
         paths: request.paths.clone(),
         globs: request.globs.clone(),
         context: request.context.clone(),
-        limits: request.limits.clone(),
+        limits: scan_limits,
         page_size: 100,
         cursor: None,
     };
     let scope = Scope::new(root, &scan_request)?;
-    let mut scan = SearchEnvelope::empty(request.limits.clone());
+    let mut scan = SearchEnvelope::empty(scan_request.limits.clone());
     let (files, snapshot) =
         scope::discover(&scope, &mut scan, controls.deadline, controls.cancelled)?;
     result.coverage = scan.coverage;
@@ -1048,7 +1146,7 @@ fn build(
     // Verify observed bytes/modes and prospective admission again, including no-draft calls.
     controls.check()?;
     before_recheck();
-    let mut final_scan = SearchEnvelope::empty(request.limits.clone());
+    let mut final_scan = SearchEnvelope::empty(scan_request.limits.clone());
     let (_, latest) = scope::discover(
         &scope,
         &mut final_scan,
