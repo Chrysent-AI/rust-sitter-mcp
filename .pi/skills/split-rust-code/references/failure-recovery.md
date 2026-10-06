@@ -20,7 +20,7 @@ Accepting one rewrite does not clear independent blockers; unsupported decisions
 | `INVALID_DESTINATION` / `STALE_DESTINATION` | Bad destination kind/layout, or stale `before_item` | Correct layout/scope; refresh the `before_item` anchor; omit it for EOF append. |
 | `INVALID_NEW_FILE_NAME` / `INVALID_DECLARATION_PARENT` | Illegal basename, or parent-to-child layout mismatch | Choose a legal non-keyword ASCII basename and the actual ordinary declaring parent (check chain diagnostics). |
 | `DESTINATION_ALREADY_EXISTS` / `MODULE_DECLARATION_CONFLICT` | Occupied/case-colliding path or competing declaration | Choose an absent name, or append to the existing file with `kind: "existing"`. Never delete conflicts automatically. |
-| `INVALID_PARAMS` / `INVALID_GLOB` | Malformed request field or glob | Validate the named field; globs are positive, root-anchored, no braces/negation. |
+| `INVALID_PARAMS` / `INVALID_GLOB` | Malformed request field or glob | Validate the named field; globs are positive, root-anchored, no braces/negation. If the error shows `must be object` or a quoted-object/`"null"` value, your client stringified an object-typed parameter — omit the parameter entirely instead. |
 | `PATH_NOT_FOUND` / `NOT_GIT_WORKTREE` / `GIT_READ_FAILED` | `repo_path`/paths don't resolve | Use an absolute path inside a real Git worktree; root-relative file paths. |
 | `PREEXISTING_SYNTAX_ERROR` / `NEW_SYNTAX_ERROR` | Parse errors in base or resulting plan | Repair the base through separate authorized work; revise the batch. |
 | `ATTRIBUTE_ATTACHMENT_CHANGED` / `OVERLAPPING_EDITS` | Unsafe attribute attachment or conflicting intervals | Remove the unsafe choice; revise the batch. |
@@ -49,7 +49,7 @@ Note: `request_field` route means "a request field or choice is actionable per `
 | Reason | Meaning | Agent action |
 |---|---|---|
 | `external_or_missing_binding` | Dependency on external/unresolved name | Semantic-stage; no override. |
-| `member_or_constructor_unproved` | Field/method access needs type knowledge | Semantic-stage; no override. |
+| `member_or_constructor_unproved` | Field/method access needs type knowledge — including method calls (`x.trim()`) and prelude types (`Option`, `String`, `usize`) inside the moved item's own body | Semantic-stage; no override. Expect this on nearly all real Rust functions; probe with 1–2 items before a large batch. |
 | `lexical_context_unproved` | Binding/pattern/namespace context unknown | Inspect `lexical_uncertainty` as diagnostic evidence only — currently `unsupported_in_engine`; no binding-evidence field resolves it. Change selection or investigate separately. |
 | `macro_context_unexamined` | Required macro expansion context | Unsupported; the engine doesn't expand macros. |
 | `glob_binding_unproved` | Wildcard import provenance unclear | Unsupported; no glob synthesis. |
