@@ -150,6 +150,35 @@ A batch creating one sibling, with a privately synthesized parent declaration:
 
 These are independent calls against the initial files, not sequential application instructions. Both items reach the new file in original source order, despite reversed request entries. For multiple sources at the same insertion point, source-file groups follow their first appearance in `moves`, then items follow original byte order. Existing destinations default to actual top-level EOF. Optional `before_item` is a full unselected destination-item anchor; insertion precedes its attached leading run, never detaches its attributes/docs. A file can simultaneously supply and receive items; all edits use original coordinates.
 
+### Written re-export routes
+
+Consumer-side repairs can follow unique, unconditioned named `pub use` and
+`pub(crate) use` leaves to a directly inventoried declaration in an admitted
+ordinary module. Renamed leaves preserve the consumer's binding spelling:
+`pub use crate::implementation::B as C` produces a destination import such as
+`use crate::implementation::B as C;`, not an import through the facade. Relative
+paths use the declaring module's written context. Transitive routes are bounded
+to **eight re-export hops** and reject cycles, competing leaves, missing terminal
+declarations, globs and attributed/conditional leaves (including `cfg` and
+`cfg_attr`). Terminal attribute, constructor, visibility and collision checks
+still apply; following a route does not prove access or type/member behavior.
+
+These repairs retain their ordinary `kind` (`import_insert`, `use_path`, `path`
+or `import_leaf_extract`) and add `"written_reexport"` to `rewrites[].evidence`.
+The same rewrite's `anchors` includes each complete original re-export
+`use` declaration and the terminal declaration, alongside the consumer/import
+and insertion-boundary anchors when applicable. This is syntactic evidence,
+not a `binding_proofs` semantic class. No new request flag or schema version is
+introduced, and `semantic:"not_performed"` remains unchanged without semantic
+resolution. Review the complete hop anchors and canonical `after_text` before
+accepting or replacing an ordinary rewrite.
+
+This is **consumer-side import resolution only**. Moving a declaration that is
+itself publicly exposed or re-exported still retains `public_path_change` and
+requires a separate API decision; no facade, compatibility shim or re-export is
+synthesized. An unsupported consumer route remains a written-binding or
+conditional-context blocker, not permission to bypass it with an override.
+
 ### Opt-in standard-prelude assumptions
 
 `assume_standard_prelude` is a request-level boolean, default `false`. Omission or

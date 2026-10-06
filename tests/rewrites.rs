@@ -647,7 +647,7 @@ fn imported_module_prefixes_and_external_aliases_are_evidenced() {
     }
 }
 #[test]
-fn needed_chained_reexports_have_the_exposure_decision() {
+fn needed_chained_reexports_follow_written_declarations() {
     let repo = Fixture::generate();
     repo.write(
         "cases/layout/lib.rs",
@@ -668,16 +668,33 @@ fn needed_chained_reexports_have_the_exposure_decision() {
             &repo,
             json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs",source.lines().last().unwrap()),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
         );
-        withheld(&result);
+        compile_layout(&apply(&repo, &result));
+        let rewrite = result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r["evidence"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("written_reexport"))
+            })
+            .unwrap();
         assert!(
-            result["plan"]["decisions"]
-                .as_array()
+            rewrite["after_text"]
+                .as_str()
                 .unwrap()
-                .iter()
-                .any(|d| d["category"] == "reexport_dependency"
-                    && d["anchors"][0]["path"] == "cases/layout/bridge.rs"),
-            "{result}"
+                .contains("crate::bindings::helper")
         );
+        for path in ["cases/layout/bridge.rs", "cases/layout/bindings.rs"] {
+            assert!(
+                rewrite["anchors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["path"] == path)
+            );
+        }
     }
 }
 #[test]
