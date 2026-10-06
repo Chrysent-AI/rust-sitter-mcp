@@ -940,6 +940,103 @@ fn edited_membership_flow_and_staleness_use_only_explicit_moves() {
 }
 
 #[test]
+fn macro_root_advice_names_tokens_without_claiming_expansion() {
+    let repo = Fixture::generate();
+    let root = "cases/refusals/lib.rs";
+    let source = "cases/refusals/branch/leaf.rs";
+    repo.write("cases/refusals/branch.rs", "mod leaf;\n");
+    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/refusals"],"limits":{"diagnostic_count":1000}});
+    for written in [chain_fixture::MACRO_ROOT, "emit_modules!(mod branch;);\n"] {
+        repo.write(root, written);
+        let before = observe(&repo.0);
+        let result = run(&repo, request.clone());
+        advice_flow::complete(&result);
+        assert!(result["drafts"].as_array().unwrap().is_empty());
+        chain_fixture::named_refusal(
+            &result["chain_diagnostics"],
+            &result["decisions"],
+            "macro_generated_module_tree",
+            "macro token tree",
+        );
+        let diagnostic = &result["chain_diagnostics"][0];
+        let range = &diagnostic["declaration"]["range"];
+        let text = &written[range["start_byte"].as_u64().unwrap() as usize
+            ..range["end_byte"].as_u64().unwrap() as usize];
+        assert_eq!(text, "mod branch;");
+        assert_eq!(observe(&repo.0), before);
+    }
+    for written in [
+        "macro_rules! matcher_only { (mod branch;) => { fn other() {} }; }\n",
+        "emit!(\"mod branch;\"); // mod branch;\n",
+    ] {
+        repo.write(root, written);
+        let result = run(&repo, request.clone());
+        assert_eq!(
+            result["chain_diagnostics"][0]["reason"],
+            "source_not_in_root_chain"
+        );
+    }
+}
+
+#[test]
+fn inner_attribute_advice_names_root_and_nested_scope_vetoes() {
+    let repo = Fixture::generate();
+    let root = "cases/refusals/lib.rs";
+    let source = "cases/refusals/branch/leaf.rs";
+    repo.write("cases/refusals/branch.rs", "mod leaf;\n");
+    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/refusals"],"limits":{"diagnostic_count":1000}});
+    for (written, leaf, at) in [
+        (
+            chain_fixture::INNER_ATTR_ROOT,
+            "fn selected() {}\nfn retained() {}\n",
+            root,
+        ),
+        ("mod branch;\n", chain_fixture::INNER_ATTR_NESTED, source),
+    ] {
+        repo.write(root, written);
+        repo.write(source, leaf);
+        let before = observe(&repo.0);
+        let result = run(&repo, request.clone());
+        advice_flow::complete(&result);
+        assert!(result["drafts"].as_array().unwrap().is_empty());
+        chain_fixture::named_refusal(
+            &result["chain_diagnostics"],
+            &result["decisions"],
+            "root_attribute_chain_uncertainty",
+            "non-allowlisted inner attribute",
+        );
+        let diagnostic = result["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["reason"] == "root_attribute_chain_uncertainty")
+            .unwrap();
+        assert_eq!(diagnostic["at_file_path"], at);
+        let text = fs::read_to_string(repo.0.join(at)).unwrap();
+        let range = &diagnostic["declaration"]["range"];
+        assert!(
+            text[range["start_byte"].as_u64().unwrap() as usize
+                ..range["end_byte"].as_u64().unwrap() as usize]
+                .starts_with("#![cfg_attr(")
+        );
+        assert!(
+            result["chain_diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "inherited_uncertainty")
+        );
+        assert_eq!(observe(&repo.0), before);
+    }
+    repo.write(root, "#![allow(dead_code)]\nmod branch;\n");
+    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    let clean = run(&repo, request);
+    assert!(clean["chain_diagnostics"].as_array().unwrap().is_empty());
+    assert!(!clean["drafts"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn wrong_binary_root_names_the_exhausted_boundary_and_correct_root_drafts() {
     use chain_fixture::*;
     let repo = Fixture::generate();

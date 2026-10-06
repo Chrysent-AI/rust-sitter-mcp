@@ -371,7 +371,7 @@ pub fn modules(
                 .push("module evidence contains syntax recovery".into());
             origins.push(ChainOrigin::SyntaxRecovery);
         }
-        if data.trivia.iter().any(|t| {
+        if let Some(attribute) = data.trivia.iter().find(|t| {
             t.is_attribute()
                 && t.classification == "scope"
                 && !file.source[t.range.clone()].starts_with("#![allow(")
@@ -380,6 +380,25 @@ pub fn modules(
                 .unresolved
                 .push("inherited scope attributes require an explicit context choice".into());
             origins.push(ChainOrigin::ScopeAttributes);
+            // Add the specific cause without changing the inherited-uncertainty veto.
+            let mut failure = ChainDiagnostic::boundary(
+                root,
+                "",
+                ChainRole::Source,
+                ChainReason::RootAttributeChainUncertainty,
+            );
+            failure.at_file_path = path.clone();
+            failure.evidenced_prefix_paths = evidence.filesystem_paths.clone();
+            failure.candidate_paths.push(path.clone());
+            failure.origin_reasons.push(ChainOrigin::ScopeAttributes);
+            failure.declaration = Some(ChainLocation {
+                path: path.clone(),
+                range: ByteRange {
+                    start_byte: attribute.range.start,
+                    end_byte: attribute.range.end,
+                },
+            });
+            analysis.record(failure, descriptor_bytes)?;
         }
         if !origins.is_empty() {
             let mut failure = ChainDiagnostic::boundary(
@@ -394,6 +413,13 @@ pub fn modules(
             failure.origin_reasons = origins;
             analysis.record(failure, descriptor_bytes)?;
         }
+        analysis.record_macro_declarations(
+            file,
+            data,
+            &evidence,
+            (deadline, cancelled),
+            descriptor_bytes,
+        )?;
         let mut declarations: BTreeMap<String, Vec<&Item>> = BTreeMap::new();
         for item in &data.items {
             check(deadline, cancelled)?;

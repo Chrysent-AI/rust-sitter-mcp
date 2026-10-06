@@ -79,6 +79,37 @@ class ReplayTests(unittest.TestCase):
             RIG["report"](result, binaries)
         self.assertIn("newly off/on=[1, 0]; regressed off/on=[0, 1]", output.getvalue())
 
+    def test_negative_controls_reject_unlock_and_blocker_or_chain_drift(self):
+        run = RIG["measure"](self.value(), self.request())
+        run["chain_reasons"] = {"macro_generated_module_tree": 1}
+        entry = {"id": "negative", "negative_control": {
+            "blocker_classes": list(run["raw_reasons"]),
+            "chain_reasons": ["macro_generated_module_tree"]}}
+        verify = RIG["verify_negative_control"]
+        verify(entry, run, True)
+        legacy = copy.deepcopy(run)
+        legacy["chain_reasons"] = {"source_not_in_root_chain": 1}
+        verify(entry, legacy, False)
+        with self.assertRaisesRegex(ValueError, "chain reasons drifted"):
+            verify(entry, legacy, True)
+        unlocked = copy.deepcopy(run)
+        unlocked["applicable"] = True
+        with self.assertRaisesRegex(ValueError, "silently unlocked"):
+            verify(entry, unlocked, True)
+        drift = copy.deepcopy(run)
+        drift["raw_reasons"] = {}
+        with self.assertRaisesRegex(ValueError, "blocker classes drifted"):
+            verify(entry, drift, True)
+        verify({"id": "ordinary"}, unlocked, True)
+
+    def test_measure_retains_named_chain_counts(self):
+        value = self.value()
+        value["plan"]["chain_diagnostics"] = [
+            {"reason": "root_attribute_chain_uncertainty"},
+            {"reason": "root_attribute_chain_uncertainty"}]
+        run = RIG["measure"](value, self.request())
+        self.assertEqual(run["chain_reasons"], {"root_attribute_chain_uncertainty": 2})
+
     def test_snapshot_detects_mutation_creation_deletion_and_ignored_destination(self):
         with tempfile.TemporaryDirectory(prefix="replay-snapshot-") as directory:
             repo = Path(directory)

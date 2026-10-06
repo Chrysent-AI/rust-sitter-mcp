@@ -55,6 +55,10 @@ impl DecisionAction {
                 fields: if tool == "move_item" { vec!["moves".into()] } else { vec!["source_path".into()] },
                 instruction: "the evidenced ordinary chain file is absent; select a different provable source/destination chain".into(),
             },
+            ChainReason::MacroGeneratedModuleTree | ChainReason::RootAttributeChainUncertainty => Self::UnsupportedInEngine {
+                construct: serde_json::to_value(diagnostic.reason).expect("reason serializes").as_str().expect("reason string").into(),
+                instruction: diagnostic.message(),
+            },
             _ => Self::UnsupportedInEngine {
                 construct: serde_json::to_value(diagnostic.reason).expect("reason serializes").as_str().expect("reason string").into(),
                 instruction: "the linked chain diagnostic has no admitted ordinary repair; cfg, path mappings and layout uncertainty cannot be acknowledged away".into(),

@@ -192,8 +192,22 @@ def measure(value, request):
             "applicable_item_estimate": selected if applicable else 0,
             "applicable_byte_estimate": selected_bytes if applicable else 0,
             "blockers": dict(counts), "raw_reasons": dict(raw),
+            "chain_reasons": dict(Counter(d["reason"] for d in plan.get("chain_diagnostics", []))),
             "coverage": value["coverage"], "omissions": value["counts"]["omissions"],
             "display_truncation": value["truncation_reasons"]}
+
+
+def verify_negative_control(entry, run, candidate):
+    expected = entry.get("negative_control")
+    if expected is None:
+        return
+    if run["applicable"]:
+        raise ValueError(f"negative control silently unlocked: {entry['id']}")
+    if set(run["raw_reasons"]) != set(expected["blocker_classes"]):
+        raise ValueError(f"negative-control blocker classes drifted: {entry['id']}: {run['raw_reasons']}")
+    # Baselines can predate the additive vocabulary; the candidate must name it.
+    if candidate and set(run["chain_reasons"]) != set(expected["chain_reasons"]):
+        raise ValueError(f"negative-control chain reasons drifted: {entry['id']}: {run['chain_reasons']}")
 
 
 def replay(binary, entry, prelude, timeout):
@@ -250,6 +264,13 @@ def report(results, binaries):
             f"{run['applicable_item_estimate']}/{run['applicable_byte_estimate']}",
             *(run["blockers"].get(reason, 0) for reason in SEGMENTS))
            for entry in results for col, run in entry["runs"].items()])
+    print("\nNamed chain reasons (diagnostic occurrences)")
+    table(("batch / reason", *COLUMNS),
+          [(f"{entry['id']} / {reason}",
+            *(entry["runs"][col].get("chain_reasons", {}).get(reason, 0) for col in COLUMNS))
+           for entry in results
+           for reason in sorted({reason for run in entry["runs"].values()
+                                 for reason in run.get("chain_reasons", {})})])
     print("\nPer-codebase applicability and newly-applicable/regressed batches (A → B)")
     for codebase in sorted({entry["codebase"] for entry in results} | {"ALL"}):
         entries = [entry for entry in results if codebase == "ALL" or entry["codebase"] == codebase]
@@ -318,6 +339,7 @@ def main():
         runs = {}
         for col, binary in zip(COLUMNS, (binaries[0], binaries[0], binaries[1], binaries[1])):
             runs[col] = replay(binary["path"], entry, col.endswith("-on"), args.timeout)
+            verify_negative_control(entry, runs[col], col.startswith("candidate-"))
         results.append({"id": entry["id"], "codebase": entry["codebase"], "label": entry["label"],
                         "runs": runs})
     # Fail rather than attribute a binary replacement during the run to one version.

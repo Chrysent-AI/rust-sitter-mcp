@@ -20,6 +20,8 @@ pub enum ChainReason {
     AmbiguousParent,
     NoOrdinarySiblingParent,
     OrdinaryLayoutMismatch,
+    MacroGeneratedModuleTree,
+    RootAttributeChainUncertainty,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -68,6 +70,27 @@ pub struct ChainDiagnostic {
     pub relation: ChainRelation,
 }
 impl ChainDiagnostic {
+    pub(crate) fn message(&self) -> String {
+        let cause = match self.reason {
+            ChainReason::MacroGeneratedModuleTree => Some(
+                "macro_generated_module_tree: module declarations occur in a macro token tree; syntactic analysis cannot prove the expanded module tree",
+            ),
+            ChainReason::RootAttributeChainUncertainty => Some(
+                "root_attribute_chain_uncertainty: a non-allowlisted inner attribute in the chain requires context the syntactic stage cannot prove",
+            ),
+            _ => None,
+        };
+        match cause {
+            Some(cause) => format!(
+                "{cause} at {}; this corpus is advice-only for the syntactic stage; choose a source/root with an ordinary, unambiguous chain; acknowledgment cannot remove this refusal",
+                self.at_file_path
+            ),
+            None => format!(
+                "ordinary chain from supplied root {} cannot prove {}: {:?}",
+                self.crate_root, self.requested_path, self.reason
+            ),
+        }
+    }
     pub(crate) fn boundary(root: &str, path: &str, role: ChainRole, reason: ChainReason) -> Self {
         Self {
             id: String::new(),
@@ -93,6 +116,82 @@ pub struct ModuleAnalysis {
     pub(crate) failures: Vec<ChainFailure>,
 }
 impl ModuleAnalysis {
+    /// Observe literal declaration-shaped tokens, never expand or resolve macros.
+    /// Only top-level invocation inputs and rule output bodies can obstruct this file's tree.
+    pub(crate) fn record_macro_declarations(
+        &mut self,
+        file: &FileSnapshot,
+        data: &ParsedFile,
+        evidence: &ModuleEvidence,
+        controls: (Instant, &AtomicBool),
+        bytes: &mut usize,
+    ) -> Result<(), DomainError> {
+        let mut stack = vec![data.tree.root_node()];
+        while let Some(node) = stack.pop() {
+            check(controls.0, controls.1)?;
+            match node.kind() {
+                "source_file"
+                | "macro_definition"
+                | "expression_statement"
+                | "macro_invocation" => {
+                    for i in (0..node.named_child_count()).rev() {
+                        stack.push(node.named_child(i as u32).expect("child"));
+                    }
+                }
+                "macro_rule" => {
+                    if let Some(body) = node.child_by_field_name("right") {
+                        stack.push(body);
+                    }
+                }
+                "token_tree" => {
+                    let mut previous: [Option<Node<'_>>; 2] = [None, None];
+                    for i in 0..node.child_count() {
+                        check(controls.0, controls.1)?;
+                        let token = node.child(i).expect("child");
+                        if matches!(token.kind(), "line_comment" | "block_comment") {
+                            continue;
+                        }
+                        if let [Some(keyword), Some(name)] = previous
+                            && keyword.kind() == "mod"
+                            && name.kind() == "identifier"
+                            && (token.kind() == ";"
+                                || (token.kind() == "token_tree"
+                                    && token.child(0).is_some_and(|n| n.kind() == "{")))
+                        {
+                            let flat = child_path(
+                                &file.path,
+                                &evidence.crate_root,
+                                file.source[name.byte_range()].trim_start_matches("r#"),
+                            );
+                            let mut failure = ChainDiagnostic::boundary(
+                                &evidence.crate_root,
+                                "",
+                                ChainRole::Source,
+                                ChainReason::MacroGeneratedModuleTree,
+                            );
+                            failure.at_file_path = file.path.clone();
+                            failure.evidenced_prefix_paths = evidence.filesystem_paths.clone();
+                            failure.declaration = Some(ChainLocation {
+                                path: file.path.clone(),
+                                range: ByteRange {
+                                    start_byte: keyword.start_byte(),
+                                    end_byte: token.end_byte(),
+                                },
+                            });
+                            failure.candidate_paths = vec![
+                                flat.clone(),
+                                format!("{}/mod.rs", flat.trim_end_matches(".rs")),
+                            ];
+                            self.record(failure, bytes)?;
+                        }
+                        previous = [previous[1], Some(token)];
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn project(
         &self,
         root: &str,
@@ -110,13 +209,15 @@ impl ModuleAnalysis {
         for failure in &self.failures {
             check(controls.0, controls.1)?;
             let direct = failure.candidate_paths.iter().any(|p| p == requested);
-            let inherited = failure.reason == ChainReason::InheritedUncertainty
-                && context.is_some_and(|e| {
-                    failure
-                        .candidate_paths
-                        .iter()
-                        .any(|p| e.filesystem_paths.contains(p))
-                });
+            let inherited = matches!(
+                failure.reason,
+                ChainReason::InheritedUncertainty | ChainReason::RootAttributeChainUncertainty
+            ) && context.is_some_and(|e| {
+                failure
+                    .candidate_paths
+                    .iter()
+                    .any(|p| e.filesystem_paths.contains(p))
+            });
             let possible = failure.candidate_paths.iter().any(|p| {
                 let directory = p
                     .strip_suffix("/mod.rs")

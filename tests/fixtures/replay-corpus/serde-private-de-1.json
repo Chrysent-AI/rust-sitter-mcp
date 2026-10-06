@@ -1,0 +1,246 @@
+{
+  "id": "serde-private-de-1",
+  "codebase": "serde",
+  "label": "Missing-field helper; macro-generated module-tree negative control",
+  "source_commit": "6693a89cca77e0151437da1c7f890090b9ebf04c",
+  "provenance": "Constructed read-only from suggest_split inventory ranges and exact UTF-8 byte slices, 2026-10-06.",
+  "negative_control": {
+    "blocker_classes": [
+      "glob_dependency/glob_binding_unproved",
+      "macro_dependency/macro_context_unexamined",
+      "module_context/module_chain_failure",
+      "module_context/conditional_or_inherited_context",
+      "scope_dependency/conditional_or_inherited_context",
+      "visibility_context/member_or_constructor_unproved"
+    ],
+    "chain_reasons": ["macro_generated_module_tree"]
+  },
+  "source_sha256": [
+    {
+      "path": ".gitignore",
+      "sha256": "07d64eb09a56c853b7853a47276799b38d7d6d25a4314b0c1abc10432c214e17"
+    },
+    {
+      "path": "serde/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde/src/lib.rs",
+      "sha256": "a9bb976e6012a20443561e113b7ce37e9f3f0293f60a0dc157c5f973f7e80c55"
+    },
+    {
+      "path": "serde/src/private/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde/src/private/de.rs",
+      "sha256": "68ee17774d3bbc693d9f19803747fa2c3afdb7046482e6d94ac6cf7db5a4fe20"
+    },
+    {
+      "path": "serde/src/private/mod.rs",
+      "sha256": "52cc5b33364b13724ea4c2989f3ccd8ba02a2ef903761499e15264835ff76388"
+    },
+    {
+      "path": "serde/src/private/replay_missing.rs",
+      "sha256": null
+    },
+    {
+      "path": "serde/src/private/ser.rs",
+      "sha256": "bea364a6199b57c2aa5a96a6bb0530176850dbeaaee908a6307fe610c873c8e3"
+    },
+    {
+      "path": "serde_core/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/de/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/private/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/ser/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/de/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/internals/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive_internals/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/no_std/.gitignore",
+      "sha256": "07d64eb09a56c853b7853a47276799b38d7d6d25a4314b0c1abc10432c214e17"
+    },
+    {
+      "path": "test_suite/no_std/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/bytes/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/macros/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/regression/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/borrow/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/conflict/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/default-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/deprecated/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/duplicate-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/enum-representation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/expected-string/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/identifier/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/malformed/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/precondition/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/remote/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/rename/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/struct-representation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/transparent/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/type-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unexpected-literal/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unimplemented/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unknown-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unsupported/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/with-variant/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/with/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/unstable/.gitignore",
+      "sha256": null
+    }
+  ],
+  "request": {
+    "repo_path": "/Users/said/Dev/serde",
+    "crate_root": "serde/src/lib.rs",
+    "paths": [
+      "serde/src/lib.rs",
+      "serde/src/private"
+    ],
+    "moves": [
+      {
+        "item": {
+          "path": "serde/src/private/de.rs",
+          "range": {
+            "end_byte": 1966,
+            "start_byte": 830
+          },
+          "expected_text": "pub fn missing_field<'de, V, E>(field: &'static str) -> Result<V, E>\nwhere\n    V: Deserialize<'de>,\n    E: Error,\n{\n    struct MissingFieldDeserializer<E>(&'static str, PhantomData<E>);\n\n    #[cfg_attr(not(no_diagnostic_namespace), diagnostic::do_not_recommend)]\n    impl<'de, E> Deserializer<'de> for MissingFieldDeserializer<E>\n    where\n        E: Error,\n    {\n        type Error = E;\n\n        fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, E>\n        where\n            V: Visitor<'de>,\n        {\n            Err(Error::missing_field(self.0))\n        }\n\n        fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, E>\n        where\n            V: Visitor<'de>,\n        {\n            visitor.visit_none()\n        }\n\n        serde_core::forward_to_deserialize_any! {\n            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string\n            bytes byte_buf unit unit_struct newtype_struct seq tuple\n            tuple_struct map struct enum identifier ignored_any\n        }\n    }\n\n    let deserializer = MissingFieldDeserializer(field, PhantomData);\n    Deserialize::deserialize(deserializer)\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "serde/src/private/replay_missing.rs",
+          "parent_path": "serde/src/private/mod.rs"
+        }
+      }
+    ],
+    "limits": {
+      "response_bytes": 16777216,
+      "text_bytes": 0,
+      "diagnostic_count": 1000
+    }
+  }
+}

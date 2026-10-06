@@ -1,5 +1,83 @@
 use super::*;
 
+#[test]
+fn macro_root_move_refuses_with_named_actionable_cause() {
+    let repo = Fixture::generate();
+    let root = "cases/refusals/lib.rs";
+    let parent = "cases/refusals/branch.rs";
+    let source = "cases/refusals/branch/leaf.rs";
+    repo.write(parent, "mod leaf;\n");
+    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    let args = json!({"repo_path":repo.0,"crate_root":root,"paths":["cases/refusals"],"moves":[{"item":anchor(&repo,source,"fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/refusals/branch/moved.rs","parent_path":parent}}],"limits":{"diagnostic_count":1000}});
+    for written in [
+        chain_fixture::MACRO_ROOT,
+        "emit_modules!(mod /* tokens */ branch;);\n",
+    ] {
+        repo.write(root, written);
+        let result = run(&repo, args.clone());
+        withheld(&result);
+        chain_fixture::named_refusal(
+            &result["plan"]["chain_diagnostics"],
+            &result["plan"]["decisions"],
+            "macro_generated_module_tree",
+            "macro token tree",
+        );
+        assert_eq!(
+            result["plan"]["chain_diagnostics"][0]["relation"],
+            "possible_ancestor"
+        );
+        assert_eq!(result, run(&repo, args.clone()));
+    }
+    // An unrelated macro declaration cannot change a proven ordinary chain.
+    repo.write(
+        root,
+        "mod branch;\nmacro_rules! unrelated { () => { mod other; }; }\n",
+    );
+    let clean = run(&repo, args);
+    assert!(
+        clean["plan"]["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn inner_attribute_move_adds_named_cause_without_changing_inherited_veto() {
+    let repo = Fixture::generate();
+    let root = "cases/refusals/lib.rs";
+    let parent = "cases/refusals/branch.rs";
+    let source = "cases/refusals/branch/leaf.rs";
+    repo.write(parent, "mod leaf;\n");
+    for (written, leaf) in [
+        (
+            chain_fixture::INNER_ATTR_ROOT,
+            "fn selected() {}\nfn retained() {}\n",
+        ),
+        ("mod branch;\n", chain_fixture::INNER_ATTR_NESTED),
+    ] {
+        repo.write(root, written);
+        repo.write(source, leaf);
+        let args = json!({"repo_path":repo.0,"crate_root":root,"paths":["cases/refusals"],"moves":[{"item":anchor(&repo,source,"fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/refusals/branch/moved.rs","parent_path":parent}}],"limits":{"diagnostic_count":1000}});
+        let result = run(&repo, args);
+        withheld(&result);
+        let diagnostics = &result["plan"]["chain_diagnostics"];
+        chain_fixture::named_refusal(
+            diagnostics,
+            &result["plan"]["decisions"],
+            "root_attribute_chain_uncertainty",
+            "non-allowlisted inner attribute",
+        );
+        assert!(
+            diagnostics
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "inherited_uncertainty")
+        );
+    }
+}
+
 fn linked_move(result: &Value) {
     let diagnostics = &result["plan"]["chain_diagnostics"];
     let decisions = &result["plan"]["decisions"];

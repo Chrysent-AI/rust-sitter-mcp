@@ -1,0 +1,355 @@
+{
+  "id": "serde-attr-type-2",
+  "codebase": "serde",
+  "label": "Type-predicate helper batch; root-attribute negative control",
+  "source_commit": "6693a89cca77e0151437da1c7f890090b9ebf04c",
+  "provenance": "Constructed read-only from suggest_split inventory ranges and exact UTF-8 byte slices, 2026-10-06.",
+  "negative_control": {
+    "blocker_classes": [
+      "glob_dependency/glob_binding_unproved",
+      "module_context/module_chain_failure",
+      "module_context/conditional_or_inherited_context",
+      "scope_dependency/conditional_or_inherited_context",
+      "visibility_context/member_or_constructor_unproved"
+    ],
+    "chain_reasons": ["inherited_uncertainty", "root_attribute_chain_uncertainty"]
+  },
+  "source_sha256": [
+    {
+      "path": ".gitignore",
+      "sha256": "07d64eb09a56c853b7853a47276799b38d7d6d25a4314b0c1abc10432c214e17"
+    },
+    {
+      "path": "serde/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde/src/private/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/de/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/private/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_core/src/ser/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/bound.rs",
+      "sha256": "7daa248b3b1121bba90c5a184bbd9b630d46bca4b4c1b5814df97f494bf1ee9e"
+    },
+    {
+      "path": "serde_derive/src/de.rs",
+      "sha256": "a04fdb321ce47b479b42b2dd0ca1cfd57db88e06451d7dc95303c582fedc135c"
+    },
+    {
+      "path": "serde_derive/src/de/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/de/enum_.rs",
+      "sha256": "5a099a25034e4f9364d421a53cfb4428ea8a94fd66515c66207bf8bfb7c4db4f"
+    },
+    {
+      "path": "serde_derive/src/de/enum_adjacently.rs",
+      "sha256": "987d3a9fc7eda53776f0ccc3fbe64147ccfc8caf2ee202d3ad6432daf033a194"
+    },
+    {
+      "path": "serde_derive/src/de/enum_externally.rs",
+      "sha256": "d001b7eab7f89165f29c7459a12c2baf4898c0ff456c219afabb5d19c20462e3"
+    },
+    {
+      "path": "serde_derive/src/de/enum_internally.rs",
+      "sha256": "9d898dbc1c46262f695ef7ba1660b2af70de48e07bbac8f44b740326b7c5b303"
+    },
+    {
+      "path": "serde_derive/src/de/enum_untagged.rs",
+      "sha256": "b66ad3cea36ee786d50270f6648f1075c1e615b5f04173b47f034a251df5220e"
+    },
+    {
+      "path": "serde_derive/src/de/identifier.rs",
+      "sha256": "b653c26f4274e5c323e3f893c6f9a2b21bd5c873abdc2a801f0289a5e56a9f6c"
+    },
+    {
+      "path": "serde_derive/src/de/struct_.rs",
+      "sha256": "7b26982ce59504a9bb5a18c3ab56eee2d75e70fd465774ff035d15c50452c118"
+    },
+    {
+      "path": "serde_derive/src/de/tuple.rs",
+      "sha256": "5496ee711b935b17269960f4a0cfcb7d23de668db9489dfca7276ce1fcdf0f6f"
+    },
+    {
+      "path": "serde_derive/src/de/unit.rs",
+      "sha256": "b792db7952fc2e4719fdce9552fe4ba1836086cc967ae9a5b919c28b30f2b4a0"
+    },
+    {
+      "path": "serde_derive/src/deprecated.rs",
+      "sha256": "cff374e86ea5f134913a2a194a68d7c2510ffd5214956d10b9c496e90a20a952"
+    },
+    {
+      "path": "serde_derive/src/dummy.rs",
+      "sha256": "dce9d53f7f6efb41043d6dbd741e03e65fe0a56b2f739a041184036cd7491b16"
+    },
+    {
+      "path": "serde_derive/src/fragment.rs",
+      "sha256": "6757cb4c3131d4300f093572efc273c4ab5a20e3e1efb54a311dcfa52d0bd6eb"
+    },
+    {
+      "path": "serde_derive/src/internals/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/internals/ast.rs",
+      "sha256": "bc6244a25f536cfee82f14a29df25b7e9bc299a639debe702b9bb060c1ac99fb"
+    },
+    {
+      "path": "serde_derive/src/internals/attr.rs",
+      "sha256": "7abe82fde303a3c31f967c13e0ee1afe49ea584d882b9d2c32b067888e1c8225"
+    },
+    {
+      "path": "serde_derive/src/internals/case.rs",
+      "sha256": "10c8dda2b32d8c6c6b63cf09cdc63d02375af7e95ecefe8fecb34f93b65191bb"
+    },
+    {
+      "path": "serde_derive/src/internals/check.rs",
+      "sha256": "86ea817316638ec33f70ecdf9634a31c934fd3df84533e3e315816dc130f0bff"
+    },
+    {
+      "path": "serde_derive/src/internals/ctxt.rs",
+      "sha256": "79c058495febd402facbfa24d8a82d0d53fd91a6497ad4e9595a4dcca2e0e0bc"
+    },
+    {
+      "path": "serde_derive/src/internals/mod.rs",
+      "sha256": "c1ece6bbce5a5e8a2bf5d6d9a29e85551258db9c610fab73ac19c6b7d8cf98fd"
+    },
+    {
+      "path": "serde_derive/src/internals/name.rs",
+      "sha256": "9bc1553d7b493794cd436664ee6b43fccb914f271fa86705ae2937ae923a876f"
+    },
+    {
+      "path": "serde_derive/src/internals/receiver.rs",
+      "sha256": "c75e0ba04602c5771d662004f32b82bf01e11c1905153ba4c073969788b75abe"
+    },
+    {
+      "path": "serde_derive/src/internals/replay_type_checks.rs",
+      "sha256": null
+    },
+    {
+      "path": "serde_derive/src/internals/respan.rs",
+      "sha256": "899753859c58ce5f532a3ec4584796a52f13ed5a0533191e48c953ba5c1b52ff"
+    },
+    {
+      "path": "serde_derive/src/internals/symbol.rs",
+      "sha256": "d2590f1c8356d6a10923476b558c39a85b77392ba09c92fa97e05e2c403e73c7"
+    },
+    {
+      "path": "serde_derive/src/lib.rs",
+      "sha256": "9c8efaaaad77caa41178ca4316bff1ccbb7a864673d88639d258b7c5619a4ad4"
+    },
+    {
+      "path": "serde_derive/src/pretend.rs",
+      "sha256": "b3e4928f49b1f380c91afc575733586e5bced5d76f02847736c267c00872df91"
+    },
+    {
+      "path": "serde_derive/src/ser.rs",
+      "sha256": "18b3a4d06cd721c402835b17f008a63fdbaad379734f0fd4132aa28d8ea5c1de"
+    },
+    {
+      "path": "serde_derive/src/this.rs",
+      "sha256": "87818dc80cbb521b51938a653d09daf10aafc220bb10425948de82ad670fcb85"
+    },
+    {
+      "path": "serde_derive_internals/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/no_std/.gitignore",
+      "sha256": "07d64eb09a56c853b7853a47276799b38d7d6d25a4314b0c1abc10432c214e17"
+    },
+    {
+      "path": "test_suite/no_std/src/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/bytes/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/macros/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/regression/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/borrow/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/conflict/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/default-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/deprecated/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/duplicate-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/enum-representation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/expected-string/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/identifier/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/malformed/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/precondition/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/remote/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/rename/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/struct-representation/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/transparent/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/type-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unexpected-literal/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unimplemented/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unknown-attribute/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/unsupported/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/with-variant/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/ui/with/.gitignore",
+      "sha256": null
+    },
+    {
+      "path": "test_suite/tests/unstable/.gitignore",
+      "sha256": null
+    }
+  ],
+  "request": {
+    "repo_path": "/Users/said/Dev/serde",
+    "crate_root": "serde_derive/src/lib.rs",
+    "paths": [
+      "serde_derive/src"
+    ],
+    "moves": [
+      {
+        "item": {
+          "path": "serde_derive/src/internals/attr.rs",
+          "range": {
+            "end_byte": 62790,
+            "start_byte": 62720
+          },
+          "expected_text": "fn is_str(ty: &syn::Type) -> bool {\n    is_primitive_type(ty, \"str\")\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "serde_derive/src/internals/replay_type_checks.rs",
+          "parent_path": "serde_derive/src/internals/mod.rs"
+        }
+      },
+      {
+        "item": {
+          "path": "serde_derive/src/internals/attr.rs",
+          "range": {
+            "end_byte": 62951,
+            "start_byte": 62792
+          },
+          "expected_text": "fn is_slice_u8(ty: &syn::Type) -> bool {\n    match ungroup(ty) {\n        syn::Type::Slice(ty) => is_primitive_type(&ty.elem, \"u8\"),\n        _ => false,\n    }\n}"
+        },
+        "destination": {
+          "kind": "new_sibling",
+          "path": "serde_derive/src/internals/replay_type_checks.rs",
+          "parent_path": "serde_derive/src/internals/mod.rs"
+        }
+      }
+    ],
+    "limits": {
+      "response_bytes": 16777216,
+      "text_bytes": 0,
+      "diagnostic_count": 1000
+    }
+  }
+}
