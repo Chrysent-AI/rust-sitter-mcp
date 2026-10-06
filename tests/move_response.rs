@@ -81,8 +81,8 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
         assert!(result["plan"][artifact].is_null());
     }
     let decisions = result["plan"]["decisions"].as_array().unwrap();
-    assert_eq!(decisions.len(), 1);
-    assert_eq!(result["counts"]["omissions"]["decisions"], 360 - 1);
+    assert_eq!(decisions.len(), 2); // One blocking cause plus the opt-in removal gap.
+    assert_eq!(result["counts"]["omissions"]["decisions"], 361 - 2);
     assert_eq!(result["counts"]["omissions"]["moves"], 30 - 4);
     assert_eq!(result["plan"]["moves"].as_array().unwrap().len(), 4);
     assert_eq!(result["truncation_reasons"], json!(["diagnostic_count"]));
@@ -96,37 +96,73 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
         assert_eq!(decision["evidence"], json!([]));
     }
     let groups = &result["plan"]["decision_groups"];
-    assert_eq!(groups.as_array().unwrap().len(), 1);
-    assert_eq!(groups[0]["count"], 360);
+    assert_eq!(groups.as_array().unwrap().len(), 2);
+    let gap_group = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["reason"] == "removal_gap_choice")
+        .unwrap();
+    let blocking_group = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["reason"] == "member_or_constructor_unproved")
+        .unwrap();
+    assert_eq!(gap_group["blocks_applicability"], false);
+    assert_eq!(gap_group["count"], 1);
     assert_eq!(
-        groups[0]["decision_ids"],
+        decisions[1]["removal_gap"]["default_disposition"],
+        "keep_in_place"
+    );
+    assert_eq!(blocking_group["count"], 360);
+    assert_eq!(
+        blocking_group["decision_ids"],
         json!([{"first_id":"d/0","count":360}])
     );
-    assert_eq!(groups[0]["blocks_applicability"], true);
-    assert_eq!(groups[0]["reason"], "member_or_constructor_unproved");
-    assert_eq!(groups[0]["route"], "unsupported_in_engine");
+    assert_eq!(blocking_group["blocks_applicability"], true);
+    assert_eq!(blocking_group["route"], "unsupported_in_engine");
     assert_eq!(
-        groups[0]["actions"][0]["construct"],
+        blocking_group["actions"][0]["construct"],
         "member_or_constructor_unproved"
     );
-    assert!(groups[0]["actions"][0]["instruction"].is_string());
+    assert!(blocking_group["actions"][0]["instruction"].is_string());
 
     let mut full = args.clone();
     full["limits"] = json!({"diagnostic_count":512});
     let full = run(&repo, full);
-    assert_eq!(full["plan"]["decisions"].as_array().unwrap().len(), 360);
+    assert_eq!(full["plan"]["decisions"].as_array().unwrap().len(), 361);
     assert!(full["counts"]["omissions"]["decisions"].is_null());
     assert_eq!(full["plan"]["decision_groups"], *groups);
-    for (compact, expanded) in decisions
-        .iter()
-        .zip(full["plan"]["decisions"].as_array().unwrap())
-    {
+    for compact in decisions {
+        let expanded = full["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["id"] == compact["id"])
+            .unwrap();
+        let group = groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["reason"] == compact["reason"])
+            .unwrap();
         assert_eq!(compact["anchors"], expanded["anchors"]);
         assert!(compact.get("next_action").is_none());
         assert!(compact["action"].get("instruction").is_none());
-        assert_eq!(groups[0]["actions"][0], expanded["action"]);
         assert_eq!(
-            groups[0]["unresolved_consequence"],
+            group["actions"][0],
+            if expanded["reason"] == "removal_gap_choice" {
+                let mut action = expanded["action"].clone();
+                action["target"] = Value::Null;
+                action
+            } else {
+                expanded["action"].clone()
+            }
+        );
+        assert_eq!(compact["removal_gap"], expanded["removal_gap"]);
+        assert_eq!(
+            group["unresolved_consequence"],
             expanded["unresolved_consequence"]
         );
     }
@@ -136,14 +172,14 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
         let explicit = run(&repo, explicit);
         assert_eq!(
             explicit["plan"]["decisions"],
-            json!(full["plan"]["decisions"].as_array().unwrap()[..count.min(360)])
+            json!(full["plan"]["decisions"].as_array().unwrap()[..count.min(361)])
         );
     }
     let mut zero = args;
     zero["limits"] = json!({"diagnostic_count":0});
     let zero = run(&repo, zero);
     assert_eq!(zero["plan"]["decisions"], json!([]));
-    assert_eq!(zero["counts"]["omissions"]["decisions"], 360);
+    assert_eq!(zero["counts"]["omissions"]["decisions"], 361);
     assert_eq!(zero["plan"]["decision_groups"], *groups);
 }
 
@@ -157,7 +193,7 @@ fn blocked_rewrite_previews_are_counted_capped_and_explicitly_expandable() {
     assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
     let rewrites = result["plan"]["rewrites"].as_array().unwrap();
     assert_eq!(rewrites.len(), 4);
-    assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 1);
+    assert_eq!(result["plan"]["decisions"].as_array().unwrap().len(), 2);
     let total = result["counts"]["rewrites"].as_u64().unwrap() as usize;
     assert!(total > 64);
     assert_eq!(result["counts"]["omissions"]["rewrites"], total - 4);
@@ -205,7 +241,7 @@ fn blocked_rewrite_previews_are_counted_capped_and_explicitly_expandable() {
     implicit["limits"] = json!({"text_bytes":0});
     let implicit = run(&repo, implicit);
     assert_eq!(implicit["plan"]["rewrites"].as_array().unwrap().len(), 4);
-    assert_eq!(implicit["plan"]["decisions"].as_array().unwrap().len(), 1);
+    assert_eq!(implicit["plan"]["decisions"].as_array().unwrap().len(), 2);
     let mut zero = args;
     zero["limits"] = json!({"diagnostic_count":0});
     let zero = run(&repo, zero);

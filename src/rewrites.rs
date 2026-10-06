@@ -616,23 +616,18 @@ impl Analyzer<'_> {
             .get(path)
             .map(|f| f.source.as_str())
             .unwrap_or("");
-        let at = self
+        let (at, boundary_item) = self
             .parsed
             .get(path)
-            .and_then(|data| {
-                data.items.first().map(|first| {
-                    data.trivia
-                        .iter()
-                        .filter(|t| {
-                            t.owned_by(first.span.range.start_byte..first.span.range.end_byte)
-                                && t.range.end <= first.span.range.start_byte
-                        })
-                        .map(|t| t.range.start)
-                        .min()
-                        .unwrap_or(first.span.range.start_byte)
-                })
-            })
-            .unwrap_or(source.len());
+            .map(|data| crate::move_plan::ergonomics::import_boundary(data, source))
+            .unwrap_or((source.len(), None));
+        let mut anchors = vec![evidence];
+        if let Some(item) = boundary_item {
+            anchors.push(anchor(self.files, path, &item.span.range));
+        }
+        if self.files.contains_key(path) {
+            anchors.push(anchor(self.files, path, &span(at, at)));
+        }
         let eol = if source.contains("\r\n") {
             "\r\n"
         } else {
@@ -642,7 +637,7 @@ impl Analyzer<'_> {
         self.add(Repair {
             path: path.into(), range: span(at, at), after: text, kind: "import_insert",
             target: RewriteTarget::Synthesis { path: path.into(), slot: "import".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(binding.into()) },
-            item_ids: ids.to_vec(), anchors: vec![evidence], rationale: format!("preserve the unique written binding {binding} through explicit {target}; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false, import_module: None, import_scope: None,
+            item_ids: ids.to_vec(), anchors, rationale: format!("preserve the unique written binding {binding} through explicit {target}; insert after the last attached use, or before the first attached item; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false, import_module: None, import_scope: None,
         });
         true
     }

@@ -293,6 +293,8 @@ fn overflow_preserves_complete_membership_and_root_and_schemas_publish_all_route
         "unsupported_in_engine",
         "review_default",
         "submit_for_analysis",
+        "removal_gap_choice",
+        "default_disposition",
     ] {
         assert!(schema.contains(field));
     }
@@ -309,13 +311,23 @@ fn overflow_preserves_complete_membership_and_root_and_schemas_publish_all_route
     assert_eq!(result["status"], "partial");
     assert!(result["plan"]["decisions"].as_array().unwrap().is_empty());
     assert!(result["root"].is_string() && result["snapshot_id"].is_string());
-    assert_eq!(result["plan"]["decision_groups"][0]["count"], 360);
+    let blocking_group = result["plan"]["decision_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["blocks_applicability"] == true)
+        .unwrap();
+    assert_eq!(blocking_group["count"], 360);
     assert_eq!(
-        result["plan"]["decision_groups"][0]["decision_ids"],
+        blocking_group["decision_ids"],
         json!([{"first_id":"d/0","count":360}])
     );
+    assert_eq!(
+        result["plan"]["decision_groups"].as_array().unwrap().len(),
+        2
+    );
     assert!(result["counts"]["omissions"]["decision_groups"].is_null());
-    assert_eq!(result["counts"]["omissions"]["decisions"], 360);
+    assert_eq!(result["counts"]["omissions"]["decisions"], 361);
     let advice = client.call("suggest_split", json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","source_path":"cases/layout/source.rs","paths":["cases/layout"],"limits":{"text_bytes":0,"response_bytes":65536}}));
     assert_eq!(advice["status"], "partial");
     assert!(advice["decisions"].as_array().unwrap().is_empty());
