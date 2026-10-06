@@ -18,7 +18,20 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
     assert_eq!(envelope["status"], "complete", "{envelope}");
     assert_eq!(plan["applicable"], true, "{envelope}");
     assert_eq!(plan["integrity"]["syntax"], "checked");
-    assert_eq!(plan["integrity"]["semantic"], "not_performed");
+    if plan["integrity"]["semantic"] == "resolution_performed" {
+        assert_eq!(
+            plan["resolution_coverage"]["decisions"],
+            envelope["coverage"]["ra_resolved"]
+        );
+        assert!(
+            plan["resolution_coverage"]["statement"]
+                .as_str()
+                .unwrap()
+                .ends_with("compilation/equivalence not performed")
+        );
+    } else {
+        assert_eq!(plan["integrity"]["semantic"], "not_performed");
+    }
     let patch = plan["patch"].as_str().unwrap();
     assert!(!patch.is_empty());
     for forbidden in ["deleted file mode", "old mode", "new mode", "rename from"] {

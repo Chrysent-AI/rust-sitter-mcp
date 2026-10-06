@@ -149,6 +149,17 @@ fn real_stdio_query() {
             .unwrap()
             .contains(&json!("crate_root"))
     );
+    assert_eq!(
+        move_tool["inputSchema"]["properties"]["resolve_semantic"]["type"],
+        "boolean"
+    );
+    assert!(
+        !move_tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("resolve_semantic"))
+    );
+    assert!(move_tool["inputSchema"]["properties"]["semantic_configuration"].is_object());
     let description = move_tool["description"].as_str().unwrap();
     for phrase in [
         "Read-only simultaneous plan",
@@ -161,7 +172,12 @@ fn real_stdio_query() {
         "unsupported or uncertain dependencies block the entire batch",
         "Blocked previews are not applicable artifacts",
         "published together or withheld",
-        "Semantic checking is not_performed",
+        "Default semantic checking is not_performed",
+        "resolve_semantic defaults to false",
+        "class ra_resolved",
+        "compilation/equivalence not performed",
+        "No Cargo/project discovery",
+        "actual final virtual batch",
         "never writes, formats, compiles or applies changes",
     ] {
         assert!(

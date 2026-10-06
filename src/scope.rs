@@ -690,6 +690,84 @@ pub fn discover(
     }
     Ok((files, snapshot))
 }
+/// Hash immutable semantic inputs with the same read-only, filter-free Git boundary.
+pub(crate) fn hash_serialized(
+    root: &Path,
+    value: &impl serde::Serialize,
+    controls: (Instant, &std::sync::atomic::AtomicBool),
+) -> Result<String, DomainError> {
+    let (deadline, cancelled) = controls;
+    let format = git_output(root, &["rev-parse", "--show-object-format"])?;
+    let mut child = git(root)
+        .args(["hash-object", "--stdin", "--no-filters"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            DomainError::new("GIT_READ_FAILED", "could not start semantic input hasher")
+        })?;
+    struct ControlledWriter<'a> {
+        input: std::process::ChildStdin,
+        deadline: Instant,
+        cancelled: &'a std::sync::atomic::AtomicBool,
+    }
+    impl Write for ControlledWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            for chunk in bytes.chunks(64 * 1024) {
+                if crate::items::check(self.deadline, self.cancelled).is_err() {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.input.write_all(chunk)?;
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.input.flush()
+        }
+    }
+    let streamed = serde_json::to_writer(
+        ControlledWriter {
+            input: child.stdin.take().expect("piped hasher input"),
+            deadline,
+            cancelled,
+        },
+        value,
+    );
+    if streamed.is_err() {
+        let _ = child.kill();
+    }
+    let mut output = Vec::new();
+    let read = child
+        .stdout
+        .take()
+        .expect("piped hasher output")
+        .take(129)
+        .read_to_end(&mut output);
+    if output.len() > 128 {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .map_err(|_| DomainError::new("GIT_READ_FAILED", "could not reap semantic input hasher"))?;
+    crate::items::check(deadline, cancelled)?;
+    streamed.map_err(|_| DomainError::new("GIT_READ_FAILED", "semantic input hashing failed"))?;
+    let oid = String::from_utf8(output)
+        .map_err(|_| DomainError::new("GIT_READ_FAILED", "invalid hash output"))?;
+    let oid = oid.trim_end_matches('\n');
+    if read.is_err()
+        || !status.success()
+        || !matches!(format.as_str(), "sha1" | "sha256")
+        || oid.len() != if format == "sha1" { 40 } else { 64 }
+        || !oid.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(DomainError::new(
+            "GIT_READ_FAILED",
+            "invalid semantic input hash",
+        ));
+    }
+    Ok(format!("{format}:{oid}"))
+}
 fn fingerprint(
     scope: &Scope,
     files: &[FileSnapshot],

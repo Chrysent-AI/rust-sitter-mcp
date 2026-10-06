@@ -2,7 +2,7 @@
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server for structural Rust refactoring — built for coding agents, useful to anyone who edits Rust.
 
-It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comment, attribute, and byte outside the edit, and emits **git-apply-compatible patches** your agent (or you) can review and apply. The server never writes to your source tree.
+It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comment, attribute, and byte outside the edit, and emits **git-apply-compatible patches** your agent (or you) can review and apply. Whole-item moves can additionally opt into bounded rust-analyzer resolution over explicitly configured, admitted source texts. The server never writes to your source tree.
 
 ## Tools
 
@@ -20,7 +20,7 @@ Every mutating tool returns a **plan** (`applicable` / `blocked` / `incomplete`)
 
 - **Read-only.** No tool writes to your repository; patches are applied externally by you or your agent.
 - **Lossless.** Untouched bytes stay byte-identical; moved items carry their comments with them; line endings and formatting are never normalized.
-- **Honest.** Results report completeness, coverage, and skips precisely. Matching is syntactic: `semantic: "not_performed"` in every plan — the server does not claim your code compiles after a patch (though the test suite compiles fixture patches to verify them).
+- **Honest.** Results report completeness, coverage, and skips precisely. Default plans keep `semantic: "not_performed"`. Opt-in move resolution uses `ra_resolved` occurrence proofs and `semantic: "resolution_performed"`, scoped to one explicit crate graph/configuration and the exact final virtual batch. Neither mode claims compilation or semantic equivalence (the test suite separately compiles fixture patches). No Cargo discovery, caller build scripts or proc macros are executed.
 
 ## Install
 
