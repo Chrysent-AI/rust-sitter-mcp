@@ -57,7 +57,17 @@ Note: `request_field` route means "a request field or choice is actionable per `
 | `required_rewrite_retained` | A required repair was rejected | Re-submit with `accept_default` or a valid `replace`. |
 | `unsupported_unit_kind` / `unsupported_construct` | Context-sensitive or unsupported form | Omit from moves. |
 
-### Module-chain failures
+### Advice-completeness states (suggest_split)
+
+| `draft_eligibility.state` / reason | Meaning | Recovery |
+|---|---|---|
+| `incomplete` + `response_bytes` | Drafts/decisions withheld at the response cap | Retry with `limits: {"response_bytes": 8388608}` (≤16 MiB). Membership may still be complete — the inventory is usable. |
+| `no_draft` + `no_admitted_nonconflicting_name…` | Already modularized / too few movable units | Legitimate "nothing to do"; report the design, don't force a split. |
+| `no_draft` + chain reasons | Root/scope problem | Fix `crate_root`/`paths` per chain diagnostics. |
+
+`root: null` in the advice envelope means the same response-budget truncation — recover the budget before constructing anchors.
+
+## Module-chain failures
 
 All 13 chain reasons appear under `chain_diagnostics` — not only for a wrong `crate_root`: a valid root can still hit unadmitted (`chain_file_unadmitted`), missing (`chain_file_missing`), conditional (`conditional_declaration`), path-attribute, competing (`competing_declarations`/`competing_file_layout`), or inline (`inline_module_layout`) hops. Follow the diagnostic's named failing hop; `relation` distinguishes `direct` observations from mere `possible_ancestor` obstructions.
 
