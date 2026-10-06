@@ -346,7 +346,12 @@ impl Analyzer<'_> {
             .collect()
     }
     // Consumer-side routing only: never discharge a moved declaration's API need.
-    fn written_target(&self, need: &mut Need, target: &str) -> Option<(String, Vec<SourceAnchor>)> {
+    fn written_target(
+        &self,
+        need: &mut Need,
+        target: &str,
+        using: &[String],
+    ) -> Option<(String, Vec<SourceAnchor>)> {
         const MAX_REEXPORT_HOPS: usize = 8;
         let mut target = target.to_owned();
         let mut seen = std::collections::BTreeSet::new();
@@ -362,6 +367,9 @@ impl Analyzer<'_> {
                     return None;
                 }
                 if !anchors.is_empty() {
+                    if !self.accessible_route(need, &path, &item, using) {
+                        return None;
+                    }
                     anchors.push(anchor(self.files, &path, &item.span.range));
                 }
                 return Some((target, anchors));
@@ -400,6 +408,117 @@ impl Analyzer<'_> {
             anchors.push(anchor(self.files, &binding.path, &binding.leaf.declaration));
             target = next;
         }
+    }
+    // Following a facade does not authorize widening the canonical route's modules.
+    // Check the final consumer against every written edge before producing any repair.
+    fn accessible_route(&self, need: &mut Need, path: &str, item: &Item, using: &[String]) -> bool {
+        let final_path = self.final_path(path, item);
+        let Some(context) = self.final_contexts.get(final_path) else {
+            return self.inaccessible_route(need, item.name.as_deref().unwrap_or("crate"), None);
+        };
+        for (index, segment) in context.module_segments.iter().enumerate() {
+            if items::check(self.controls.0, self.controls.1).is_err() {
+                return false;
+            }
+            let declaration = context.declaration_anchors.get(index);
+            let parent = &context.module_segments[..index];
+            let visible = declaration.and_then(|a| {
+                let data = self.parsed.get(&a.path)?;
+                let module = data.items.iter().find(|i| i.span.range == a.range)?;
+                if !context.unresolved.is_empty()
+                    || module.kind != "mod_item"
+                    || module.name.as_deref() != Some(segment)
+                    || !module.attributes.is_empty()
+                    || module.syntax.file_has_recovery
+                    || !self
+                        .contexts
+                        .get(&a.path)
+                        .is_some_and(|c| c.unresolved.is_empty() && c.module_segments == parent)
+                {
+                    return None;
+                }
+                self.module_visible(&a.path, module, parent, using)
+            });
+            if visible != Some(true) {
+                return self.inaccessible_route(need, segment, declaration);
+            }
+        }
+        if !context.unresolved.is_empty() {
+            return self.inaccessible_route(need, "crate", None);
+        }
+        true
+    }
+    fn module_visible(
+        &self,
+        path: &str,
+        module: &Item,
+        parent: &[String],
+        using: &[String],
+    ) -> Option<bool> {
+        match module.visibility_key {
+            "pub" | "pub(crate)" => return Some(true),
+            "private" => return Some(using.starts_with(parent)),
+            "restricted" => {}
+            _ => return None,
+        }
+        let node = self.parsed[path]
+            .tree
+            .root_node()
+            .named_descendant_for_byte_range(
+                module.span.range.start_byte,
+                module.span.range.end_byte,
+            )?;
+        let modifier = (0..node.named_child_count())
+            .filter_map(|i| node.named_child(i as u32))
+            .find(|n| n.kind() == "visibility_modifier")?;
+        // Significant grammar tokens admit whitespace/comments without guessing from text.
+        let mut text = String::new();
+        let mut stack = vec![modifier];
+        while let Some(node) = stack.pop() {
+            items::check(self.controls.0, self.controls.1).ok()?;
+            if matches!(node.kind(), "line_comment" | "block_comment") {
+                continue;
+            }
+            if node.child_count() == 0 {
+                text.push_str(&self.files[path].source[node.byte_range()]);
+            } else {
+                for i in (0..node.child_count()).rev() {
+                    stack.push(node.child(i).expect("child"));
+                }
+            }
+        }
+        let restriction = text.strip_prefix("pub(")?.strip_suffix(')')?;
+        let restriction = match restriction {
+            "self" | "super" => restriction,
+            _ => restriction.strip_prefix("in")?,
+        };
+        let scope = absolute_path(parent, restriction)?;
+        let scope: Vec<_> = scope.split("::").skip(1).map(str::to_owned).collect();
+        // Rust restrictions must denote an ancestor, never an arbitrary module or alias.
+        parent
+            .starts_with(&scope)
+            .then(|| using.starts_with(&scope))
+    }
+    fn inaccessible_route(
+        &self,
+        need: &mut Need,
+        segment: &str,
+        declaration: Option<&SourceAnchor>,
+    ) -> bool {
+        need.reason = DecisionReason::VisibilityScopeUnproved;
+        need.category = "visibility_context";
+        need.message = format!(
+            "canonical written re-export route segment {segment} is inaccessible or its visibility from the destination is unproved; no route rewrite or module widening is offered"
+        );
+        let class = format!("inaccessible_route:{segment}");
+        let basis = if let Some(a) = declaration {
+            items::RefusalBasis::new(&class, &a.path, Some(a.range.clone()))
+        } else {
+            // Missing/synthesized edges have no written declaration coordinates.
+            items::RefusalBasis::new(&class, &need.path, None)
+        };
+        need.refusal_basis.push(basis.named(segment));
+        false
     }
     fn missing_target(&self, need: &mut Need, target: &str) -> bool {
         need.reason = DecisionReason::ExternalOrMissingBinding;
@@ -578,6 +697,12 @@ impl Analyzer<'_> {
             let Some(item) = item else {
                 return false;
             };
+            // A retained module's relative restriction keeps its written parent scope.
+            if item.kind == "mod_item"
+                && self.module_visible(path, item, defining, using) == Some(true)
+            {
+                return true;
+            }
             let node = self.parsed[path]
                 .tree
                 .root_node()
@@ -1059,7 +1184,7 @@ impl Analyzer<'_> {
             let (terminal, hops) = if leaf.public {
                 (old.clone(), Vec::new())
             } else {
-                let Some(resolved) = self.written_target(need, &old) else {
+                let Some(resolved) = self.written_target(need, &old, &using) else {
                     return false;
                 };
                 resolved
@@ -1407,7 +1532,7 @@ impl Analyzer<'_> {
             need.reason = DecisionReason::ExternalOrMissingBinding;
             return false;
         };
-        let Some((old, reexports)) = self.written_target(need, &old) else {
+        let Some((old, reexports)) = self.written_target(need, &old, &using) else {
             return false;
         };
         let Some((path, binding)) = self.declaration(&old) else {
@@ -2098,7 +2223,7 @@ impl Analyzer<'_> {
             let Some(old) = self.imported_target(nearest[0]) else {
                 return false;
             };
-            let Some((old, _)) = self.written_target(need, &old) else {
+            let Some((old, _)) = self.written_target(need, &old, &using) else {
                 return false;
             };
             return if let Some((p, i)) = self.declaration(&old) {
@@ -2147,7 +2272,7 @@ impl Analyzer<'_> {
         } else {
             return false;
         };
-        let Some((old, reexports)) = self.written_target(need, &old) else {
+        let Some((old, reexports)) = self.written_target(need, &old, &using) else {
             return false;
         };
         if let Some((_, binding)) = self.declaration(&old)

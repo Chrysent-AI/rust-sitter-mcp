@@ -161,7 +161,18 @@ paths use the declaring module's written context. Transitive routes are bounded
 to **eight re-export hops** and reject cycles, competing leaves, missing terminal
 declarations, globs and attributed/conditional leaves (including `cfg` and
 `cfg_attr`). Terminal attribute, constructor, visibility and collision checks
-still apply; following a route does not prove access or type/member behavior.
+still apply; following a route does not prove type/member behavior. Before
+rewriting a canonical route, every intermediate module must have written visibility
+from the final destination: `pub`/`pub(crate)` permit crate access; private and
+`pub(self)` modules permit their declaring parent and descendants; `pub(super)`
+permits that parent's parent and descendants; `pub(in crate::...)`, `pub(in self...)`
+and `pub(in super...)` must name an evidenced ancestor containing the destination.
+Whitespace/comments in visibility modifiers do not alter this check. Inaccessible,
+missing or unprovable edges withhold the route rewrite rather than widening modules
+or falling back to the facade. The retained `visibility_scope_unproved` decision
+has `refusal_basis.class:"inaccessible_route:<segment>"`, with `name` naming the
+segment and an original module-declaration anchor when available. Synthesized or
+missing declarations omit the range. This is written reachability, not compilation.
 
 These repairs retain their ordinary `kind` (`import_insert`, `use_path`, `path`
 or `import_leaf_extract`) and add `"written_reexport"` to `rewrites[].evidence`.
@@ -838,8 +849,10 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   `chain_macro_statement`, `derive_veto`, `shadow`, `macro_shadow`,
   `conditional_context`, `prelude_disabled`, `module_attribute`,
   `unparseable_attribute`, `glob_import`, `unresolved_chain`, `syntax_recovery`, `lexical_uncertainty`
-  and the occurrence-level fallback `written_binding_unproved`. `name` identifies
-  a competing spelling; written witnesses use original half-open byte coordinates,
+  and the occurrence-level fallback `written_binding_unproved`. Canonical re-export
+  route refusals use `inaccessible_route:<segment>` for inaccessible or unproved
+  intermediate modules. `name` identifies a competing spelling or that route segment;
+  written witnesses use original half-open byte coordinates,
   while unresolved files and synthesized bindings omit `range` rather than invent
   offsets. Lexical detail remains in `lexical_uncertainty`. Semantic refusals name
   the failed proof stage (`semantic_configuration_unproved`,
