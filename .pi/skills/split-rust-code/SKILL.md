@@ -130,6 +130,9 @@ Keep or recheck original base bytes/modes plus `created_files[].must_be_absent` 
 - **Trailing newlines are not part of an item's syntax anchor** — inventory byte ranges exclude them.
 - **Some MCP clients stringify object parameters** — if a call fails validation with `must be object` (or you see `"limits": "null"` in the error echo), your client serialized `context`/`limits`/`globs` or an explicit `null` into a JSON string. Omit optional object parameters entirely; server defaults apply. Never pass explicit nulls.
 - **A complete draft is not move safety** — membership completeness and eligibility say nothing about cross-references, visibility, or macro context. That analysis happens in `move_item`.
+- **Macro-generated crate roots** (`crate_root!()` / `OUT_DIR` includes) cannot supply a proved ordinary module chain; treat these selections as advice-only.
+- **Creating `tests/*.rs` siblings can add Cargo integration-test crates** — module validity cannot see autotest discovery; review the build graph externally.
+- **Macro-invocation-as-item files are unsplittable like one-large-impl files** — generated items are not written inventory units; use advice, not an applicable-split claim.
 
 ## Reference files
 
