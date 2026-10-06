@@ -508,6 +508,16 @@ impl Analyzer<'_> {
         item: &Item,
         using: &[String],
     ) -> bool {
+        // Attribute-only semantic evidence cannot substitute for binding access.
+        // Keep all required visibility/module repairs even if context is discharged later.
+        if self.request.resolve_semantic && !self.visibility(path, item, using, &need.item_ids) {
+            need.reason = DecisionReason::VisibilityScopeUnproved;
+            need.category = "visibility_context";
+            need.message =
+                "final access includes an uncertain or insufficient restricted declaration scope"
+                    .into();
+            return false;
+        }
         for attribute in &item.attributes {
             let text =
                 &self.files[path].source[attribute.range.start_byte..attribute.range.end_byte];
@@ -541,7 +551,7 @@ impl Analyzer<'_> {
                 return false;
             }
         }
-        if self.visibility(path, item, using, &need.item_ids) {
+        if self.request.resolve_semantic || self.visibility(path, item, using, &need.item_ids) {
             return true;
         }
         need.reason = DecisionReason::VisibilityScopeUnproved;

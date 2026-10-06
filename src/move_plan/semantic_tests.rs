@@ -2,6 +2,66 @@ use super::*;
 use std::sync::atomic::Ordering;
 
 #[test]
+fn context_grammar_reports_false_unknown_and_parser_recovery_without_shortcuts() {
+    let flag = AtomicBool::new(false);
+    let controls = (Instant::now() + Duration::from_secs(30), &flag);
+    let config: Configuration = serde_json::from_value(serde_json::json!({"crates":[{
+        "name":"probe", "root_file":"lib.rs", "edition":"2024", "features":["enabled"],
+        "cfg":[{"key":"declared","value":null}], "dependencies":[]
+    }]}))
+    .unwrap();
+    for (attribute, admitted, reason) in [
+        ("#[cfg(not(declared))]", true, "declared_configuration"),
+        ("#[cfg(any())]", true, "declared_configuration"),
+        ("#[cfg(all())]", true, "declared_configuration"),
+        (
+            "#[cfg(all(not(declared), missing))]",
+            false,
+            "undeclared_cfg_atom",
+        ),
+        (
+            "#[cfg(not(declared, declared))]",
+            false,
+            "unsupported_cfg_predicate",
+        ),
+        ("#[cfg_attr(declared,)]", false, "unparseable_cfg_attr"),
+        ("#[cfg()]", false, "unparseable_attribute"),
+    ] {
+        let text = format!("{attribute} struct Value;");
+        let inputs =
+            Inputs::new(BTreeMap::from([("lib.rs".into(), text)]), &config, controls).unwrap();
+        let sema = Semantics::new(&inputs.db);
+        let file = inputs.ids["lib.rs"];
+        let root = sema.parse_guess_edition(file);
+        let module = sema.file_to_module_defs(file).next().unwrap();
+        let attr = root
+            .syntax()
+            .descendants()
+            .find_map(ast::Attr::cast)
+            .unwrap();
+        assert_eq!(
+            safe_attr(&inputs, &sema, module, &attr),
+            admitted,
+            "{attribute}"
+        );
+        assert!(
+            inputs.context.borrow().values().any(|e| e.reason == reason),
+            "{attribute}: {:?}",
+            inputs.context.borrow()
+        );
+        if attribute == "#[cfg(not(declared))]" || attribute == "#[cfg(any())]" {
+            assert!(
+                inputs
+                    .context
+                    .borrow()
+                    .values()
+                    .any(|e| e.value == Some(false))
+            );
+        }
+    }
+}
+
+#[test]
 fn controller_cancels_both_live_databases_and_joins() {
     let old = RootDatabase::default();
     let new = RootDatabase::default();
@@ -92,6 +152,7 @@ fn failed_semantic_stages_disclose_only_the_stage_actually_reached() {
         analyzer: ANALYZER.into(),
         statement: String::new(),
         omissions: Vec::new(),
+        context_evaluations: Vec::new(),
     };
     let start = source.rfind("called").unwrap();
     let need = Need {

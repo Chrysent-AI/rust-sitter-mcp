@@ -29,6 +29,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "semantic_context.rs"]
+mod context;
+pub use context::ContextEvaluation;
+use context::safe_attr;
+use std::cell::RefCell;
+
 const ANALYZER: &str = "ra_ap@0.0.357";
 
 #[cfg(test)]
@@ -36,6 +42,7 @@ const ANALYZER: &str = "ra_ap@0.0.357";
 mod tests;
 
 /// One caller-declared configuration. No manifests, environment, or sysroot are discovered.
+/// Listed cfg/features are ON evidence at the context gate; unlisted atoms remain unknown.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
@@ -78,6 +85,7 @@ pub struct ResolutionCoverage {
     pub analyzer: String,
     pub statement: String,
     pub omissions: Vec<String>,
+    pub context_evaluations: Vec<ContextEvaluation>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -124,7 +132,13 @@ pub fn candidate(need: &Need) -> bool {
     matches!(
         need.reason,
         DecisionReason::MemberOrConstructorUnproved | DecisionReason::ExternalOrMissingBinding
-    )
+    ) || (need.reason == DecisionReason::ConditionalOrInheritedContext
+        && need.category == "scope_dependency"
+        && need.refusal_basis.iter().any(|basis| {
+            matches!(basis.class.as_str(), "derive_veto" | "conditional_context")
+                && basis.anchor.path == need.path
+                && basis.anchor.range.as_ref() == Some(&need.range)
+        }))
 }
 
 struct Inputs {
@@ -133,6 +147,8 @@ struct Inputs {
     paths: BTreeMap<FileId, String>,
     texts: BTreeMap<String, String>,
     roots: BTreeMap<FileId, String>,
+    configuration: Configuration,
+    context: RefCell<BTreeMap<(String, usize, usize), ContextEvaluation>>,
 }
 impl Inputs {
     fn new(
@@ -244,6 +260,8 @@ impl Inputs {
             paths,
             texts,
             roots,
+            configuration: config.clone(),
+            context: RefCell::new(BTreeMap::new()),
         })
     }
     fn declaration(
@@ -317,12 +335,22 @@ pub fn discharge(
         semantic_input_digest: digest, final_overlay_digest: final_digest,
         analyzer: ANALYZER.into(), statement: String::new(),
         omissions: vec!["one explicit configuration only; no other targets/features/cfg combinations".into(),
-            "no discovered sysroot/dependency sources, build-script cfg/environment, macro expansion, target layout, compilation or equivalence checks".into()],
+            "no discovered sysroot/dependency sources, build-script cfg/environment, macro expansion, target layout, compilation or equivalence checks".into(),
+            "context_evaluations covers only reached context checks; undeclared cfg atoms remain unknown, including unlisted features; inactive cfg_attr payloads are not evaluated".into()],
+        context_evaluations: Vec::new(),
     };
     let mut proofs = controlled(&old.db, &new.db, controls, || {
         evaluate(&old, &new, needs, &result.plan.origins, &coverage, controls)
     })?;
     let mut coverage = coverage;
+    for (revision, inputs) in [("original", &old), ("final", &new)] {
+        coverage
+            .context_evaluations
+            .extend(inputs.context.borrow().values().cloned().map(|mut e| {
+                e.revision = revision.into();
+                e
+            }));
+    }
     coverage.decisions = proofs.len();
     coverage.statement = format!(
         "resolution performed for {} decisions under one explicit configuration; compilation/equivalence not performed",
@@ -630,9 +658,10 @@ fn ordinary_context(
     {
         return None;
     }
+    let module = sema.scope(node)?.module();
     for ancestor in node.ancestors() {
         if let Some(item) = ast::Item::cast(ancestor) {
-            if item.attrs().any(|a| !safe_attr(&a)) {
+            if item.attrs().any(|a| !safe_attr(inputs, sema, module, &a)) {
                 return None;
             }
             if let ast::Item::Fn(f) = item
@@ -642,7 +671,6 @@ fn ordinary_context(
             }
         }
     }
-    let module = sema.scope(node)?.module();
     let file = sema.hir_file_for(node).file_id()?.file_id(&inputs.db);
     if sema.file_to_module_defs(file).count() != 1
         || !ra_ap_syntax::SourceFile::parse(
@@ -655,9 +683,21 @@ fn ordinary_context(
         return None;
     }
     for scope in module.path_to_root(&inputs.db) {
+        if let Some(declaration) = scope.declaration_source(&inputs.db) {
+            let file = declaration.file_id.file_id()?.file_id(&inputs.db);
+            let root = sema.parse_guess_edition(file);
+            let module = root
+                .syntax()
+                .descendants()
+                .filter_map(ast::Module::cast)
+                .find(|m| m.syntax().text_range() == declaration.value.syntax().text_range())?;
+            if module.attrs().any(|a| !safe_attr(inputs, sema, scope, &a)) {
+                return None;
+            }
+        }
         let file = scope.krate(&inputs.db).root_file(&inputs.db);
         let root = sema.parse_guess_edition(file);
-        if root.attrs().any(|a| !safe_attr(&a)) {
+        if root.attrs().any(|a| !safe_attr(inputs, sema, scope, &a)) {
             return None;
         }
         let source = scope.definition_source(&inputs.db);
@@ -671,45 +711,47 @@ fn ordinary_context(
         {
             return None;
         }
+        let parsed = sema.parse_guess_edition(scope_file);
         let syntax = match source.value {
-            ra_ap_hir::ModuleSource::SourceFile(f) => f.syntax().clone(),
-            ra_ap_hir::ModuleSource::Module(m) => m.item_list()?.syntax().clone(),
+            ra_ap_hir::ModuleSource::SourceFile(_) => {
+                if parsed.attrs().any(|a| !safe_attr(inputs, sema, scope, &a)) {
+                    return None;
+                }
+                parsed.syntax().clone()
+            }
+            ra_ap_hir::ModuleSource::Module(m) => {
+                let module = parsed
+                    .syntax()
+                    .descendants()
+                    .filter_map(ast::Module::cast)
+                    .find(|n| n.syntax().text_range() == m.syntax().text_range())?;
+                module.item_list()?.syntax().clone()
+            }
             ra_ap_hir::ModuleSource::BlockExpr(_) => return None,
         };
         for child in syntax.children() {
             if ast::MacroCall::can_cast(child.kind()) {
+                context::record(
+                    inputs,
+                    sema,
+                    scope,
+                    &child,
+                    ("module_macro", "skipped", None, "module_macro_invocation"),
+                );
                 return None;
             }
             if let Some(item) = ast::Item::cast(child) {
                 // Sibling module conditions do not change this module's namespace.
                 // Conditions on a module we actually traverse are checked above.
-                if !matches!(item, ast::Item::Module(_)) && item.attrs().any(|a| !safe_attr(&a)) {
+                if !matches!(item, ast::Item::Module(_))
+                    && item.attrs().any(|a| !safe_attr(inputs, sema, scope, &a))
+                {
                     return None;
                 }
             }
         }
     }
     Some(module)
-}
-fn safe_attr(attr: &ast::Attr) -> bool {
-    matches!(
-        attr.simple_name().as_deref(),
-        Some(
-            "allow"
-                | "warn"
-                | "deny"
-                | "forbid"
-                | "doc"
-                | "inline"
-                | "cold"
-                | "must_use"
-                | "proc_macro"
-                | "proc_macro_attribute"
-                | "proc_macro_derive"
-                | "no_std"
-                | "no_core"
-        )
-    )
 }
 fn exact_path(root: &SyntaxNode, span: &ByteRange) -> Option<ast::Path> {
     root.descendants().filter_map(ast::Path::cast).find(|p| {
@@ -726,6 +768,28 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
     let sema = Semantics::new(&inputs.db);
     let root = sema.parse_guess_edition(*inputs.ids.get(&anchor.path)?);
     let syntax = root.syntax();
+    // A separate scope-dependency need can be anchored on an attached attribute,
+    // not a path. Prove only its inert context, never the pattern/body it decorates.
+    for attr in syntax.descendants().filter_map(ast::Attr::cast) {
+        if usize::from(attr.syntax().text_range().start()) == anchor.range.start_byte
+            && usize::from(attr.syntax().text_range().end()) == anchor.range.end_byte
+        {
+            let module = ordinary_context(inputs, &sema, attr.syntax())?;
+            if !safe_attr(inputs, &sema, module, &attr) {
+                return None;
+            }
+            return Some(Fact {
+                declaration: inputs.declaration(
+                    module,
+                    attr.syntax(),
+                    sema.hir_file_for(attr.syntax()),
+                )?,
+                original: None,
+                adjusted: None,
+                classification: "context_attribute",
+            });
+        }
+    }
     for call in syntax.descendants().filter_map(ast::MethodCallExpr::cast) {
         let name = call.name_ref()?;
         if usize::from(call.syntax().text_range().start()) != anchor.range.start_byte
