@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-.PHONY: help check-tools install-hooks install-tools install fmt fmt-check lint test deny machete quality check precommit test-tooling build run clean version bump-version
+.PHONY: help check-tools install-hooks install-tools install setup fmt fmt-check lint test deny machete quality check precommit test-tooling build run clean version bump-version
 
 help: ## Show developer commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,7 +19,12 @@ install-tools: ## Install pinned Cargo gates and gitleaks (brew/Go; see CONTRIBU
 	elif command -v go >/dev/null; then go install -ldflags '-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1' github.com/zricethezav/gitleaks/v8@v8.30.1; \
 	else printf '%s\n' 'Install gitleaks 8.x from https://github.com/gitleaks/gitleaks/releases and add it to PATH; see CONTRIBUTING.md (Ubuntu).' >&2; exit 1; fi
 
-install: ## Install tools/hooks, verify, build and install the binary
+install: ## Build and install the release binary into ~/.cargo/bin (no tests)
+	@for tool in git cargo; do command -v "$$tool" >/dev/null || exit 1; done
+	cargo install --path . --locked --force
+	rust-sitter-mcp --version
+
+setup: ## Contributor onboarding: gate tools + hooks + verification + install
 	@for tool in git make bash awk rustup cargo; do command -v "$$tool" >/dev/null || exit 1; done
 	rustup component add --toolchain 1.98.1 rustfmt clippy
 	$(MAKE) install-tools
@@ -27,9 +32,7 @@ install: ## Install tools/hooks, verify, build and install the binary
 	$(MAKE) install-hooks
 	cargo fetch --locked
 	$(MAKE) quality
-	cargo build --locked
-	cargo install --path . --locked --force
-	rust-sitter-mcp --version
+	$(MAKE) install
 	@printf '%s\n' 'See CONTRIBUTING.md for setup and dependency policy.'
 
 fmt: ## Deliberately format Rust source
