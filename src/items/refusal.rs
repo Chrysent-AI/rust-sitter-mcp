@@ -88,7 +88,9 @@ impl Need {
     pub(crate) fn disclose_refusal(&mut self) {
         if let Some(witness) = &self.lexical_uncertainty {
             let location = witness.pattern.as_ref().unwrap_or(&witness.scope);
-            let class = if witness.witness_relation == Some(WitnessRelation::HoistPossibility) {
+            let class = if witness.witness_relation
+                == Some(WitnessRelation::StatementMacroBeforeReference)
+            {
                 "chain_macro_statement"
             } else {
                 "lexical_uncertainty"

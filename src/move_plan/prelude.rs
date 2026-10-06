@@ -82,14 +82,20 @@ pub struct BindingProof {
 struct Shadows {
     context_unproved: bool,
     names: [bool; 14],
-    derive_veto: bool,
+    conditional_derives: [bool; 9],
     derives: BTreeMap<(String, usize, usize), usize>,
     refusal_basis: Vec<RefusalBasis>,
 }
 impl Shadows {
     fn merge(&mut self, other: &Self) {
         self.context_unproved |= other.context_unproved;
-        self.derive_veto |= other.derive_veto;
+        for (conditional, other) in self
+            .conditional_derives
+            .iter_mut()
+            .zip(other.conditional_derives)
+        {
+            *conditional |= other;
+        }
         self.derives.extend(other.derives.clone());
         for basis in &other.refusal_basis {
             self.record(basis.clone());
@@ -123,14 +129,16 @@ impl Shadows {
         self.refusal_basis
             .iter()
             .filter(|basis| {
-                if basis.class == "shadow" {
+                if matches!(basis.class.as_str(), "shadow" | "macro_shadow")
+                    || (basis.class == "conditional_context" && basis.name.is_some())
+                {
                     basis.name.as_deref() == Some(name)
                         || (!derive
                             && self.derives.values().any(|i| {
                                 basis.name.as_deref() == Some(items::BUILTIN_DERIVES[*i].0)
                             }))
                 } else {
-                    !derive || basis.class != "derive_veto"
+                    basis.class != "derive_veto"
                 }
             })
             .cloned()
@@ -143,19 +151,93 @@ impl Shadows {
             .position(|(name, _)| *name == text.trim_start_matches("r#"))
         {
             self.names[index] = true;
-            self.record(RefusalBasis::new("shadow", path, range).named(text));
+            self.record(
+                RefusalBasis::new("shadow", path, range).named(text.trim_start_matches("r#")),
+            );
         }
     }
     fn refuses(&self, index: usize) -> bool {
         self.context_unproved
             || self.names[index]
-            || self.derive_veto
             || self.derives.values().any(|i| self.refuses_derive(*i))
     }
     fn refuses_derive(&self, index: usize) -> bool {
-        self.context_unproved || self.names[STANDARD_PRELUDE.len() + index]
+        self.context_unproved
+            || self.names[STANDARD_PRELUDE.len() + index]
+            || self.conditional_derives[index]
+    }
+    /// Only unbounded introduction and prelude controls survive filesystem ancestry.
+    /// Imports and written names belong to their declaring module, not its children.
+    fn chain_context(&self) -> Self {
+        let mut result = Self::default();
+        for basis in &self.refusal_basis {
+            if basis.class == "macro_shadow"
+                && let Some(name) = &basis.name
+            {
+                result.name(name, &basis.anchor.path, basis.anchor.range.clone());
+                result.record(basis.clone());
+            }
+            if basis.name.is_none()
+                && matches!(
+                    basis.class.as_str(),
+                    "chain_macro_statement"
+                        | "syntax_recovery"
+                        | "prelude_disabled"
+                        | "module_attribute"
+                        | "unparseable_attribute"
+                        | "conditional_context"
+                )
+            {
+                result.context_unproved = true;
+                result.record(basis.clone());
+            }
+        }
+        result
+    }
+    fn remove_departure(&mut self, path: &str, item: &Item) {
+        let departs = |range: &crate::result::ByteRange| {
+            (item.span.range.start_byte <= range.start_byte
+                && item.span.range.end_byte >= range.end_byte)
+                || item.attributes.iter().any(|a| {
+                    a.range.start_byte <= range.start_byte && a.range.end_byte >= range.end_byte
+                })
+        };
+        self.refusal_basis.retain(|basis| {
+            basis.anchor.path != path || basis.anchor.range.as_ref().is_none_or(|r| !departs(r))
+        });
+        self.derives.retain(|(file, start, end), _| {
+            file != path
+                || !departs(&crate::result::ByteRange {
+                    start_byte: *start,
+                    end_byte: *end,
+                })
+        });
+        self.names = [false; 14];
+        self.conditional_derives = [false; 9];
+        self.context_unproved = self
+            .refusal_basis
+            .iter()
+            .any(|b| b.name.is_none() && b.class != "derive_veto");
+        for basis in self.refusal_basis.clone() {
+            if matches!(basis.class.as_str(), "shadow" | "macro_shadow")
+                && let Some(name) = &basis.name
+            {
+                self.name(name, &basis.anchor.path, basis.anchor.range.clone());
+            }
+            if basis.class == "conditional_context"
+                && let Some(index) = items::BUILTIN_DERIVES
+                    .iter()
+                    .position(|(name, _)| basis.name.as_deref() == Some(name))
+            {
+                self.conditional_derives[index] = true;
+            }
+        }
     }
     fn attribute(&mut self, path: &str, node: Node<'_>, source: &str) {
+        if node.has_error() || node.is_missing() {
+            self.context("unparseable_attribute", path, Some(node));
+            return;
+        }
         if items::context_independent_attribute(&source[node.byte_range()]) {
             return;
         }
@@ -164,24 +246,93 @@ impl Shadows {
                 if let Some(index) = index {
                     self.derives
                         .insert((path.into(), range.start_byte, range.end_byte), index);
+                    // A condition/unexamined companion on this declaration must
+                    // not be erased by discharging its unconditional derive need.
+                    let mut first = node;
+                    while let Some(previous) = first.prev_named_sibling().filter(|n| {
+                        matches!(
+                            n.kind(),
+                            "attribute_item" | "line_comment" | "block_comment"
+                        )
+                    }) {
+                        first = previous;
+                    }
+                    let mut sibling = Some(first);
+                    while let Some(attribute) = sibling.filter(|n| {
+                        matches!(
+                            n.kind(),
+                            "attribute_item" | "line_comment" | "block_comment"
+                        )
+                    }) {
+                        if attribute.kind() == "attribute_item"
+                            && !items::context_independent_attribute(
+                                &source[attribute.byte_range()],
+                            )
+                            && items::derive_names(attribute, source).is_none()
+                        {
+                            self.conditional_derives[index] = true;
+                            self.record(
+                                RefusalBasis::new(
+                                    "conditional_context",
+                                    path,
+                                    Some(crate::result::ByteRange {
+                                        start_byte: attribute.start_byte(),
+                                        end_byte: attribute.end_byte(),
+                                    }),
+                                )
+                                .named(items::BUILTIN_DERIVES[index].0),
+                            );
+                        }
+                        sibling = attribute.next_named_sibling();
+                    }
                 } else {
-                    self.derive_veto = true;
+                    // Unknown derives keep their own attribute need, not a
+                    // blanket veto on unrelated type spellings in this scope.
                     self.record(RefusalBasis::new("derive_veto", path, Some(range)));
                 }
             }
         } else {
-            self.context("conditional_context", path, Some(node));
+            let name = node.named_child(0).and_then(|a| a.named_child(0));
+            let Some(name) = name else {
+                self.context("unparseable_attribute", path, Some(node));
+                return;
+            };
+            if matches!(
+                &source[name.byte_range()],
+                "no_std" | "no_core" | "no_implicit_prelude" | "prelude_import"
+            ) {
+                self.context("prelude_disabled", path, Some(node));
+                return;
+            }
+            let mut next = node.next_named_sibling();
+            while next.is_some_and(|n| {
+                matches!(
+                    n.kind(),
+                    "attribute_item" | "line_comment" | "block_comment"
+                )
+            }) {
+                next = next.and_then(|n| n.next_named_sibling());
+            }
+            if node.kind() == "inner_attribute_item" {
+                self.context("conditional_context", path, Some(node));
+            } else if next.is_some_and(|n| n.kind() == "mod_item")
+                && !matches!(&source[name.byte_range()], "cfg" | "path")
+            {
+                self.context("module_attribute", path, Some(node));
+            }
+            // Otherwise the attributed declaration's written name is already in
+            // the superset shadow set, even when its presence is conditional.
+            // The attribute's own move/context need remains independently blocked.
         }
     }
 }
 
-/// Module scans visit immediate statements only; item scans include their lexical
-/// body conservatively. Inline modules are always separate binding scopes.
+/// Module scans visit immediate declarations only. Lexical bodies are audited
+/// at each occurrence through the same position-aware assessment as written needs.
 fn shadows(
     path: &str,
     node: Node<'_>,
     source: &str,
-    descend: bool,
     controls: (Instant, &AtomicBool),
 ) -> Result<Shadows, DomainError> {
     let mut found = Shadows::default();
@@ -194,31 +345,13 @@ fn shadows(
         match current.kind() {
             "line_comment" | "block_comment" | "string_literal" | "raw_string_literal"
             | "char_literal" | "token_tree" => continue,
-            "macro_invocation" | "macro_definition" => {
+            "macro_invocation" => {
                 found.context("chain_macro_statement", path, Some(current));
                 continue;
             }
+            "block" => continue,
             "attribute_item" | "inner_attribute_item" => {
-                // An outer attribute on an inline module belongs to that child
-                // scope, not to unrelated references in its parent.
-                let mut next = current.next_named_sibling();
-                while let Some(node) = next {
-                    if !matches!(
-                        node.kind(),
-                        "attribute_item" | "line_comment" | "block_comment"
-                    ) {
-                        break;
-                    }
-                    next = node.next_named_sibling();
-                }
-                let child_attribute = current.kind() == "attribute_item"
-                    && next.is_some_and(|n| {
-                        n.kind() == "mod_item" && n.child_by_field_name("body").is_some()
-                    });
-                if !child_attribute {
-                    // Derive identity is checked only after both chains merge.
-                    found.attribute(path, current, source);
-                }
+                found.attribute(path, current, source);
                 continue;
             }
             "use_declaration" => {
@@ -243,8 +376,22 @@ fn shadows(
             | "type_parameter"
             | "const_parameter"
             | "mod_item"
-            | "extern_crate_declaration" => {
+            | "extern_crate_declaration"
+            | "macro_definition" => {
                 if let Some(name) = current.child_by_field_name("name") {
+                    if current.kind() == "macro_definition" {
+                        found.record(
+                            RefusalBasis::new(
+                                "macro_shadow",
+                                path,
+                                Some(crate::result::ByteRange {
+                                    start_byte: name.start_byte(),
+                                    end_byte: name.end_byte(),
+                                }),
+                            )
+                            .named(source[name.byte_range()].trim_start_matches("r#")),
+                        );
+                    }
                     found.name(
                         &source[name.byte_range()],
                         path,
@@ -276,22 +423,19 @@ fn shadows(
             // Its name binds here, but its declarations/imports do not.
             continue;
         }
-        if !descend
-            && current != node
-            && matches!(
-                current.kind(),
-                "function_item"
-                    | "struct_item"
-                    | "enum_item"
-                    | "trait_item"
-                    | "union_item"
-                    | "type_item"
-                    | "const_item"
-                    | "static_item"
-                    | "mod_item"
-                    | "impl_item"
-            )
-        {
+        if matches!(
+            current.kind(),
+            "function_item"
+                | "struct_item"
+                | "enum_item"
+                | "trait_item"
+                | "union_item"
+                | "type_item"
+                | "const_item"
+                | "static_item"
+                | "mod_item"
+                | "impl_item"
+        ) {
             continue;
         }
         // Traverse statement/list wrappers: item macros may be wrapped in an
@@ -346,11 +490,10 @@ impl ScopedShadows {
         path: &str,
         node: Node<'_>,
         source: &str,
-        descend: bool,
         controls: (Instant, &AtomicBool),
     ) -> Result<Self, DomainError> {
         let mut result = Self {
-            root: shadows(path, node, source, descend, controls)?,
+            root: shadows(path, node, source, controls)?,
             inline: BTreeMap::new(),
         };
         let mut stack = vec![node];
@@ -360,7 +503,7 @@ impl ScopedShadows {
                 .then(|| current.child_by_field_name("body"))
                 .flatten()
             {
-                let mut found = shadows(path, body, source, descend, controls)?;
+                let mut found = shadows(path, body, source, controls)?;
                 let mut previous = current.prev_named_sibling();
                 while let Some(attribute) = previous {
                     match attribute.kind() {
@@ -372,6 +515,16 @@ impl ScopedShadows {
                     }
                     previous = attribute.prev_named_sibling();
                 }
+                // Unbounded item/module expansion and malformed context remain
+                // chain-wide; a sibling's finite written names/derives do not.
+                let mut unbounded = found.chain_context();
+                // Textual macro definitions inherit downward, never upward out
+                // of a child module like an unbounded expansion veto.
+                unbounded.names = [false; 14];
+                unbounded
+                    .refusal_basis
+                    .retain(|b| !matches!(b.class.as_str(), "shadow" | "macro_shadow"));
+                result.root.merge(&unbounded);
                 result
                     .inline
                     .insert((current.start_byte(), current.end_byte()), found);
@@ -427,7 +580,11 @@ fn chain_shadows(
     }
     for file in &context.filesystem_paths {
         if let Some(shadows) = modules.get(file) {
-            result.merge(&shadows.visible(if file == path { node } else { None }));
+            result.merge(&if file == path {
+                shadows.visible(node)
+            } else {
+                shadows.root.chain_context()
+            });
         } else if !(absent_destination && file == path) {
             result.context("unresolved_chain", file, None);
         }
@@ -451,18 +608,20 @@ pub(super) fn discharge(
         items::check(controls.0, controls.1)?;
         modules.insert(
             path.clone(),
-            ScopedShadows::collect(
-                path,
-                data.tree.root_node(),
-                &files[path].source,
-                false,
-                controls,
-            )?,
+            ScopedShadows::collect(path, data.tree.root_node(), &files[path].source, controls)?,
         );
     }
     // Proposed imports are also visible bindings. Never let a fallback race a
     // written-binding repair from another member of the simultaneous batch.
     let mut final_modules = modules.clone();
+    for (path, item, _) in selected {
+        if let Some(module) = final_modules.get_mut(path) {
+            module.root.remove_departure(path, item);
+            for inline in module.inline.values_mut() {
+                inline.remove_departure(path, item);
+            }
+        }
+    }
     for repair in repairs {
         items::check(controls.0, controls.1)?;
         if repair.kind.starts_with("import") {
@@ -472,7 +631,7 @@ pub(super) fn discharge(
             };
             let tree = crate::trivia::parse(&repair.after, controls.0, controls.1)?
                 .ok_or_else(|| DomainError::new("planning_deadline", "import audit stopped"))?;
-            let mut proposed = shadows(path, tree.root_node(), &repair.after, true, controls)?;
+            let mut proposed = shadows(path, tree.root_node(), &repair.after, controls)?;
             // Parsed replacement offsets are not original-source coordinates.
             for basis in &mut proposed.refusal_basis {
                 basis.anchor.range = match &repair.target {
@@ -512,7 +671,7 @@ pub(super) fn discharge(
             .root_node()
             .named_descendant_for_byte_range(item.span.range.start_byte, item.span.range.end_byte)
             .expect("selected item");
-        let mut found = ScopedShadows::collect(path, node, &files[path].source, true, controls)?;
+        let mut found = ScopedShadows::collect(path, node, &files[path].source, controls)?;
         // Leading outer attributes lie outside the item anchor, but arrive with
         // it and must participate in the destination's expansion audit.
         for attribute in &item.attributes {
@@ -587,6 +746,38 @@ pub(super) fn discharge(
         ));
         visible.merge(&item_shadows[&item.id].visible(context_node));
         visible.merge(&arrivals[destination]);
+        if let Some(index) = candidate
+            && let Some(node) = node
+        {
+            let assessment = items::lexical_assessment(
+                path,
+                node,
+                source,
+                STANDARD_PRELUDE[index].0,
+                controls,
+                false,
+            )?;
+            if assessment.binding != items::LexicalBinding::Absent {
+                if let Some(witness) = assessment.uncertainty {
+                    let anchor = witness.pattern.as_ref().unwrap_or(&witness.scope);
+                    visible.context_unproved = true;
+                    visible.record(
+                        RefusalBasis::new(
+                            if witness.witness_relation.is_some() {
+                                "chain_macro_statement"
+                            } else {
+                                "lexical_uncertainty"
+                            },
+                            path,
+                            Some(anchor.range.clone()),
+                        )
+                        .named(STANDARD_PRELUDE[index].0),
+                    );
+                } else {
+                    visible.name(STANDARD_PRELUDE[index].0, path, Some(need.range.clone()));
+                }
+            }
+        }
         // Record contextual derives too: an attribute on a retained declaration
         // can be the veto that otherwise prevents a moved type reference.
         let mut derive_identity_unproved = false;
@@ -635,7 +826,7 @@ pub(super) fn discharge(
                         item_ids: need.item_ids.clone(),
                         destination_path: destination.clone(),
                         standard_path: items::BUILTIN_DERIVES[*index].1.into(),
-                        basis: "caller enabled assume_standard_prelude; bare compiler-built-in derive name; complete ordinary source/destination visible chains and written batch scopes examined without competing same-spelling macro/item/use-leaf bindings or globs, prelude-disabling attributes, conditional/recovered context or unexamined macros; standard-defined expansion introduces no module-scope binding; other derive names remain vetoes; no import synthesized; semantic checking not performed".into(),
+                        basis: "caller enabled assume_standard_prelude; bare compiler-built-in derive name; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined without same-spelling macro/item/use-leaf bindings or globs; chain-wide prelude controls and unbounded item/module-attribute context examined; written token-tree not expanded; built-in identity assumed, not macro hygiene proved; other derive names retain their own needs; no import synthesized; semantic checking not performed".into(),
                     },
                     &mut proofs,
                     &mut proof_bytes,
@@ -671,7 +862,7 @@ pub(super) fn discharge(
                     item_ids: need.item_ids,
                     destination_path: destination.clone(),
                     standard_path: STANDARD_PRELUDE[index].1.into(),
-                    basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary source/destination chains and written batch scopes examined without competing imports, globs, declarations, generic/local/pattern bindings, prelude-disabling attributes, conditional/recovered context or macros; any contextual derives separately audited as unshadowed compiler built-ins; no import synthesized; semantic checking not performed".into(),
+                    basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; lexical bindings and same-block macros at-or-before this occurrence audited, signature references ignore body macros; chain-wide prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed".into(),
                 },
                 &mut proofs,
                 &mut proof_bytes,
@@ -679,7 +870,9 @@ pub(super) fn discharge(
         } else if !derive_discharged {
             if matches!(
                 need.reason,
-                DecisionReason::ExternalOrMissingBinding | DecisionReason::GlobBindingUnproved
+                DecisionReason::ExternalOrMissingBinding
+                    | DecisionReason::GlobBindingUnproved
+                    | DecisionReason::ConditionalOrInheritedContext
             ) && let Some(index) = candidate
             {
                 need.refusal_basis.extend(visible.basis_for(index, false));

@@ -378,13 +378,16 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
             "unsupported_pattern",
         ),
         ("fn caller() { m!(); selected(); }", "unsupported_pattern"),
-        ("fn caller() { selected(); m!(); }", "unsupported_pattern"),
+        (
+            "fn caller() { m!(); selected(); m!(); }",
+            "unsupported_pattern",
+        ),
         (
             "fn caller() { m!(); let selected = value; selected(); }",
             "unsupported_pattern",
         ),
         (
-            "fn caller() { let selected = value; selected(); m!(); }",
+            "fn caller() { let selected = value; m!(); selected(); }",
             "unsupported_pattern",
         ),
         (

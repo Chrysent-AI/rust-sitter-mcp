@@ -229,7 +229,7 @@ fn test_consumer_acknowledgment_does_not_discharge_selected_attributes_or_root_c
 }
 
 #[test]
-fn probe_b_hoist_uncertainty_and_macro_consumers_are_acknowledged() {
+fn probe_b_later_macros_do_not_poison_earlier_references() {
     let source = include_str!("../fixtures/test_consumers/probe_b.rs");
     let repo = fixture(source);
     let texts = [
@@ -253,7 +253,7 @@ fn probe_b_hoist_uncertainty_and_macro_consumers_are_acknowledged() {
         .iter()
         .filter(|d| !d["lexical_uncertainty"].is_null())
         .collect();
-    assert_eq!(off_lexical.len(), 4);
+    assert!(off_lexical.is_empty());
     assert!(
         off_lexical
             .iter()
@@ -271,20 +271,13 @@ fn probe_b_hoist_uncertainty_and_macro_consumers_are_acknowledged() {
         .iter()
         .filter(|d| !d["lexical_uncertainty"].is_null())
         .collect();
-    assert_eq!(lexical.len(), 4);
-    for risk in lexical {
-        assert_eq!(risk["blocks_applicability"], false);
-        assert_eq!(risk["resolution"], "risk_acknowledged");
-        assert_eq!(risk["action"]["field"], "acknowledge_test_consumers");
-        let witness = &risk["lexical_uncertainty"];
-        assert_eq!(witness["witness_relation"], "hoist_possibility");
-        assert_eq!(witness["reason"], "unsupported_pattern");
-        let at = risk["anchors"][0]["range"]["end_byte"].as_u64().unwrap();
-        let start = witness["pattern"]["range"]["start_byte"].as_u64().unwrap();
-        assert!(start > at, "{risk}");
-        let end = witness["pattern"]["range"]["end_byte"].as_u64().unwrap() as usize;
-        assert!(source[start as usize..end].starts_with("assert_eq!(oversized.len(),"));
-    }
+    assert!(lexical.is_empty());
+    assert!(
+        risks
+            .iter()
+            .all(|risk| risk["blocks_applicability"] == false
+                && risk["resolution"] == "risk_acknowledged")
+    );
     assert!(risks.iter().any(|d| d["category"] == "macro_dependency"));
     let copy = apply(&repo, &on);
     let after = fs::read_to_string(copy.0.join("cases/layout/source.rs")).unwrap();
@@ -332,7 +325,7 @@ fn test_consumer_lexical_acknowledgment_keeps_written_conflicts_blocking() {
         "let n = LIMIT; #[cfg(unix)] const LIMIT: usize = 1; assert!(true);",
     ] {
         let repo = fixture(&format!(
-            "const LIMIT: usize = 4;\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ {body} }} }}\n"
+            "const LIMIT: usize = 4;\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ assert!(true); {body} }} }}\n"
         ));
         let mut args = request(
             &repo,
@@ -383,7 +376,7 @@ fn test_consumer_hoist_acknowledgment_keeps_value_item_in_type_position_blocking
     assert_eq!(reference["action"]["route"], "unsupported_in_engine");
     assert_eq!(
         reference["lexical_uncertainty"]["witness_relation"],
-        "hoist_possibility"
+        "statement_macro_before_reference"
     );
 }
 
@@ -391,7 +384,7 @@ fn test_consumer_hoist_acknowledgment_keeps_value_item_in_type_position_blocking
 fn test_consumer_hoist_acknowledgment_accepts_type_items_in_type_position() {
     for selected in ["struct LIMIT;", "enum LIMIT { Value }"] {
         let repo = fixture(&format!(
-            "{selected}\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ let _: LIMIT = value; assert_eq!(1, 1); }} }}\n"
+            "{selected}\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ assert_eq!(1, 1); let _: LIMIT = value; }} }}\n"
         ));
         let mut args = request(
             &repo,
@@ -409,7 +402,7 @@ fn test_consumer_hoist_acknowledgment_accepts_type_items_in_type_position() {
         assert_eq!(reference["blocks_applicability"], false);
         assert_eq!(
             reference["lexical_uncertainty"]["witness_relation"],
-            "hoist_possibility"
+            "statement_macro_before_reference"
         );
         apply(&repo, &value);
     }
@@ -427,7 +420,7 @@ fn test_consumer_hoist_acknowledgment_checks_type_item_value_constructors() {
         ("type LIMIT = usize;", false),
     ] {
         let repo = fixture(&format!(
-            "{selected}\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ let n = LIMIT; assert_eq!(1, 1); }} }}\n"
+            "{selected}\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ assert_eq!(1, 1); let n = LIMIT; }} }}\n"
         ));
         let mut args = request(
             &repo,
@@ -448,7 +441,7 @@ fn test_consumer_hoist_acknowledgment_checks_type_item_value_constructors() {
         assert_eq!(reference["blocks_applicability"], !compatible);
         assert_eq!(
             reference["lexical_uncertainty"]["witness_relation"],
-            "hoist_possibility"
+            "statement_macro_before_reference"
         );
         if compatible {
             assert_eq!(reference["reason"], "test_consumer_acknowledged");

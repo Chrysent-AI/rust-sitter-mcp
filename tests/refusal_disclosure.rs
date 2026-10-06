@@ -49,27 +49,33 @@ fn zero_prelude_proofs_have_exact_source_destination_and_chain_veto_anchors() {
     let selected = "struct Record { option: Option<u8> }";
     for (prefix, class, witness) in [
         ("introduce!();", "chain_macro_statement", "introduce!()"),
-        (
-            "#[derive(custom::Debug)] struct Other;",
-            "derive_veto",
-            "custom::Debug",
-        ),
+        ("#![no_std]", "prelude_disabled", "#![no_std]"),
         ("struct Option;", "shadow", "Option"),
         (
-            "#[cfg(test)] mod tests;",
-            "conditional_context",
-            "#[cfg(test)]",
+            "#[introduce] mod unrelated {}",
+            "module_attribute",
+            "#[introduce]",
         ),
         ("use unknown::*;", "glob_import", "use unknown::*;"),
     ] {
         let repo = Fixture::generate();
+        let local = matches!(class, "shadow" | "glob_import");
         repo.write(
             "cases/layout/lib.rs",
-            &format!("mod source; mod destination; {prefix}"),
+            &format!(
+                "mod source; mod destination; {}",
+                if local { "" } else { prefix }
+            ),
         );
         repo.write("cases/layout/source.rs", selected);
-        repo.write("cases/layout/destination.rs", "");
-        let result = run(&repo, request(&repo, &[selected]));
+        repo.write(
+            "cases/layout/destination.rs",
+            if local { prefix } else { "" },
+        );
+        let mut args = request(&repo, &[selected]);
+        args["moves"][0]["destination"] =
+            json!({"kind":"existing","path":"cases/layout/destination.rs"});
+        let result = run(&repo, args);
         assert_eq!(result["plan"]["applicable"], false, "{result}");
         assert!(result["plan"]["patch"].is_null());
         assert!(result["coverage"].get("standard_prelude").is_none());
@@ -88,14 +94,24 @@ fn zero_prelude_proofs_have_exact_source_destination_and_chain_veto_anchors() {
             "{option}"
         );
         assert!(
-            witnessed(&repo, &result, class, "cases/layout/lib.rs", witness),
+            witnessed(
+                &repo,
+                &result,
+                class,
+                if local {
+                    "cases/layout/destination.rs"
+                } else {
+                    "cases/layout/lib.rs"
+                },
+                witness
+            ),
             "{result}"
         );
     }
 }
 
 #[test]
-fn probe_a_shape_discloses_conditional_and_derive_causes_on_retained_option() {
+fn probe_a_shape_discharges_signature_option_and_discloses_remaining_causes() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source; #[cfg(test)] mod tests;");
     let a = "fn claim_review_status(outcome: Outcome) -> Status { match outcome { Outcome::Pass => Status::Pass } }";
@@ -103,22 +119,22 @@ fn probe_a_shape_discloses_conditional_and_derive_causes_on_retained_option() {
     repo.write("cases/layout/source.rs", &format!("enum Outcome {{ Pass }} enum Status {{ Pass }} struct Transition; #[derive(custom::Debug)] enum Effect {{ RecordTransition(Transition) }} {a} {b}"));
     let result = run(&repo, request(&repo, &[a, b]));
     assert_eq!(result["plan"]["applicable"], false, "{result}");
-    let option = result["plan"]["decisions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["anchors"][0]["expected_text"] == "Option")
-        .unwrap();
-    for class in ["conditional_context", "derive_veto"] {
-        assert!(
-            option["refusal_basis"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|b| b["class"] == class),
-            "{option}"
-        );
-    }
+    assert!(
+        result["plan"]["binding_proofs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["class"] == "standard_prelude" && p["anchor"]["expected_text"] == "Option"),
+        "{result}"
+    );
+    assert!(
+        !result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["anchors"][0]["expected_text"] == "Option"),
+        "{result}"
+    );
     for decision in result["plan"]["decisions"]
         .as_array()
         .unwrap()
@@ -130,21 +146,8 @@ fn probe_a_shape_discloses_conditional_and_derive_causes_on_retained_option() {
             "{decision}"
         );
     }
-    assert!(witnessed(
-        &repo,
-        &result,
-        "conditional_context",
-        "cases/layout/lib.rs",
-        "#[cfg(test)]"
-    ));
-    assert!(witnessed(
-        &repo,
-        &result,
-        "derive_veto",
-        "cases/layout/source.rs",
-        "custom::Debug"
-    ));
-    assert!(result["plan"].get("binding_proofs").is_none(), "{result}");
+    assert_eq!(result["coverage"]["standard_prelude"], 1);
+    assert!(result["plan"]["patch"].is_null());
 }
 
 #[test]
@@ -165,7 +168,15 @@ fn incomplete_destination_chain_and_synthetic_names_have_path_only_anchors() {
     let mut args = request(&repo, &[selected]);
     args["moves"][0]["destination"]["path"] = json!("cases/layout/Option.rs");
     let result = run(&repo, args);
-    assert!(result["plan"]["decisions"].as_array().unwrap().iter().flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten()).any(|b| {
-        b == &json!({"class":"shadow","name":"Option","anchor":{"path":"cases/layout/Option.rs"}})
-    }), "{result}");
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    assert_eq!(result["coverage"]["standard_prelude"], 1);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+            .all(|b| b["class"] != "shadow"),
+        "{result}"
+    );
 }
