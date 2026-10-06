@@ -181,8 +181,19 @@ an enclosing block ignores body macros. Standalone macros in a reference's block
 or any enclosing block veto proof regardless of source order: both direct
 invocations and expression-statement wrappers may expand to block items visible
 even to earlier references and nested-item signatures. Written syntax does not
-prove expression-only output. Macros confined to sibling blocks do not veto.
-This is a written token-tree audit, not expansion or a macro-hygiene proof.
+prove expression-only output. Unexamined outer attributes directly in those
+blocks also veto, even on a later, differently named local item: an attribute
+macro can emit a competing hoisted item. The refusal discloses the attribute's
+original range as `lexical_uncertainty` with `conditional_local_context`; it is
+not a standalone-macro witness eligible for test-consumer risk acknowledgment.
+Only the existing strict context-independent predicate exempts written attributes
+(`allow(...)`, `inline`, `inline(always)`, `inline(never)`, `repr(...)`); doc comments
+are inert comment syntax. Explicit `doc`/`expect`, conditional/custom attributes
+and local derives remain unexamined: bare derive spelling alone does not prove
+compiler-built-in macro identity in that block. Expansion sites confined to sibling
+blocks do not veto, and body attributes do not veto a signature outside their blocks.
+This audits direct block macro invocations, macro expression-statement wrappers
+and outer attribute siblings, not expansion or macro hygiene.
 `no_implicit_prelude` vetoes its own module and descendants, not its parent or
 siblings; a file-root directive is inherited by its filesystem children. These are
 prelude-audit scoping rules: the independent ordinary module-chain audit still

@@ -141,6 +141,81 @@ fn body_macro_veto_is_occurrence_local_not_signature_or_batch_wide() {
 }
 
 #[test]
+fn local_attribute_expansion_withholds_prelude_proof_and_discloses_attribute() {
+    for (selected, proofs) in [
+        (
+            "fn selected() { let _: Option<u8>; /// inert docs\nfn unrelated() {} }",
+            1,
+        ),
+        (
+            "fn selected() { let _: Option<u8>; #[inject]\n/// inert docs\nfn unrelated() {} }",
+            0,
+        ),
+        (
+            "fn selected() { { let _: Option<u8>; } #[inject] fn unrelated() {} }",
+            0,
+        ),
+        (
+            "fn selected() { fn inner(_: Option<u8>) {} #[inject] fn unrelated() {} }",
+            0,
+        ),
+        (
+            "fn selected() { { fn inner(_: Option<u8>) {} } #[inject] fn unrelated() {} }",
+            0,
+        ),
+        (
+            "fn selected() { let _: Option<u8>; #[inject] #[inline] fn unrelated() {} }",
+            0,
+        ),
+        (
+            "fn selected() { let _: Option<u8>; { #[inject] fn unrelated() {} } }",
+            1,
+        ),
+        (
+            "fn selected(_: Option<u8>) { #[inject] fn unrelated() {} }",
+            1,
+        ),
+    ] {
+        let repo = fixture(selected);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        assert_eq!(proof_count(&result), proofs, "{selected}: {result}");
+        if proofs == 0 {
+            withheld(&result);
+            let decision = result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["anchors"][0]["expected_text"] == "Option")
+                .unwrap();
+            let witness = &decision["lexical_uncertainty"];
+            assert_eq!(witness["reason"], "conditional_local_context");
+            assert_eq!(witness["scope"]["kind"], "block");
+            assert_eq!(witness["pattern"]["kind"], "attribute_item");
+            assert!(witness.get("witness_relation").is_none());
+            let basis = decision["refusal_basis"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["class"] == "lexical_uncertainty")
+                .unwrap();
+            assert_eq!(basis["name"], "Option");
+            assert_eq!(basis["anchor"]["path"], "cases/layout/source.rs");
+            assert_eq!(basis["anchor"]["range"], witness["pattern"]["range"]);
+            let range = &basis["anchor"]["range"];
+            let start = range["start_byte"].as_u64().unwrap() as usize;
+            let end = range["end_byte"].as_u64().unwrap() as usize;
+            assert_eq!(&selected[start..end], "#[inject]");
+            assert!(start > selected.find("Option").unwrap());
+        } else if !selected.contains("#[inject]") {
+            assert_eq!(result["plan"]["applicable"], true, "{result}");
+            apply(&repo, &result);
+        }
+    }
+}
+#[test]
 fn no_implicit_prelude_in_an_unrelated_inline_module_retains_chain_refusal() {
     let record = "struct Record { option: Option<u8> }";
     for file in ["lib.rs", "source.rs", "destination.rs"] {

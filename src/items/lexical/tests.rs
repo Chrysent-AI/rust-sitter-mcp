@@ -383,6 +383,89 @@ fn later_block_macros_veto_including_enclosing_blocks_and_nested_items() {
     }
 }
 #[test]
+fn unexamined_block_attributes_veto_before_local_proofs_and_item_boundaries() {
+    for source in [
+        "fn f() { let _: selected; #[inject] fn unrelated() {} }",
+        "fn f() { { let _: selected; } #[inject] fn unrelated() {} }",
+        "fn f() { fn inner(_: selected) {} #[inject] fn unrelated() {} }",
+        "fn f() { { fn inner(_: selected) {} } #[inject] fn unrelated() {} }",
+        "fn f<selected>() { let _: selected; #[inject] fn unrelated() {} }",
+        "fn f() { #[inject] #[inline] fn unrelated() {} let _: selected; }",
+        "fn f() { let _: selected; #[inject]\n/// inert docs\nfn unrelated() {} }",
+        "fn f() { let _: selected; #[inject] impl Other {} }",
+    ] {
+        let assessment = assess(source, "selected", false);
+        assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+        let witness = assessment.uncertainty.unwrap();
+        assert_eq!(witness.reason, LexicalReason::ConditionalLocalContext);
+        assert_eq!(witness.scope.kind, "block");
+        assert!(witness.witness_relation.is_none());
+        let attribute = witness.pattern.unwrap();
+        assert_eq!(attribute.kind, "attribute_item");
+        assert_eq!(
+            &source[attribute.range.start_byte..attribute.range.end_byte],
+            "#[inject]"
+        );
+
+        // Ignoring standalone macro risk must not ignore attribute uncertainty.
+        let flag = AtomicBool::new(false);
+        let controls = (Instant::now() + Duration::from_secs(5), &flag);
+        let tree = crate::trivia::parse(source, controls.0, controls.1)
+            .unwrap()
+            .unwrap();
+        let at = source.rfind("selected").unwrap();
+        let node = tree
+            .root_node()
+            .named_descendant_for_byte_range(at, at + "selected".len())
+            .unwrap();
+        assert_eq!(
+            test_consumer_binding("probe.rs", node, source, "selected", controls).unwrap(),
+            LexicalBinding::Uncertain,
+            "{source}"
+        );
+    }
+}
+#[test]
+fn block_attribute_inertness_uses_the_strict_classifier_and_scope() {
+    for source in [
+        "fn f() { let _: selected; /// inert docs\nfn unrelated() {} }",
+        "fn f() { let _: selected; /** inert docs */ fn unrelated() {} }",
+        "fn f() { let _: selected; #[allow(dead_code)] fn unrelated() {} }",
+        "fn f() { let _: selected; #[inline] fn unrelated() {} }",
+        "fn f() { let _: selected; #[inline(always)] fn unrelated() {} }",
+        "fn f() { let _: selected; #[inline(never)] fn unrelated() {} }",
+        "fn f() { let _: selected; #[repr(C)] struct Other; }",
+        "fn f() { let _: selected; { #[inject] fn unrelated() {} } }",
+        "fn f(_: selected) { #[inject] fn unrelated() {} }",
+    ] {
+        assert_eq!(
+            assess(source, "selected", false).binding,
+            LexicalBinding::Absent,
+            "{source}"
+        );
+    }
+    // These spellings are not inert under the existing strict predicate.
+    // In particular, a derive spelling alone is not proof of built-in identity.
+    for attribute in [
+        "#[derive(Debug)]",
+        "#[derive(custom::Debug)]",
+        "#[cfg_attr(test, inject)]",
+        "#[doc = \"docs\"]",
+        "#[expect(dead_code)]",
+        "#[custom::inline]",
+    ] {
+        let source = format!("fn f() {{ let _: selected; {attribute} struct Other; }}");
+        let assessment = assess(&source, "selected", false);
+        assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+        let witness = assessment.uncertainty.unwrap();
+        let pattern = witness.pattern.unwrap();
+        assert_eq!(
+            &source[pattern.range.start_byte..pattern.range.end_byte],
+            attribute
+        );
+    }
+}
+#[test]
 fn definite_bindings_retain_declaration_coordinates() {
     for (source, declaration) in [
         ("fn f<selected: Copy>(input: selected) {}", "selected: Copy"),
@@ -460,6 +543,11 @@ fn lexical_refusal_basis_keeps_the_actual_positional_witness() {
             "fn f() { selected(); m!(); }",
             "chain_macro_statement",
             "m!();",
+        ),
+        (
+            "fn f() { selected(); #[inject] fn unrelated() {} }",
+            "lexical_uncertainty",
+            "#[inject]",
         ),
     ] {
         let flag = AtomicBool::new(false);

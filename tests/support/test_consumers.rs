@@ -335,6 +335,9 @@ fn test_consumer_lexical_acknowledgment_keeps_written_conflicts_blocking() {
         "use crate::other::LIMIT; let n = LIMIT; assert!(true);",
         "let n = LIMIT; const LIMIT: usize = 1; assert!(true);",
         "let n = LIMIT; #[cfg(unix)] const LIMIT: usize = 1; assert!(true);",
+        "let n = LIMIT; #[inject] fn unrelated() {}",
+        "let n = LIMIT; #[inject] fn unrelated() {} assert!(true);",
+        "#[inject] fn unrelated() {} let n = LIMIT; assert!(true);",
     ] {
         let repo = fixture(&format!(
             "const LIMIT: usize = 4;\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ assert!(true); {body} }} }}\n"
