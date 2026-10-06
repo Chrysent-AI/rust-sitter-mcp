@@ -209,7 +209,9 @@ impl Server {
         request: SuggestSplitRequest,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        let failure = |limits, error| suggest_wire(SuggestSplitEnvelope::failed(limits, error));
+        let failure = |limits: crate::split::AdviceLimits, error| {
+            suggest_wire(SuggestSplitEnvelope::failed(limits.into(), error))
+        };
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
             return failure(
                 request.limits,
@@ -304,6 +306,8 @@ Workflow: Review, edit or ignore the draft outside the server. Join group item_i
 Safety: Read-only advice: no patch, edit, creation content, execution handle, stored plan or autonomous application. Syntax checking is input-only; semantic checking is not_performed. Inspect completeness, omissions and decisions before relying on a draft.
 
 Risk signals: Every group has expected_to_block lower-bound observed decision counts for member calls, macros, external bindings, conditional/derive context and cfg(test) consumers (plus other_local), with decision IDs. Counts are local risk coverage, not a guaranteed final blocker count; move_item adds consumer/destination/batch/module-chain/trivia checks and may repair or deduplicate dependencies. assessment_scope is local_only with those other concerns explicitly not_assessed, even at zero counts: zero local risks never means a safe move. cfg_test_consumer signals link observed same-file test consumers via super:: paths/imports to affected inventory items; test_coupled groups warn that those consumers will block relocation. No cfg evaluation or execution override is added, and no planner runs per draft.
+
+Response detail: Schema version 2 encodes decision_groups[].decision_ids as exact {first_id,count} runs, with one routing summary and consequence per cause/route/consequence group. Default decisions contain one full anchored exemplar per group, bounded by limits.diagnostic_count (default 64); counts and draft risk links cover omitted details through these runs. Explicit limits.diagnostic_count (0–100000) returns the first N full decisions with unchanged fields; raise response_bytes too when expanding large files. Omissions are counted; capping decision detail alone does not withhold full drafts or mark analysis incomplete.
 
 Advanced details: Inventories every written top-level unit, including anonymous impls and context-sensitive constructs. Source-linked heuristic prefixes, reference candidates, sections and sizes explain partitions, or an honest no-draft/incomplete result. Banner adjacency never assigns ownership. max_items defaults to 500 (1–5000), bounds displayed membership rather than an execution selection, and exceeded limits withhold complete drafts. Optional context/limits objects use defaults for omitted settings; there is no cursor."#, output_schema = rmcp::handler::server::tool::schema_for_output::<SuggestSplitEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
     async fn suggest_split(

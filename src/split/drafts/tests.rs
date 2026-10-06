@@ -64,7 +64,7 @@ fn zero_and_ambiguous_parent_outcomes_preserve_all_candidates_and_links() {
         for parent in &parents {
             analysis.contexts.insert((*parent).into(), evidence.clone());
         }
-        let mut result = SuggestSplitEnvelope::empty(request.limits.clone());
+        let mut result = SuggestSplitEnvelope::empty(request.limits.clone().into());
         result.inventory = parsed[&request.source_path].items.clone();
         build(
             &scope,

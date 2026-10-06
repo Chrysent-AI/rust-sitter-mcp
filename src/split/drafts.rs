@@ -859,12 +859,33 @@ pub(super) fn finalize(
                 &d.action,
                 d.blocks_applicability,
                 d.id.as_str(),
-                None,
+                Some(d.unresolved_consequence.as_str()),
             )
         }),
         &mut result.counts.analysis_descriptor_bytes,
         (controls.deadline, controls.cancelled),
-    )?;
+    )?
+    .into_iter()
+    .map(|summary| {
+        let decision = &result.decisions[summary.decision_ids[0]
+            .strip_prefix("d/")
+            .expect("decision prefix")
+            .parse::<usize>()
+            .expect("decision index")];
+        AdviceDecisionGroup {
+            unresolved_consequence: decision.unresolved_consequence.clone(),
+            actions: vec![decision.action.summary()],
+            summary: DecisionGroup {
+                decision_ids: id_runs(&summary.decision_ids),
+                category: summary.category,
+                reason: summary.reason,
+                route: summary.route,
+                blocks_applicability: summary.blocks_applicability,
+                count: summary.count,
+            },
+        }
+    })
+    .collect();
     for (index, draft) in result.drafts.iter_mut().enumerate() {
         controls.check()?;
         draft.id = format!("draft/{index}");

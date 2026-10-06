@@ -11,7 +11,7 @@ use crate::{
     scope::{self, FileSnapshot, Scope},
     trivia::{self, MoveOrigin},
 };
-pub(crate) use actions::decision_groups;
+pub(crate) use actions::{decision_groups, id_runs};
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{

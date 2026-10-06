@@ -132,7 +132,7 @@ fn injected_small_candidate_cap_stops_at_its_first_excess() {
         deadline: Instant::now() + Duration::from_secs(30),
         cancelled: &cancelled,
     };
-    let mut result = SuggestSplitEnvelope::empty(request.limits.clone());
+    let mut result = SuggestSplitEnvelope::empty(request.limits.clone().into());
     result.effective_work_limits.reference_candidates = 1;
     let error = build(&repo.0, &request, controls, || {}, &mut result).unwrap_err();
     assert_eq!(error.code, "reference_work_limit");
@@ -172,6 +172,96 @@ fn final_fit_tier_accounts_membership_without_losing_root_or_snapshot() {
         drafts * 1500
     );
     assert!(result.wire_bytes() <= result.limits.response_bytes);
+}
+
+#[test]
+fn final_fit_counts_omitted_decision_ids_not_compressed_runs() {
+    let repo = Fixture::new();
+    fs::write(
+        repo.0.join("lib.rs"),
+        "fn retained() {}\nfn risky(x: u8) { x.a(); x.b(); x.c(); }\n",
+    )
+    .unwrap();
+    let mut result = run(&repo.0, repo.request(), &AtomicBool::new(false));
+    assert_eq!(result.decision_groups.len(), 1);
+    assert_eq!(result.decision_groups[0].count, 3);
+    assert_eq!(result.decision_groups[0].decision_ids.len(), 1);
+    // Force the final summary tier to overflow independently of preview detail.
+    result.decision_groups[0].unresolved_consequence = "x".repeat(100_000);
+    result.limits.response_bytes = 65_536;
+    result
+        .fit(Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &AtomicBool::new(false),
+        })
+        .unwrap();
+    assert!(result.decision_groups.is_empty());
+    assert_eq!(result.counts.omissions["decision_groups"], 1);
+    assert_eq!(result.counts.omissions["decision_group_references"], 3);
+    assert_eq!(result.counts.omissions["decisions"], 3);
+    assert!(result.wire_bytes() <= result.limits.response_bytes);
+}
+
+#[test]
+fn advice_groups_separate_consequences_and_actions_with_exact_interleaved_runs() {
+    let repo = Fixture::new();
+    fs::write(
+        repo.0.join("lib.rs"),
+        "fn retained() {}\nfn risky(x: u8) { x.a(); x.b(); x.c(); x.d(); x.e(); x.f(); }\n",
+    )
+    .unwrap();
+    let mut request = repo.request();
+    request.limits.diagnostic_count = 100_000;
+    let mut result = run(&repo.0, request, &AtomicBool::new(false));
+    assert_eq!(result.decisions.len(), 6);
+    let original_consequence = result.decisions[0].unresolved_consequence.clone();
+    for index in [1, 3] {
+        result.decisions[index].unresolved_consequence = "another consequence".into();
+    }
+    result.decisions[4].action = DecisionAction::UnsupportedInEngine {
+        construct: "another_construct".into(),
+        instruction: "another instruction".into(),
+    };
+    result.drafts.clear();
+    drafts::finalize(
+        &mut result,
+        Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &AtomicBool::new(false),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.decision_groups.len(), 3);
+    let original = result
+        .decision_groups
+        .iter()
+        .find(|g| {
+            g.unresolved_consequence == original_consequence
+                && g.actions[0] == result.decisions[0].action.summary()
+        })
+        .unwrap();
+    assert_eq!(original.count, 3);
+    assert_eq!(
+        serde_json::to_value(&original.decision_ids).unwrap(),
+        serde_json::json!([
+            {"first_id":"d/0","count":1},
+            {"first_id":"d/2","count":1},
+            {"first_id":"d/5","count":1}
+        ])
+    );
+    let different_consequence = result
+        .decision_groups
+        .iter()
+        .find(|g| g.unresolved_consequence == "another consequence")
+        .unwrap();
+    assert_eq!(different_consequence.count, 2);
+    assert_eq!(
+        serde_json::to_value(&different_consequence.decision_ids).unwrap(),
+        serde_json::json!([
+            {"first_id":"d/1","count":1},
+            {"first_id":"d/3","count":1}
+        ])
+    );
 }
 
 #[test]

@@ -19,7 +19,8 @@ use std::{
 use stdio_client::Client;
 
 fn args(repo: &Fixture, source: &str) -> Value {
-    json!({"repo_path":repo.0,"crate_root":"src/lib.rs","source_path":source,"paths":["src"],"limits":{"text_bytes":0}})
+    // Tests asserting individual occurrence details explicitly expand the response.
+    json!({"repo_path":repo.0,"crate_root":"src/lib.rs","source_path":source,"paths":["src"],"limits":{"text_bytes":0,"diagnostic_count":100000}})
 }
 fn run(repo: &Fixture, args: Value) -> Value {
     let request = serde_json::from_value(args).unwrap();
@@ -420,7 +421,7 @@ mod tests {
     let mut client = Client::new();
     let advice = client.call("suggest_split", args(&repo, "src/weak.rs"));
     advice_flow::complete(&advice);
-    assert_eq!(advice["schema_version"], 1);
+    assert_eq!(advice["schema_version"], 2);
     let group = advice["drafts"][0]["groups"]
         .as_array()
         .unwrap()
@@ -944,7 +945,7 @@ fn wrong_binary_root_names_the_exhausted_boundary_and_correct_root_drafts() {
     let repo = Fixture::generate();
     install(&repo);
     let before = observe(&repo.0);
-    let mut request = json!({"repo_path":repo.0,"crate_root":BIN_ROOT,"source_path":SOURCE,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":0}});
+    let mut request = json!({"repo_path":repo.0,"crate_root":BIN_ROOT,"source_path":SOURCE,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":100000}});
     let mut client = Client::new();
     let wrong = client.call("suggest_split", request.clone());
     advice_flow::complete(&wrong);
@@ -997,7 +998,7 @@ fn failed_declaration_taxonomy_retains_original_coordinates() {
     let root = "cases/chain/lib.rs";
     let source = "cases/chain/leaf.rs";
     repo.write(source, "fn one() {}\nfn two() {}\n");
-    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":1}});
+    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":100000}});
     for (written, declaration, reason) in [
         (
             "#[cfg(any())]\nmod leaf;\n",
@@ -1172,7 +1173,7 @@ fn mandatory_chain_evidence_overflow_is_incomplete_with_no_dangling_links() {
         root,
         "#[cfg(any())]\n#[path = \"elsewhere.rs\"]\n#[allow(dead_code)]\nmod leaf {}\nmod leaf;\n",
     );
-    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":0}});
+    let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":100000}});
     let full = run(&repo, request.clone());
     assert_eq!(full["chain_diagnostics"].as_array().unwrap().len(), 5);
     chain_fixture::linked(&full["chain_diagnostics"], &full["decisions"]);
