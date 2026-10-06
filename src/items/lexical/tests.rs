@@ -151,7 +151,7 @@ fn value_bindings_do_not_prove_type_references() {
 fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
     for (source, reason) in [
         (
-            "fn f(selected: fn()) { let (selected,) = value; selected(); }",
+            "fn f(selected: fn()) { const selected: u8 = 1; let (selected,) = value; selected(); }",
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
@@ -159,15 +159,15 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
-            "fn f() { if let Some(selected) = value { selected(); } }",
+            "fn f() { const selected: u8 = 1; if let Some(selected) = value { selected(); } }",
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
-            "fn f() { while let Some(selected) = value { selected(); } }",
+            "fn f() { const selected: u8 = 1; while let Some(selected) = value { selected(); } }",
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
-            "fn f() { match value { Some(selected) => selected(), _ => {} } }",
+            "fn f() { const selected: u8 = 1; match value { Some(selected) => selected(), _ => {} } }",
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
@@ -179,11 +179,11 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::UnsupportedPattern,
         ),
         (
-            "fn f() { match value { other @ Some(selected) => selected(), _ => {} } }",
+            "fn f() { const selected: u8 = 1; match value { other @ Some(selected) => selected(), _ => {} } }",
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
-            "fn f() { match value { selected @ Some(selected) => selected(), _ => {} } }",
+            "fn f() { const selected: u8 = 1; match value { selected @ Some(selected) => selected(), _ => {} } }",
             LexicalReason::IdentifierPatternBindingOrConstant,
         ),
         (
@@ -310,7 +310,7 @@ fn statement_macro_witness_is_disclosed_as_same_block_not_containing_pattern() {
         assert_eq!(&source[start..end], "m!();");
     }
     let assessment = assess(
-        "fn f() { let (selected,) = pair; selected(); }",
+        "fn f() { const selected: u8 = 1; let (selected,) = pair; selected(); }",
         "selected",
         false,
     );
@@ -535,7 +535,7 @@ fn lexical_refusal_basis_keeps_the_actual_positional_witness() {
             "m!();",
         ),
         (
-            "fn f() { let (selected,) = value; selected(); }",
+            "fn f() { const selected: u8 = 1; let (selected,) = value; selected(); }",
             "lexical_uncertainty",
             "selected",
         ),
@@ -572,6 +572,123 @@ fn lexical_refusal_basis_keeps_the_actual_positional_witness() {
         need.disclose_refusal();
         assert_eq!(need.refusal_basis.len(), 1);
     }
+}
+#[test]
+fn pattern_arguments_bind_without_spelling_heuristics() {
+    for pattern in [
+        "(selected,)",
+        "[selected]",
+        "[Effect::Record(selected)]",
+        "Effect::Record(selected)",
+        "Record { field: selected }",
+        "(&selected,)",
+        "(r#selected,)",
+    ] {
+        for source in [
+            format!("fn f() {{ let {pattern} = value else {{ return; }}; selected; }}"),
+            format!("fn f() {{ match value {{ {pattern} if selected => selected, _ => false }} }}"),
+        ] {
+            assert_eq!(
+                assess(&source, "selected", false).binding,
+                LexicalBinding::Independent,
+                "{source}"
+            );
+        }
+    }
+    assert_eq!(
+        assess(
+            "fn f() { let [UPPERCASE] = value; UPPERCASE; }",
+            "UPPERCASE",
+            false
+        )
+        .binding,
+        LexicalBinding::Independent
+    );
+}
+#[test]
+fn written_pattern_competitors_are_hoisted_and_module_scoped() {
+    for evidence in [
+        "const selected: u8 = 1;",
+        "enum Visible { selected, Payload(u8) }",
+        "enum Visible { selected = 1 }",
+        "use external::selected;",
+        "use external::Other as selected;",
+        "use external::*;",
+        "struct selected;",
+    ] {
+        for source in [
+            format!("{evidence} fn f() {{ let [selected] = value; selected; }}"),
+            format!("fn f() {{ let [selected] = value; {evidence} selected; }}"),
+            format!("fn f() {{ {evidence} {{ let Some(selected) = value; selected; }} }}"),
+        ] {
+            let assessment = assess(&source, "selected", true);
+            assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+            assert_eq!(
+                assessment.uncertainty.unwrap().reason,
+                LexicalReason::IdentifierPatternBindingOrConstant
+            );
+        }
+    }
+    for source in [
+        "use external::*; mod child { fn f() { let [selected] = value; selected; } }",
+        "enum Outer { selected } mod child { fn f() { let [selected] = value; selected; } }",
+        "fn unrelated() { const selected: u8 = 1; } fn f() { let [selected] = value; selected; }",
+        "enum Visible { selected(u8) } fn f() { let [selected] = value; selected; }",
+        "fn f() { { use external::*; } let [selected] = value; selected; }",
+    ] {
+        assert_eq!(
+            assess(source, "selected", false).binding,
+            LexicalBinding::Independent,
+            "{source}"
+        );
+    }
+}
+#[test]
+fn scoped_paths_are_disjoint_and_let_else_keeps_failure_outside_binding_scope() {
+    for source in [
+        "fn f() { match value { Outcome::Pass => selected(), _ => {} } }",
+        "fn f() { match value { Outcome::Pass if selected() => {}, _ => {} } }",
+        "fn f() { match value { Outcome::Pass | Outcome::Fail => selected(), _ => {} } }",
+        "fn f() { match value { true | false => selected(), _ => {} } }",
+        "fn f() { match value { Outcome::selected => selected(), _ => {} } }",
+        "fn f() { let [Effect::Record(selected)] = selected() else { return; }; }",
+        "fn f() { let [Effect::Record(selected)] = value else { selected(); return; }; }",
+        "fn f() { match value { Outcome::Pass => { selected(); }, Outcome::Record(selected) => {} } }",
+    ] {
+        assert_eq!(
+            assess(source, "selected", false).binding,
+            LexicalBinding::Absent,
+            "{source}"
+        );
+    }
+    // The failure block still sees a prior successful binding of the same name.
+    assert_eq!(
+        assess(
+            "fn f(selected: fn()) { let [selected] = value else { selected(); return; }; }",
+            "selected",
+            false
+        )
+        .binding,
+        LexicalBinding::Independent
+    );
+    // The constructor path is not in the match-arm binder's scope.
+    let source = "fn f() { match value { selected::Record(selected) => {} } }";
+    let flag = AtomicBool::new(false);
+    let controls = (Instant::now() + Duration::from_secs(5), &flag);
+    let tree = crate::trivia::parse(source, controls.0, controls.1)
+        .unwrap()
+        .unwrap();
+    let at = source.find("selected::").unwrap();
+    let node = tree
+        .root_node()
+        .named_descendant_for_byte_range(at, at + 8)
+        .unwrap();
+    assert_eq!(
+        lexical_assessment("probe.rs", node, source, "selected", controls, false)
+            .unwrap()
+            .binding,
+        LexicalBinding::Absent
+    );
 }
 #[test]
 fn interrupted_work_never_supplies_positive_proof() {

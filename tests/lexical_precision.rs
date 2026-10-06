@@ -238,6 +238,11 @@ fn admitted_patterns_repair_only_free_accesses_and_compile_after_application() {
         "match Some(|| {}) { Some(ref selected) => selected(), _ => {} }",
         "let closure = move |selected: fn()| selected();",
         "let (r#other,) = (1,); selected();",
+        "{ let (selected,) = (|| {},); selected(); }",
+        "{ let [selected] = [|| {}]; selected(); }",
+        "if let Some(selected) = Some(|| {}) { selected(); }",
+        "match Some(|| {}) { Some(selected) if { selected(); true } => selected(), _ => {} }",
+        "let [Some(selected)] = [Some(|| {})] else { selected(); return; }; selected();",
     ] {
         let source =
             format!("fn selected() {{}}\nfn caller() {{ {local} }}\nfn free() {{ selected(); }}\n");
@@ -260,8 +265,12 @@ fn admitted_patterns_repair_only_free_accesses_and_compile_after_application() {
         if local.contains("mut selected")
             || local.contains("ref selected")
             || local.contains("selected: fn()")
+            || local.contains("(selected,)")
+            || local.contains("[selected]")
+            || local.contains("Some(selected)")
         {
-            assert!(after.contains(local), "{after}");
+            let expected = local.replace("else { selected();", "else { relocated();");
+            assert!(after.contains(&expected), "{after}");
         } else {
             assert!(
                 after.contains(
@@ -326,7 +335,7 @@ fn captured_literal_alternatives_preserve_local_and_free_accesses() {
 fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
     for (caller, reason) in [
         (
-            "fn caller(pair: (fn(),)) { let (selected,) = pair; selected(); }",
+            "fn caller(pair: (fn(),)) { const selected: u8 = 1; let (selected,) = pair; selected(); }",
             "identifier_pattern_binding_or_constant",
         ),
         (
@@ -334,15 +343,15 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
             "identifier_pattern_binding_or_constant",
         ),
         (
-            "fn caller() { if let Some(selected) = value { selected(); } }",
+            "fn caller() { const selected: u8 = 1; if let Some(selected) = value { selected(); } }",
             "identifier_pattern_binding_or_constant",
         ),
         (
-            "fn caller() { while let Some(selected) = value { selected(); } }",
+            "fn caller() { const selected: u8 = 1; while let Some(selected) = value { selected(); } }",
             "identifier_pattern_binding_or_constant",
         ),
         (
-            "fn caller() { match value { Some(selected) => selected(), _ => {} } }",
+            "fn caller() { const selected: u8 = 1; match value { Some(selected) => selected(), _ => {} } }",
             "identifier_pattern_binding_or_constant",
         ),
         (
@@ -350,11 +359,11 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
             "unsupported_pattern",
         ),
         (
-            "fn caller() { match value { other @ Some(selected) => selected(), _ => {} } }",
+            "fn caller() { const selected: u8 = 1; match value { other @ Some(selected) => selected(), _ => {} } }",
             "identifier_pattern_binding_or_constant",
         ),
         (
-            "fn caller() { match value { selected @ Some(selected) => selected(), _ => {} } }",
+            "fn caller() { const selected: u8 = 1; match value { selected @ Some(selected) => selected(), _ => {} } }",
             "identifier_pattern_binding_or_constant",
         ),
         (
@@ -466,10 +475,15 @@ fn binding_scope_boundaries_keep_real_file_consumers_repairable() {
     }
 }
 #[test]
-fn match_guard_references_are_repaired_and_ambiguous_guard_bindings_still_block() {
+fn match_guard_references_are_repaired_and_competing_constants_still_block() {
     for (pattern, applicable) in [("Some(other)", true), ("Some(selected)", false)] {
         let source = format!(
-            "fn selected() -> bool {{ true }}\nfn caller() {{ match Some(1) {{ {pattern} if selected() => {{}}, _ => {{}} }} }}\n"
+            "fn selected() -> bool {{ true }}\nfn caller() {{ {} match Some(1) {{ {pattern} if selected() => {{}}, _ => {{}} }} }}\n",
+            if applicable {
+                ""
+            } else {
+                "const selected: u8 = 1;"
+            }
         );
         let repo = spawner_precision::load(&source);
         let mut args = request(&repo, "fn selected() -> bool { true }");
@@ -622,6 +636,51 @@ fn actual_local_type_bindings_remain_independent_after_moving() {
     }
 }
 #[test]
+fn written_competitors_and_mixed_or_patterns_retain_move_uncertainty() {
+    for (evidence, pattern, reason) in [
+        (
+            "enum Visible { binding }",
+            "[binding]",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "const binding: u8 = 1;",
+            "[binding]",
+            "identifier_pattern_binding_or_constant",
+        ),
+        (
+            "use external::value as binding;",
+            "[binding]",
+            "identifier_pattern_binding_or_constant",
+        ),
+        ("use external::*;", "[binding]", "glob_binding_unproved"),
+        (
+            "const CONSTANT: u8 = 1;",
+            "[binding] | [CONSTANT]",
+            "unsupported_pattern",
+        ),
+    ] {
+        let moved = format!(
+            "fn moved(value: [u8; 1]) -> u8 {{ match value {{ {pattern} => binding, _ => 0 }} }}"
+        );
+        let repo = spawner_precision::load(&format!("{evidence}\n{moved}\n"));
+        let result = run(&repo, request(&repo, &moved));
+        withheld(&result);
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| ((d["reason"] == "lexical_context_unproved"
+                    && d["lexical_uncertainty"]["reason"] == reason)
+                    || (reason == "glob_binding_unproved" && d["reason"] == reason))
+                    && d["anchors"][0]["expected_text"] == "binding"),
+            "{evidence}, {pattern}: {result}"
+        );
+    }
+}
+#[test]
 fn local_import_proof_does_not_bypass_a_nearer_ambiguous_pattern() {
     let source = "fn selected() {}\nfn caller(pair: (fn(),)) { use crate::subagent::spawner::selected; { let (selected,) = pair; selected(); } }\n";
     let repo = spawner_precision::load(source);
@@ -649,7 +708,7 @@ fn path_prefix_and_caller_selected_alias_fail_with_specific_witnesses() {
     assert_eq!(decision["anchors"][0]["expected_text"], "selected");
 
     let repo = spawner_precision::load(
-        "fn selected() {}\nfn caller(pair: (fn(),)) { let (shadowed,) = pair; selected(); }\n",
+        "fn selected() {}\nfn caller(pair: (fn(),)) { const shadowed: u8 = 1; let (shadowed,) = pair; selected(); }\n",
     );
     let mut args = request(&repo, "fn selected() {}");
     let result = run(&repo, args.clone());
@@ -677,7 +736,7 @@ fn path_prefix_and_caller_selected_alias_fail_with_specific_witnesses() {
 #[test]
 fn mandatory_lexical_witnesses_survive_display_caps_or_are_explicitly_omitted() {
     let source = format!(
-        "fn selected() {{}}\nfn caller(pair: (fn(),)) {{ let (selected,) = pair; {} }}\n",
+        "fn selected() {{}}\nfn caller(pair: (fn(),)) {{ const selected: u8 = 1; let (selected,) = pair; {} }}\n",
         "selected();".repeat(200)
     );
     let repo = spawner_precision::load(&source);

@@ -233,7 +233,8 @@ fn simple_local() { let target = || {}; target(); }
 fn closure() { let _ = |target: fn()| target(); }
 fn nested() { fn target() {} target(); }
 fn local_type() { struct target; let _ = target; }
-fn uncertain(pair: (fn(), u8)) { let (target, _) = pair; target(); }
+fn tuple_local(pair: (fn(), u8)) { let (target, _) = pair; target(); }
+fn uncertain(pair: (fn(), u8)) { const target: u8 = 1; let (target, _) = pair; target(); }
 fn qualified() { unrelated::target(); }
 fn nested_module() { mod inside { fn invoke() { self::target(); target(); } } }
 fn tokens() { target!(); stringify!(target); let _ = "target"; /* target */ }
@@ -251,6 +252,7 @@ fn tokens() { target!(); stringify!(target); let _ = "target"; /* target */ }
         "closure",
         "nested",
         "local_type",
+        "tuple_local",
         "uncertain",
         "qualified",
         "nested_module",
@@ -261,6 +263,13 @@ fn tokens() { target!(); stringify!(target); let _ = "target"; /* target */ }
             "false edge from {control}"
         );
     }
+    assert!(!result["decisions"].as_array().unwrap().iter().any(|d| {
+        d["item_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&item(&result, "tuple_local")["id"])
+            && d["reason"] == "lexical_context_unproved"
+    }));
     assert!(result["decisions"].as_array().unwrap().iter().any(|d| {
         d["category"] == "binding_collision"
             && d["item_ids"]

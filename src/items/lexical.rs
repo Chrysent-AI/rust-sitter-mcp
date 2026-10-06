@@ -136,6 +136,12 @@ fn attributed(node: Node<'_>) -> bool {
     node.prev_named_sibling()
         .is_some_and(|p| p.kind() == "attribute_item")
 }
+#[derive(Clone, Copy)]
+enum IdentifierPosition {
+    Explicit,
+    Argument,
+    Ambiguous,
+}
 /// Only binding positions are visited. Every child must be admitted, even after a binder.
 fn pattern_proof<'a>(
     pattern: Node<'a>,
@@ -144,10 +150,18 @@ fn pattern_proof<'a>(
     simple: bool,
     controls: (Instant, &AtomicBool),
 ) -> Result<PatternProof<'a>, DomainError> {
-    let mut stack = vec![(pattern, simple)];
+    let mut stack = vec![(
+        pattern,
+        if simple {
+            IdentifierPosition::Explicit
+        } else {
+            IdentifierPosition::Ambiguous
+        },
+    )];
+    let mut competitor = None;
     let mut binds = false;
     let mut unknown = None;
-    while let Some((node, definite_identifier)) = stack.pop() {
+    while let Some((node, position)) = stack.pop() {
         check(controls.0, controls.1)?;
         let mut children = Vec::new();
         if node.has_error() || node.is_missing() {
@@ -157,7 +171,22 @@ fn pattern_proof<'a>(
         match node.kind() {
             "identifier" | "shorthand_field_identifier" => {
                 if matches(node, source, name) {
-                    if definite_identifier {
+                    let definite = match position {
+                        IdentifierPosition::Explicit => true,
+                        IdentifierPosition::Ambiguous => false,
+                        IdentifierPosition::Argument => {
+                            let competing = if let Some(competing) = competitor {
+                                competing
+                            } else {
+                                let competing =
+                                    super::pattern_name_competes(pattern, source, name, controls)?;
+                                competitor = Some(competing);
+                                competing
+                            };
+                            !competing
+                        }
+                    };
+                    if definite {
                         binds = true;
                     } else {
                         unknown.get_or_insert((
@@ -167,6 +196,9 @@ fn pattern_proof<'a>(
                     }
                 }
             }
+            // A written path denotes a constructor/constant, never a binder.
+            // The dependency scanner still visits the path independently.
+            "scoped_identifier" | "scoped_type_identifier" => {}
             "_"
             | "remaining_field_pattern"
             | "integer_literal"
@@ -183,7 +215,11 @@ fn pattern_proof<'a>(
                     if child.kind() != "mutable_specifier" {
                         children.push((
                             child,
-                            definite_identifier || node.kind() != "reference_pattern",
+                            if node.kind() == "reference_pattern" {
+                                position
+                            } else {
+                                IdentifierPosition::Explicit
+                            },
                         ));
                     }
                 }
@@ -194,15 +230,16 @@ fn pattern_proof<'a>(
                     continue;
                 };
                 // The capture is a written binder, but its subpattern can still be unknown.
-                children.push((capture, true));
+                children.push((capture, IdentifierPosition::Explicit));
                 for i in 1..node.named_child_count() {
                     check(controls.0, controls.1)?;
                     let child = node.named_child(i as u32).expect("capture subpattern");
-                    children.push((child, false));
+                    children.push((child, IdentifierPosition::Ambiguous));
                 }
             }
             "or_pattern" => {
-                // Admit only non-binding literal alternatives, never a binder from one arm.
+                // Admit only written non-binding alternatives, never a binder
+                // from one arm or an unresolved bare constant/binder alternative.
                 for i in 0..node.named_child_count() {
                     check(controls.0, controls.1)?;
                     let child = node.named_child(i as u32).expect("alternative pattern");
@@ -212,10 +249,16 @@ fn pattern_proof<'a>(
                             | "string_literal"
                             | "raw_string_literal"
                             | "integer_literal"
+                            | "float_literal"
+                            | "negative_literal"
+                            | "boolean_literal"
+                            | "char_literal"
+                            | "scoped_identifier"
+                            | "scoped_type_identifier"
                             | "line_comment"
                             | "block_comment"
                     ) {
-                        children.push((child, false));
+                        children.push((child, IdentifierPosition::Ambiguous));
                     } else {
                         unknown.get_or_insert((LexicalReason::UnsupportedPattern, child));
                     }
@@ -227,16 +270,16 @@ fn pattern_proof<'a>(
                     check(controls.0, controls.1)?;
                     let child = node.named_child(i as u32).expect("pattern child");
                     if Some(child) != constructor {
-                        children.push((child, false));
+                        children.push((child, IdentifierPosition::Argument));
                     }
                 }
             }
             "field_pattern" => {
                 if let Some(child) = node.child_by_field_name("pattern") {
-                    children.push((child, false));
+                    children.push((child, IdentifierPosition::Argument));
                 } else if let Some(child) = node.child_by_field_name("name") {
                     // Struct shorthand always declares a local; ref/mut are explicit too.
-                    children.push((child, true));
+                    children.push((child, IdentifierPosition::Explicit));
                 } else {
                     unknown.get_or_insert((LexicalReason::UnsupportedPattern, node));
                 }
@@ -246,7 +289,7 @@ fn pattern_proof<'a>(
                     check(controls.0, controls.1)?;
                     let child = node.named_child(i as u32).expect("match pattern child");
                     if Some(child) != node.child_by_field_name("condition") {
-                        children.push((child, false));
+                        children.push((child, IdentifierPosition::Ambiguous));
                     }
                 }
             }
@@ -435,7 +478,12 @@ fn lexical_context(
             "for_expression" if contains(parent.child_by_field_name("body"), node) => {
                 parent.child_by_field_name("pattern")
             }
-            "match_arm" => parent.child_by_field_name("pattern"),
+            // Arm bindings are visible in the guard and value, not in the
+            // constructor path or other occurrences inside the pattern itself.
+            "match_arm" => parent.child_by_field_name("pattern").filter(|pattern| {
+                contains(parent.child_by_field_name("value"), node)
+                    || contains(pattern.child_by_field_name("condition"), node)
+            }),
             "if_expression" | "while_expression" => {
                 let body = parent.child_by_field_name(if parent.kind() == "if_expression" {
                     "consequence"
@@ -538,7 +586,9 @@ fn lexical_context(
             }
         }
         if parent.kind() == "block" {
-            // Let bindings begin after their initializers. Later and nested patterns do not compete.
+            // Let bindings begin after the whole declaration, including a
+            // let-else failure block. Neither initializer nor else sees them.
+            // Later and nested patterns do not compete.
             for i in (0..parent.named_child_count()).rev() {
                 check(controls.0, controls.1)?;
                 let statement = parent.named_child(i as u32).expect("statement");

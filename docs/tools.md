@@ -734,6 +734,17 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   `pattern:{path,range,kind}`. Its reasons are `unsupported_pattern`,
   `identifier_pattern_binding_or_constant`, `value_binding_in_type_position`,
   `relevant_local_import`, `conditional_local_context` and `syntax_recovery`.
+  Scoped path patterns are non-binding positions, but their constructor/constant
+  dependencies are still analyzed separately. Bare identifiers in tuple, slice,
+  tuple-struct and explicit struct-field pattern arguments prove local bindings
+  only without competing written evidence in the pattern's enclosing scopes:
+  same-named const/static, unit constructor/visible enum unit variant, named import
+  leaf or any glob import. This is written evidence, not constant resolution or a
+  capitalization heuristic. Imports/items do not inherit into child modules.
+  Successful let-else bindings are out of scope in the initializer and failure
+  block; match-arm bindings apply only to the guard and arm value. Non-binding
+  literal/scoped-path or-pattern alternatives are admitted; binding or unresolved
+  bare alternatives remain unsupported. Macro/attribute vetoes still apply.
   A same-spelled value binding does not prove a type reference independent;
   that namespace uncertainty remains blocked rather than silently discarding
   the type dependency. The main decision retains the original occurrence
