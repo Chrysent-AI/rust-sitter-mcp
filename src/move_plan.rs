@@ -562,10 +562,7 @@ impl MoveEnvelope {
                 anchors,
                 item_ids: Vec::new(),
                 evidence: Vec::new(),
-                unresolved_consequence: format!(
-                    "ordinary chain from supplied root {} cannot prove {}: {:?}",
-                    diagnostic.crate_root, diagnostic.requested_path, diagnostic.reason
-                ),
+                unresolved_consequence: diagnostic.message(),
                 resolution: "request_change_required".into(),
                 supported_choices: Vec::new(),
                 selected_choice: None,

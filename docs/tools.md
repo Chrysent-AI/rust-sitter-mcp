@@ -228,6 +228,14 @@ A new destination must be an absent literal `.rs` sibling of every assigned sour
 
 Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching unconditioned declaration is reused without a parent edit unless a necessary visibility repair is separately linked. Relative/re-scoped restrictions, unverified access and public exposure requiring an API decision remain blockers. Incompatible layouts cannot be acknowledged away.
 
+### Known structural limitations
+
+- **Macro-generated crate roots:** `crate_root!()`-style roots can emit module declarations from macro bodies; `include!(concat!(env!("OUT_DIR"), ...))` can supply build-generated declarations. The syntactic stage neither expands macros nor executes build scripts, so it cannot discover or prove these module trees. Such selections are advice-only, not applicable moves. Literal declaration-shaped tokens can name the macro cause; an opaque include without written declarations remains unproved rather than guessed.
+- **Cargo autotest discovery:** creating a sibling directly under `tests/*.rs` can create a new integration-test crate under Cargo's default discovery rules. Ordinary module validity cannot see this build-graph change; review the target layout and Cargo test discovery externally before applying a patch.
+- **Macro-invocation-as-item files:** when most of a file consists of macro invocations generating implementations, the inventory exposes those invocations, not their expanded items. This archetype is unsplittable by whole-item moves, like a file dominated by one large `impl`; use advice rather than treating generated methods/items as selectable written units.
+
+Serialize MCP probes: a parallel call returns `BUSY`; wait for the active call to finish before retrying, rather than treating the busy result as an applicability measurement.
+
 ### Diagnosing an unproved module chain
 
 Both tools expose additive `chain_diagnostics[]`: at the top level of `suggest_split`,
@@ -240,7 +248,9 @@ bad-request error codes are unchanged.
 Each diagnostic echoes the caller's `crate_root`, `requested_path` and `role`
 (`source`, `destination` or `declaration_parent`). `at_file_path` names the observed
 failure boundary; optional `declaration:{path,range}` uses original half-open byte
-coordinates. `evidenced_prefix_paths`, ordinary `candidate_paths`, typed
+coordinates. For named macro/attribute refusals, `declaration` locates the observed macro
+module tokens or inner attribute, not a proved ordinary declaration.
+`evidenced_prefix_paths`, ordinary `candidate_paths`, typed
 `origin_reasons` and `parent_candidates` disclose only observed context. Locations
 contain no source text and are **not execution freshness anchors**. IDs such as
 `chain/0` are deterministic within the response, not persistent handles.
@@ -255,7 +265,19 @@ The snake_case `reason` distinguishes:
   `unexamined_declaration_attributes`: the evidenced declaration/layout is not an
   ordinary unique unconditioned edge.
 - `inherited_uncertainty`: recovery, scope attributes or competing inclusion at a
-  named origin also affects the traversed descendant.
+  named origin also affects the traversed descendant (the existing veto is unchanged).
+- `macro_generated_module_tree`: literal module declaration-shaped tokens occur
+  in a top-level macro invocation input or macro rule output body. The recorded
+  token range and ordinary candidate paths locate the possible obstruction; they
+  do not prove expansion, cfg activation or inclusion. Unrelated macros do not
+  veto a clean ordinary chain.
+- `root_attribute_chain_uncertainty`: a non-allowlisted inner attribute appears
+  in a file on the traversed chain, including nested scope attributes. Its exact
+  attribute range identifies the cause; the existing `inherited_uncertainty`
+  diagnostic remains alongside it. This names the current file-wide conservative
+  veto, not a claim that a nested attribute has crate-wide Rust semantics.
+  Both named refusals explain the advice-only consequence and route to
+  `unsupported_in_engine`; no acknowledgment proves the missing context.
 - `ambiguous_parent`, `no_ordinary_sibling_parent` or `ordinary_layout_mismatch`:
   candidate parent evidence does not prove the requested ordinary sibling layout.
 

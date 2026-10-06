@@ -46,7 +46,18 @@ Engine source commit: `7fa1564bf19f36e0b2af9c88a4ffa4e5513daa7a`.
 External proc-macro-light `duct.rs` source commit:
 `ba535d51f5e9912cc3a6bfbd8be80d7516305f8b`.
 The corpus records exact scopes/globs, including admitted test consumers.
-It samples eight batches, not every possible split or a random population.
+The original observation below samples eight batches, not every possible split
+or a random population. Three additional serde negative controls are frozen at
+`6693a89cca77e0151437da1c7f890090b9ebf04c`: `get_lit_str` + `get_lit_str2`
+(1,085 bytes), `is_str` + `is_slice_u8` (229 bytes), and `missing_field` from
+`serde/src/private/de.rs` (1,136 bytes). Replay just these with the `serde` filter
+(or relocate with `--repo serde=/absolute/path/to/serde`). Their optional
+`negative_control` metadata asserts zero applicability and exact blocking
+category/reason classes for both binaries; candidate runs also assert the named
+chain-reason set. Baselines may predate those additive names. Counts are measured,
+not frozen: the rig reports named-chain diagnostic counts separately and fails
+nonzero on a silent unlock or class drift. External snapshots are required;
+focused rig tests do not pretend to replay absent repositories.
 
 ## What is counted and observed
 
