@@ -85,6 +85,7 @@ struct Shadows {
     conditional_derives: [bool; 9],
     derives: BTreeMap<(String, usize, usize), usize>,
     refusal_basis: Vec<RefusalBasis>,
+    scoped_prelude_controls: Vec<RefusalBasis>,
 }
 impl Shadows {
     fn merge(&mut self, other: &Self) {
@@ -99,6 +100,11 @@ impl Shadows {
         self.derives.extend(other.derives.clone());
         for basis in &other.refusal_basis {
             self.record(basis.clone());
+        }
+        for basis in &other.scoped_prelude_controls {
+            if !self.scoped_prelude_controls.contains(basis) {
+                self.scoped_prelude_controls.push(basis.clone());
+            }
         }
         for (name, other) in self.names.iter_mut().zip(other.names) {
             *name |= other;
@@ -166,9 +172,10 @@ impl Shadows {
             || self.names[STANDARD_PRELUDE.len() + index]
             || self.conditional_derives[index]
     }
-    /// Only unbounded introduction and prelude controls survive filesystem ancestry.
+    /// Keep unbounded context; filesystem inheritance also keeps scoped prelude controls.
+    /// Inline-to-parent promotion must not carry no_implicit_prelude upward.
     /// Imports and written names belong to their declaring module, not its children.
-    fn chain_context(&self) -> Self {
+    fn chain_context(&self, inherit_scoped_prelude: bool) -> Self {
         let mut result = Self::default();
         for basis in &self.refusal_basis {
             if basis.class == "macro_shadow"
@@ -178,6 +185,7 @@ impl Shadows {
                 result.record(basis.clone());
             }
             if basis.name.is_none()
+                && (inherit_scoped_prelude || !self.scoped_prelude_controls.contains(basis))
                 && matches!(
                     basis.class.as_str(),
                     "chain_macro_statement"
@@ -190,6 +198,9 @@ impl Shadows {
             {
                 result.context_unproved = true;
                 result.record(basis.clone());
+                if self.scoped_prelude_controls.contains(basis) {
+                    result.scoped_prelude_controls.push(basis.clone());
+                }
             }
         }
         result
@@ -203,6 +214,9 @@ impl Shadows {
                 })
         };
         self.refusal_basis.retain(|basis| {
+            basis.anchor.path != path || basis.anchor.range.as_ref().is_none_or(|r| !departs(r))
+        });
+        self.scoped_prelude_controls.retain(|basis| {
             basis.anchor.path != path || basis.anchor.range.as_ref().is_none_or(|r| !departs(r))
         });
         self.derives.retain(|(file, start, end), _| {
@@ -302,6 +316,16 @@ impl Shadows {
                 "no_std" | "no_core" | "no_implicit_prelude" | "prelude_import"
             ) {
                 self.context("prelude_disabled", path, Some(node));
+                if &source[name.byte_range()] == "no_implicit_prelude" {
+                    self.scoped_prelude_controls.push(RefusalBasis::new(
+                        "prelude_disabled",
+                        path,
+                        Some(crate::result::ByteRange {
+                            start_byte: node.start_byte(),
+                            end_byte: node.end_byte(),
+                        }),
+                    ));
+                }
                 return;
             }
             let mut next = node.next_named_sibling();
@@ -517,7 +541,9 @@ impl ScopedShadows {
                 }
                 // Unbounded item/module expansion and malformed context remain
                 // chain-wide; a sibling's finite written names/derives do not.
-                let mut unbounded = found.chain_context();
+                // no_implicit_prelude is inherited downward, not promoted out
+                // of an unrelated inline module into its parent or siblings.
+                let mut unbounded = found.chain_context(false);
                 // Textual macro definitions inherit downward, never upward out
                 // of a child module like an unbounded expansion veto.
                 unbounded.names = [false; 14];
@@ -583,7 +609,7 @@ fn chain_shadows(
             result.merge(&if file == path {
                 shadows.visible(node)
             } else {
-                shadows.root.chain_context()
+                shadows.root.chain_context(true)
             });
         } else if !(absent_destination && file == path) {
             result.context("unresolved_chain", file, None);
@@ -774,7 +800,11 @@ pub(super) fn discharge(
                         .named(STANDARD_PRELUDE[index].0),
                     );
                 } else {
-                    visible.name(STANDARD_PRELUDE[index].0, path, Some(need.range.clone()));
+                    visible.name(
+                        STANDARD_PRELUDE[index].0,
+                        path,
+                        assessment.definite_binding.map(|binding| binding.range),
+                    );
                 }
             }
         }
@@ -862,7 +892,7 @@ pub(super) fn discharge(
                     item_ids: need.item_ids,
                     destination_path: destination.clone(),
                     standard_path: STANDARD_PRELUDE[index].1.into(),
-                    basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; lexical bindings and same-block macros at-or-before this occurrence audited, signature references ignore body macros; chain-wide prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed".into(),
+                    basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; lexical bindings and potentially item-producing macros in every enclosing block audited regardless of source order, signatures outside those blocks ignore body macros; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed".into(),
                 },
                 &mut proofs,
                 &mut proof_bytes,

@@ -229,7 +229,7 @@ fn test_consumer_acknowledgment_does_not_discharge_selected_attributes_or_root_c
 }
 
 #[test]
-fn probe_b_later_macros_do_not_poison_earlier_references() {
+fn probe_b_later_block_macro_risks_are_disclosed_and_acknowledgeable() {
     let source = include_str!("../fixtures/test_consumers/probe_b.rs");
     let repo = fixture(source);
     let texts = [
@@ -253,7 +253,13 @@ fn probe_b_later_macros_do_not_poison_earlier_references() {
         .iter()
         .filter(|d| !d["lexical_uncertainty"].is_null())
         .collect();
-    assert!(off_lexical.is_empty());
+    assert_eq!(off_lexical.len(), 4, "{off}");
+    assert!(
+        off_lexical
+            .iter()
+            .all(|d| d["lexical_uncertainty"]["witness_relation"]
+                == "block_macro_may_introduce_items")
+    );
     assert!(
         off_lexical
             .iter()
@@ -271,7 +277,13 @@ fn probe_b_later_macros_do_not_poison_earlier_references() {
         .iter()
         .filter(|d| !d["lexical_uncertainty"].is_null())
         .collect();
-    assert!(lexical.is_empty());
+    assert_eq!(lexical.len(), 4, "{on}");
+    assert!(
+        lexical
+            .iter()
+            .all(|d| d["lexical_uncertainty"]["witness_relation"]
+                == "block_macro_may_introduce_items")
+    );
     assert!(
         risks
             .iter()
@@ -351,33 +363,43 @@ fn test_consumer_lexical_acknowledgment_keeps_written_conflicts_blocking() {
 
 #[test]
 fn test_consumer_hoist_acknowledgment_keeps_value_item_in_type_position_blocking() {
-    let repo = fixture(include_str!(
-        "../fixtures/test_consumers/namespace_mismatch.rs"
-    ));
-    let mut args = request(
-        &repo,
-        json!([entry(
+    let source = include_str!("../fixtures/test_consumers/namespace_mismatch.rs");
+    for (source, relation) in [
+        (source.to_owned(), "statement_macro_before_reference"),
+        (
+            source.replace(
+                "assert_eq!(1, 1);\n        let _: LIMIT = value;",
+                "let _: LIMIT = value;\n        assert_eq!(1, 1);",
+            ),
+            "block_macro_may_introduce_items",
+        ),
+    ] {
+        let repo = fixture(&source);
+        let mut args = request(
             &repo,
-            "const LIMIT: usize = 4;",
-            new("cases/layout/moved.rs")
-        )]),
-    );
-    args["acknowledge_test_consumers"] = json!(true);
-    let value = run(&repo, args);
-    code(&value, "MODULE_CONTEXT");
-    let reference = value["plan"]["decisions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["anchors"][0]["expected_text"] == "LIMIT")
-        .unwrap();
-    assert_eq!(reference["reason"], "conditional_or_inherited_context");
-    assert_eq!(reference["blocks_applicability"], true);
-    assert_eq!(reference["action"]["route"], "unsupported_in_engine");
-    assert_eq!(
-        reference["lexical_uncertainty"]["witness_relation"],
-        "statement_macro_before_reference"
-    );
+            json!([entry(
+                &repo,
+                "const LIMIT: usize = 4;",
+                new("cases/layout/moved.rs")
+            )]),
+        );
+        args["acknowledge_test_consumers"] = json!(true);
+        let value = run(&repo, args);
+        code(&value, "MODULE_CONTEXT");
+        let reference = value["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["anchors"][0]["expected_text"] == "LIMIT")
+            .unwrap();
+        assert_eq!(reference["reason"], "conditional_or_inherited_context");
+        assert_eq!(reference["blocks_applicability"], true);
+        assert_eq!(reference["action"]["route"], "unsupported_in_engine");
+        assert_eq!(
+            reference["lexical_uncertainty"]["witness_relation"],
+            relation
+        );
+    }
 }
 
 #[test]

@@ -31,6 +31,7 @@ pub struct LexicalLocation {
 #[serde(rename_all = "snake_case")]
 pub enum WitnessRelation {
     StatementMacroBeforeReference,
+    BlockMacroMayIntroduceItems,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -51,12 +52,21 @@ pub(crate) enum LexicalBinding {
 pub(crate) struct LexicalAssessment {
     pub binding: LexicalBinding,
     pub uncertainty: Option<LexicalUncertainty>,
+    pub definite_binding: Option<LexicalLocation>,
 }
 impl LexicalAssessment {
     fn definite(binding: LexicalBinding) -> Self {
         Self {
             binding,
             uncertainty: None,
+            definite_binding: None,
+        }
+    }
+    fn independent(path: &str, binding: Node<'_>) -> Self {
+        Self {
+            binding: LexicalBinding::Independent,
+            uncertainty: None,
+            definite_binding: Some(location(path, binding)),
         }
     }
 }
@@ -89,6 +99,7 @@ fn uncertain(
 ) -> LexicalAssessment {
     LexicalAssessment {
         binding: LexicalBinding::Uncertain,
+        definite_binding: None,
         uncertainty: Some(LexicalUncertainty {
             spelling: name.into(),
             reason,
@@ -115,7 +126,7 @@ fn value_binding(
             Some(binding),
         )
     } else {
-        LexicalAssessment::definite(LexicalBinding::Independent)
+        LexicalAssessment::independent(path, binding)
     }
 }
 fn matches(node: Node<'_>, source: &str, name: &str) -> bool {
@@ -313,7 +324,7 @@ pub(crate) fn lexical_assessment(
     )
 }
 /// Audit written bindings only for test-risk acknowledgment, never as a binding proof.
-/// The ordinary assessment still reports preceding same-block statement macros.
+/// The ordinary assessment still reports potentially item-producing block macros.
 pub(crate) fn test_consumer_binding(
     path: &str,
     node: Node<'_>,
@@ -344,6 +355,50 @@ fn lexical_context(
     boundary: Option<Node<'_>>,
     statement_macros: bool,
 ) -> Result<LexicalAssessment, DomainError> {
+    // Both a direct invocation and an expression-statement wrapper can expand
+    // to block items. Written syntax does not establish expression-only output.
+    // Audit enclosing blocks before any local proof or nested-item boundary.
+    let mut child = node;
+    while statement_macros && let Some(parent) = child.parent() {
+        check(controls.0, controls.1)?;
+        if matches!(parent.kind(), "source_file" | "mod_item") {
+            break;
+        }
+        if parent.kind() == "block" {
+            for i in 0..parent.named_child_count() {
+                check(controls.0, controls.1)?;
+                let statement = parent.named_child(i as u32).expect("statement");
+                if statement.kind() == "macro_invocation"
+                    || (statement.kind() == "expression_statement"
+                        && statement
+                            .named_child(0)
+                            .is_some_and(|n| n.kind() == "macro_invocation"))
+                {
+                    let mut assessment = uncertain(
+                        path,
+                        name,
+                        parent,
+                        LexicalReason::UnsupportedPattern,
+                        Some(statement),
+                    );
+                    assessment
+                        .uncertainty
+                        .as_mut()
+                        .expect("uncertainty")
+                        .witness_relation = Some(if statement.start_byte() <= child.start_byte() {
+                        WitnessRelation::StatementMacroBeforeReference
+                    } else {
+                        WitnessRelation::BlockMacroMayIntroduceItems
+                    });
+                    return Ok(assessment);
+                }
+            }
+        }
+        if Some(parent) == boundary {
+            break;
+        }
+        child = parent;
+    }
     let mut child = node;
     while let Some(parent) = child.parent() {
         check(controls.0, controls.1)?;
@@ -460,41 +515,12 @@ fn lexical_context(
                     return Ok(if parameter.kind() == "const_parameter" {
                         value_binding(path, name, parent, parameter, node)
                     } else {
-                        LexicalAssessment::definite(LexicalBinding::Independent)
+                        LexicalAssessment::independent(path, parameter)
                     });
                 }
             }
         }
         if parent.kind() == "block" {
-            // Audit written statement macros only at-or-before this occurrence.
-            // Later and sibling-block token trees are not expansion witnesses for
-            // this reference; this is position evidence, not a hygiene proof.
-            for i in 0..parent.named_child_count() {
-                check(controls.0, controls.1)?;
-                let statement = parent.named_child(i as u32).expect("statement");
-                if statement_macros
-                    && statement.start_byte() <= child.start_byte()
-                    && (statement.kind() == "macro_invocation"
-                        || (statement.kind() == "expression_statement"
-                            && statement
-                                .named_child(0)
-                                .is_some_and(|n| n.kind() == "macro_invocation")))
-                {
-                    let mut assessment = uncertain(
-                        path,
-                        name,
-                        parent,
-                        LexicalReason::UnsupportedPattern,
-                        Some(statement),
-                    );
-                    assessment
-                        .uncertainty
-                        .as_mut()
-                        .expect("uncertainty")
-                        .witness_relation = Some(WitnessRelation::StatementMacroBeforeReference);
-                    return Ok(assessment);
-                }
-            }
             // Let bindings begin after their initializers. Later and nested patterns do not compete.
             for i in (0..parent.named_child_count()).rev() {
                 check(controls.0, controls.1)?;
@@ -561,7 +587,7 @@ fn lexical_context(
                         ) {
                             value_binding(path, name, parent, statement, node)
                         } else {
-                            LexicalAssessment::definite(LexicalBinding::Independent)
+                            LexicalAssessment::independent(path, statement)
                         },
                     );
                 }

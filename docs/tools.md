@@ -176,15 +176,22 @@ Filesystem ancestors' imports and declarations do not inherit into child modules
 An attributed declaration contributes its written name conservatively even when
 its presence is conditional: `#[cfg(test)] mod tests;` shadows `tests`, not `Option`.
 Child/sibling scopes' finite names and derives do not leak to a parent reference.
-Generic/local/pattern bindings are checked at each occurrence. A signature ignores
-body macros; an in-body reference sees only statement macros in its enclosing
-blocks at-or-before that reference, never a later or sibling-block statement.
+Generic/local/pattern bindings are checked at each occurrence. A signature outside
+an enclosing block ignores body macros. Standalone macros in a reference's block
+or any enclosing block veto proof regardless of source order: both direct
+invocations and expression-statement wrappers may expand to block items visible
+even to earlier references and nested-item signatures. Written syntax does not
+prove expression-only output. Macros confined to sibling blocks do not veto.
 This is a written token-tree audit, not expansion or a macro-hygiene proof.
-Chain-wide vetoes remain for `no_implicit_prelude`, `no_std`, `no_core`,
-`prelude_import`, syntax recovery/unparseable attributes, item-position macro
+`no_implicit_prelude` vetoes its own module and descendants, not its parent or
+siblings; a file-root directive is inherited by its filesystem children. These are
+prelude-audit scoping rules: the independent ordinary module-chain audit still
+refuses non-allowlisted scope attributes, including inline inner attributes.
+Chain-wide vetoes remain for crate-root controls `no_std`, `no_core`,
+`prelude_import`, syntax recovery/unparseable attributes, module-scope item macro
 invocations and unexamined module-declaration attribute macros (including
 `cfg_attr`, whose payload may introduce one). These unbounded vetoes also survive
-sibling inline scopes. A same-spelling textual macro definition remains relevant
+sibling inline module scopes. A same-spelling textual macro definition remains relevant
 downward through the chain; unrelated definitions do not veto every type.
 Derive-related type refusals are limited to same-spelling competition for a
 contextual built-in derive or its conditional/unexamined companion attributes
@@ -336,8 +343,9 @@ this is written evidence, not cfg evaluation. Detection shares the test-module
 and super-import/glob classifier used by split advice; move acknowledgment also
 covers macro-argument candidates such as `assert!` and `assert_eq!` without
 expanding or rewriting their tokens. It also covers bare test references carrying
-a same-block `statement_macro_before_reference` witness at-or-before the
-reference, when the written super import reaches the selected file, the reference's
+a `statement_macro_before_reference` witness at-or-before the reference or a
+`block_macro_may_introduce_items` witness for a later standalone macro in its block
+or an enclosing block, when the written super import reaches the selected file, the reference's
 written type/value namespace is compatible with the selected item, and a separate
 written-binding audit finds no competing local or other lexical uncertainty.
 The witness remains disclosed on the acknowledged decision; this is acceptance
@@ -718,12 +726,14 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   A same-spelled value binding does not prove a type reference independent;
   that namespace uncertainty remains blocked rather than silently discarding
   the type dependency. The main decision retains the original occurrence
-  anchor. For a same-block statement macro, additive
-  `witness_relation:"statement_macro_before_reference"` identifies `pattern` as a
-  positional written-token-tree witness within `scope`, not the anchor's containing
-  pattern. Its start is at-or-before the reference; later macros supply no such
-  witness. This replaces the former both-orders `hoist_possibility` relation;
-  neither relation proves expansion or hygiene. Other witnesses omit
+  anchor. For a standalone macro in the reference's block or an enclosing block,
+  additive `witness_relation:"statement_macro_before_reference"` identifies an
+  at-or-before written-token-tree witness; `"block_macro_may_introduce_items"`
+  identifies a later invocation that may introduce hoisted block items. Both
+  locate `pattern` within `scope`, not an anchor-containing binding pattern;
+  expression-statement wrappers do not establish expression-only expansion.
+  Neither relation proves expansion or hygiene. The former `hoist_possibility`
+  relation is no longer emitted. Other witnesses omit
   `witness_relation`. These witness
   coordinates locate evidence; they are not replay targets or new request fields.
   Legacy `category:"binding_collision"`/`BINDING_COLLISION` can still accompany

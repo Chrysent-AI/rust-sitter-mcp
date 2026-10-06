@@ -40,7 +40,7 @@ mod tests {
         }
     }
 }
-use super::{DecisionReason, Need, lexical::WitnessRelation};
+use super::{DecisionReason, Need};
 use crate::result::ByteRange;
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
@@ -88,9 +88,7 @@ impl Need {
     pub(crate) fn disclose_refusal(&mut self) {
         if let Some(witness) = &self.lexical_uncertainty {
             let location = witness.pattern.as_ref().unwrap_or(&witness.scope);
-            let class = if witness.witness_relation
-                == Some(WitnessRelation::StatementMacroBeforeReference)
-            {
+            let class = if witness.witness_relation.is_some() {
                 "chain_macro_statement"
             } else {
                 "lexical_uncertainty"

@@ -318,22 +318,88 @@ fn statement_macro_witness_is_disclosed_as_same_block_not_containing_pattern() {
     assert!(witness.get("witness_relation").is_none());
 }
 #[test]
-fn later_sibling_and_body_macros_do_not_poison_written_references() {
+fn sibling_and_body_macros_do_not_poison_outside_references() {
     for (source, expected) in [
-        ("fn f() { let n = selected; m!(); }", LexicalBinding::Absent),
         (
             "fn f() { { m!(); } let n = selected; }",
             LexicalBinding::Absent,
-        ),
-        (
-            "fn f() { let selected = value; selected(); m!(); }",
-            LexicalBinding::Independent,
         ),
         ("fn f(value: selected) { m!(); }", LexicalBinding::Absent),
     ] {
         let assessment = assess(source, "selected", false);
         assert_eq!(assessment.binding, expected, "{source}");
         assert!(assessment.uncertainty.is_none(), "{source}");
+    }
+}
+#[test]
+fn later_block_macros_veto_including_enclosing_blocks_and_nested_items() {
+    for (source, macro_text, kind) in [
+        (
+            "fn f() { let n: selected; m!(); }",
+            "m!();",
+            "expression_statement",
+        ),
+        (
+            "fn f() { let n: selected; m!{} }",
+            "m!{}",
+            "macro_invocation",
+        ),
+        (
+            "fn f() { { let n: selected; } m!(); }",
+            "m!();",
+            "expression_statement",
+        ),
+        (
+            "fn f() { fn inner(_: selected) {} m!(); }",
+            "m!();",
+            "expression_statement",
+        ),
+        (
+            "fn f() { { fn inner(_: selected) {} } m!(); }",
+            "m!();",
+            "expression_statement",
+        ),
+        (
+            "fn f() { let selected = value; selected(); m!(); }",
+            "m!();",
+            "expression_statement",
+        ),
+    ] {
+        let assessment = assess(source, "selected", false);
+        assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+        let witness = assessment.uncertainty.unwrap();
+        assert_eq!(
+            witness.witness_relation,
+            Some(WitnessRelation::BlockMacroMayIntroduceItems)
+        );
+        let pattern = witness.pattern.unwrap();
+        assert_eq!(pattern.kind, kind, "{source}");
+        assert_eq!(
+            &source[pattern.range.start_byte..pattern.range.end_byte],
+            macro_text
+        );
+        assert!(pattern.range.start_byte > source.find("selected").unwrap());
+        assert_eq!(witness.scope.kind, "block");
+    }
+}
+#[test]
+fn definite_bindings_retain_declaration_coordinates() {
+    for (source, declaration) in [
+        ("fn f<selected: Copy>(input: selected) {}", "selected: Copy"),
+        (
+            "fn f() { struct selected; let _: selected; }",
+            "struct selected;",
+        ),
+        ("fn f() { let selected = value; selected(); }", "selected"),
+    ] {
+        let assessment = assess(source, "selected", false);
+        assert_eq!(assessment.binding, LexicalBinding::Independent);
+        let binding = assessment.definite_binding.unwrap();
+        assert_eq!(
+            &source[binding.range.start_byte..binding.range.end_byte],
+            declaration
+        );
+        assert!(binding.range.end_byte <= source.rfind("selected").unwrap());
     }
 }
 #[test]
@@ -389,6 +455,11 @@ fn lexical_refusal_basis_keeps_the_actual_positional_witness() {
             "fn f() { let (selected,) = value; selected(); }",
             "lexical_uncertainty",
             "selected",
+        ),
+        (
+            "fn f() { selected(); m!(); }",
+            "chain_macro_statement",
+            "m!();",
         ),
     ] {
         let flag = AtomicBool::new(false);
