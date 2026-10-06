@@ -2,7 +2,14 @@
 ignore = []
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+# Package-scoped exception (human-approved 2026-10-06): rustc_apfloat is the
+# rust-analyzer transitive that carries the LLVM-exception rider; the exception
+# is deliberately NOT a global allowance.
+[[licenses.exceptions]]
+crate = "rustc_apfloat"
+allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [bans]
 multiple-versions = "warn"
