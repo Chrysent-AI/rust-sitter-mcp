@@ -229,11 +229,173 @@ fn test_consumer_acknowledgment_does_not_discharge_selected_attributes_or_root_c
 }
 
 #[test]
+fn probe_b_hoist_uncertainty_and_macro_consumers_are_acknowledged() {
+    let source = include_str!("../fixtures/test_consumers/probe_b.rs");
+    let repo = fixture(source);
+    let texts = [
+        "const MAX_PROMPT_BYTES: usize = 4;",
+        "const MAX_MODEL_BYTES: usize = 8;",
+        "const MAX_EVIDENCE: usize = 16;",
+        "const MAX_KIND_BYTES: usize = 32;",
+    ];
+    let moves: Vec<_> = texts
+        .iter()
+        .map(|text| entry(&repo, text, new("cases/layout/limits.rs")))
+        .collect();
+    let mut args = request(&repo, json!(moves));
+    args["limits"] = json!({"diagnostic_count":100});
+    let off = run(&repo, args.clone());
+    code(&off, "MODULE_CONTEXT");
+    assert!(acknowledged(&off).is_empty());
+    let off_lexical: Vec<_> = off["plan"]["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| !d["lexical_uncertainty"].is_null())
+        .collect();
+    assert_eq!(off_lexical.len(), 4);
+    assert!(
+        off_lexical
+            .iter()
+            .all(|d| d["blocks_applicability"] == true)
+    );
+    args["acknowledge_test_consumers"] = json!(true);
+    args["limits"] = json!({"diagnostic_count":0, "text_bytes":0});
+    let on = run(&repo, args);
+    assert_eq!(on["plan"]["applicable"], true, "{on}");
+    assert_eq!(on["plan"]["integrity"]["semantic"], "not_performed");
+    let risks = acknowledged(&on);
+    assert_eq!(risks.len(), 8, "{on}");
+    assert_eq!(on["coverage"]["test_consumers_acknowledged"], risks.len());
+    let lexical: Vec<_> = risks
+        .iter()
+        .filter(|d| !d["lexical_uncertainty"].is_null())
+        .collect();
+    assert_eq!(lexical.len(), 4);
+    for risk in lexical {
+        assert_eq!(risk["blocks_applicability"], false);
+        assert_eq!(risk["resolution"], "risk_acknowledged");
+        assert_eq!(risk["action"]["field"], "acknowledge_test_consumers");
+        let witness = &risk["lexical_uncertainty"];
+        assert_eq!(witness["witness_relation"], "hoist_possibility");
+        assert_eq!(witness["reason"], "unsupported_pattern");
+        let at = risk["anchors"][0]["range"]["end_byte"].as_u64().unwrap();
+        let start = witness["pattern"]["range"]["start_byte"].as_u64().unwrap();
+        assert!(start > at, "{risk}");
+        let end = witness["pattern"]["range"]["end_byte"].as_u64().unwrap() as usize;
+        assert!(source[start as usize..end].starts_with("assert_eq!(oversized.len(),"));
+    }
+    assert!(risks.iter().any(|d| d["category"] == "macro_dependency"));
+    let copy = apply(&repo, &on);
+    let after = fs::read_to_string(copy.0.join("cases/layout/source.rs")).unwrap();
+    assert!(after.contains(&source[source.find("#[cfg(test)]").unwrap()..]));
+    assert_eq!(
+        fs::read_to_string(copy.0.join("cases/layout/limits.rs")).unwrap(),
+        format!("pub(crate) {}\n", texts.join("\npub(crate) "))
+    );
+    let compiled = std::process::Command::new("rustc")
+        .current_dir(&copy.0)
+        .args([
+            "--edition=2024",
+            "--test",
+            "cases/layout/lib.rs",
+            "-o",
+            "probe-tests",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let tested = std::process::Command::new(copy.0.join("probe-tests"))
+        .output()
+        .unwrap();
+    assert!(
+        tested.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tested.stdout)
+    );
+    assert!(String::from_utf8_lossy(&tested.stdout).contains("4 passed"));
+}
+
+#[test]
+fn test_consumer_lexical_acknowledgment_keeps_written_conflicts_blocking() {
+    for body in [
+        "let (LIMIT,) = pair; let n = LIMIT;",
+        "let LIMIT = 1; let _: LIMIT = 2;",
+        "let LIMIT = 1; let _: LIMIT = 2; assert!(true);",
+        "let (LIMIT,) = pair; let n = LIMIT; assert!(true);",
+        "use crate::other::LIMIT; let n = LIMIT; assert!(true);",
+        "let n = LIMIT; const LIMIT: usize = 1; assert!(true);",
+        "let n = LIMIT; #[cfg(unix)] const LIMIT: usize = 1; assert!(true);",
+    ] {
+        let repo = fixture(&format!(
+            "const LIMIT: usize = 4;\n#[cfg(test)] mod tests {{ use super::*; fn check() {{ {body} }} }}\n"
+        ));
+        let mut args = request(
+            &repo,
+            json!([entry(
+                &repo,
+                "const LIMIT: usize = 4;",
+                new("cases/layout/moved.rs")
+            )]),
+        );
+        args["acknowledge_test_consumers"] = json!(true);
+        let value = run(&repo, args);
+        code(&value, "MODULE_CONTEXT");
+        assert!(
+            value["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["blocks_applicability"] == true && !d["lexical_uncertainty"].is_null()),
+            "{body}: {value}"
+        );
+    }
+}
+
+#[test]
+fn test_consumer_acknowledgment_does_not_clear_stale_anchors_or_broken_structure() {
+    for (source, expected) in [
+        (
+            "const LIMIT: usize = 4;\n#[cfg(test)] mod tests { fn check() { let n = super::LIMIT; assert!(true); } }\n",
+            "STALE_SELECTION",
+        ),
+        (
+            "const LIMIT: usize = 4;\n#[cfg(test)] mod tests { fn check() { @ super::LIMIT; } }\n",
+            "PREEXISTING_SYNTAX_ERROR",
+        ),
+    ] {
+        let repo = fixture(source);
+        let mut args = request(
+            &repo,
+            json!([entry(
+                &repo,
+                "const LIMIT: usize = 4;",
+                new("cases/layout/moved.rs")
+            )]),
+        );
+        args["acknowledge_test_consumers"] = json!(true);
+        if expected == "STALE_SELECTION" {
+            args["moves"][0]["item"]["expected_text"] = json!("const LIMIT: usize = 5;");
+        }
+        let value = run(&repo, args);
+        code(&value, expected);
+        if expected == "STALE_SELECTION" {
+            assert!(acknowledged(&value).is_empty());
+        }
+    }
+}
+
+#[test]
 fn test_consumer_flag_off_serialized_responses_are_byte_identical() {
     for source in [
         "const LIMIT: usize = 4;\n",
         "const LIMIT: usize = 4;\n#[cfg(test)] mod tests { fn check() { assert!(super::LIMIT > 0); } }\n",
         "const LIMIT: usize = 4;\nfn outside() { assert!(LIMIT > 0); }\n",
+        "const LIMIT: usize = 4;\n#[cfg(test)] mod tests { use super::*; fn check() { let n = LIMIT; assert!(true); } }\n",
     ] {
         let repo = fixture(source);
         let args = request(

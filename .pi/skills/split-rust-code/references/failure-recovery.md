@@ -52,14 +52,14 @@ Note: `request_field` route means "a request field or choice is actionable per `
 |---|---|---|
 | `external_or_missing_binding` | External/unresolved dependency; default blocker. Standard-prelude/builtin-derive proofs or `ra_resolved` may discharge only eligible occurrences when their opt-in conditions are met; otherwise no override. |
 | `member_or_constructor_unproved` | Field/method access needs type knowledge — including method calls (`x.trim()`) and prelude types (`Option`, `String`, `usize`) inside the moved item's own body | Default blocker for unresolved method/field/constructor access. `resolve_semantic` can prove eligible true-inherent/field/constructor access only with explicit configuration and positive access at both ends; trait/generic/macro uncertainty remains blocked. |
-| `lexical_context_unproved` | Binding/pattern/namespace context unknown | Inspect `lexical_uncertainty` as diagnostic evidence only — currently `unsupported_in_engine`; no binding-evidence field resolves it. Change selection or investigate separately. |
+| `lexical_context_unproved` | Binding/pattern/namespace context unknown | Inspect `lexical_uncertainty` as diagnostic evidence, not proof. `witness_relation: "hoist_possibility"` marks a positional same-block macro witness that need not contain the anchor. `acknowledge_test_consumers` can acknowledge only that risk on an otherwise eligible same-file inline test reference with no competing written local or other lexical uncertainty. Otherwise it remains `unsupported_in_engine`; no binding-evidence field resolves it. Change selection or investigate separately. |
 | `macro_context_unexamined` | Required macro expansion context | Unsupported; the engine doesn't expand macros. |
 | `glob_binding_unproved` | Wildcard import provenance unclear | Unsupported; no glob synthesis. |
 | `public_path_change` | Move would change a public/reexported path | No API shim; preserve the exposed path or design compatibility separately. |
 | `required_rewrite_retained` | A required repair was rejected | Re-submit with `accept_default` or a valid `replace`. |
 | `unsupported_unit_kind` / `unsupported_construct` | Context-sensitive or unsupported form | Omit from moves. |
 
-`test_consumer_acknowledged` is a nonblocking disclosed decision, not a blocker or test result; inspect its anchors and run caller tests. `standard_prelude`, `standard_builtin_derive`, and `ra_resolved` are proof classes, not refusal reasons; confirm their anchors and separate coverage counts. Resolution labeling is not compilation.
+`test_consumer_acknowledged` is a nonblocking disclosed decision, not a blocker or test result; inspect its anchors and any retained lexical witness, then run caller tests. A same-block `hoist_possibility` acknowledgment accepts expansion risk without proving binding identity or repairing the consumer; other lexical ambiguity, written conflicts, stale anchors, and structural failures remain blocking. `standard_prelude`, `standard_builtin_derive`, and `ra_resolved` are proof classes, not refusal reasons; confirm their anchors and separate coverage counts. Resolution labeling is not compilation.
 
 ### Advice-completeness states (suggest_split)
 

@@ -289,6 +289,32 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
     );
 }
 #[test]
+fn statement_macro_witness_is_disclosed_as_same_block_not_containing_pattern() {
+    for source in [
+        "fn f() { m!(); let n = selected; }",
+        "fn f() { let n = selected; m!(); }",
+    ] {
+        let assessment = assess(source, "selected", false);
+        assert_eq!(assessment.binding, LexicalBinding::Uncertain);
+        let witness = serde_json::to_value(assessment.uncertainty.unwrap()).unwrap();
+        assert_eq!(witness["witness_relation"], "hoist_possibility");
+        assert_eq!(witness["scope"]["kind"], "block");
+        let at = source.find("selected").unwrap();
+        let range = &witness["pattern"]["range"];
+        let start = range["start_byte"].as_u64().unwrap() as usize;
+        let end = range["end_byte"].as_u64().unwrap() as usize;
+        assert!(end <= at || start >= at + "selected".len());
+        assert_eq!(&source[start..end], "m!();");
+    }
+    let assessment = assess(
+        "fn f() { let (selected,) = pair; selected(); }",
+        "selected",
+        false,
+    );
+    let witness = serde_json::to_value(assessment.uncertainty.unwrap()).unwrap();
+    assert!(witness.get("witness_relation").is_none());
+}
+#[test]
 fn syntax_recovery_is_not_a_disjointness_proof() {
     for source in [
         "fn f() { @ selected(); }",
