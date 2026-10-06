@@ -335,66 +335,6 @@ fn index_name(index: &mut BTreeMap<String, Vec<usize>>, name: &str, item: usize)
         values.push(item);
     }
 }
-struct TestScope {
-    aliases: BTreeMap<String, String>,
-    shadowed: BTreeSet<String>,
-    super_glob: bool,
-}
-/// Only a directly inventoried inline module with the written exact cfg(test) form.
-/// This is consumer evidence, not cfg evaluation or inline-module move support.
-fn test_scope(
-    item: &Item,
-    node: Node<'_>,
-    source: &str,
-    controls: Controls<'_>,
-    routes: &items::GlobRoutes<'_>,
-) -> Result<Option<TestScope>, DomainError> {
-    if item.kind != "mod_item"
-        || !item.attributes.iter().any(|a| {
-            a.range.start_byte < item.span.range.start_byte
-                && source[a.range.start_byte..a.range.end_byte]
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .eq("#[cfg(test)]".chars())
-        })
-    {
-        return Ok(None);
-    }
-    let Some(body) = node.child_by_field_name("body") else {
-        return Ok(None);
-    };
-    let mut scope = TestScope {
-        aliases: BTreeMap::new(),
-        shadowed: BTreeSet::new(),
-        super_glob: false,
-    };
-    for i in 0..body.named_child_count() {
-        controls.check()?;
-        let child = body.named_child(i as u32).expect("module child");
-        if let Some(name) = child.child_by_field_name("name") {
-            scope
-                .shadowed
-                .insert(source[name.byte_range()].trim_start_matches("r#").into());
-        }
-        if child.kind() != "use_declaration" {
-            continue;
-        }
-        for leaf in items::use_leaves(child, source, (controls.deadline, controls.cancelled))? {
-            let segments: Vec<_> = leaf.path.split("::").collect();
-            let binding = leaf.binding.trim_start_matches("r#").to_owned();
-            if segments.len() == 2 && segments[0] == "super" {
-                let target = segments[1].trim_start_matches("r#").to_owned();
-                if scope.aliases.insert(binding.clone(), target).is_some() {
-                    scope.shadowed.insert(binding);
-                }
-            } else {
-                scope.shadowed.insert(binding);
-            }
-        }
-        scope.super_glob |= routes.reaches_file(&item.path, child, &item.path)?;
-    }
-    Ok(Some(scope))
-}
 fn references(
     source: &FileSnapshot,
     data: &ParsedFile,
@@ -429,7 +369,13 @@ fn references(
         controls.check()?;
         let item = &result.inventory[owner];
         let root = item_node(data, item);
-        let tests = test_scope(item, root, &source.source, controls, routes)?;
+        let tests = items::test_scope(
+            item,
+            root,
+            &source.source,
+            (controls.deadline, controls.cancelled),
+            routes,
+        )?;
         if matches!(
             item.kind.as_str(),
             "use_declaration" | "extern_crate_declaration" | "macro_definition"

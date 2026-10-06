@@ -35,6 +35,7 @@ impl DecisionAction {
                 instruction: "change the affected selected items; acknowledgment does not establish supported binding identity or unit context".into(),
             },
             DecisionReason::CrossGroupReferenceReview => Self::field("move_item", "moves", DecisionPurpose::SubmitForAnalysis),
+            DecisionReason::TestConsumerAcknowledged => Self::field("move_item", "acknowledge_test_consumers", DecisionPurpose::ReviewDefault),
             DecisionReason::OrdinaryTriviaChoice => Self::RequestField {
                 tool: "move_item".into(), field: "trivia_overrides[]".into(),
                 target: None, trivia: None, target_item: None,
@@ -94,6 +95,8 @@ impl DecisionAction {
     }
     pub(crate) fn next_action(&self) -> String {
         match self {
+            Self::RequestField { field, .. } if field == "acknowledge_test_consumers" =>
+                "review the disclosed test consumers and validate behavior with the caller's test run; this engine neither repairs nor validates them".into(),
             Self::RequestField {
                 tool,
                 field,
