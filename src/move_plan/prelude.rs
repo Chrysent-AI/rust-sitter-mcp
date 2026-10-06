@@ -1,7 +1,10 @@
 //! Caller-assumed prelude evidence, separate from written-binding repairs.
+#[cfg(test)]
+#[path = "prelude_tests.rs"]
+mod tests;
 use super::RewriteTarget;
 use crate::{
-    items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile},
+    items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile, RefusalBasis},
     plan::SourceAnchor,
     result::{Coverage, DomainError},
     rewrites::Repair,
@@ -81,23 +84,66 @@ struct Shadows {
     names: [bool; 14],
     derive_veto: bool,
     derives: BTreeMap<(String, usize, usize), usize>,
+    refusal_basis: Vec<RefusalBasis>,
 }
 impl Shadows {
     fn merge(&mut self, other: &Self) {
         self.context_unproved |= other.context_unproved;
         self.derive_veto |= other.derive_veto;
         self.derives.extend(other.derives.clone());
+        for basis in &other.refusal_basis {
+            self.record(basis.clone());
+        }
         for (name, other) in self.names.iter_mut().zip(other.names) {
             *name |= other;
         }
     }
-    fn name(&mut self, text: &str) {
+    fn record(&mut self, basis: RefusalBasis) {
+        if !self.refusal_basis.contains(&basis) {
+            self.refusal_basis.push(basis);
+        }
+    }
+    fn context(&mut self, class: &str, path: &str, node: Option<Node<'_>>) {
+        self.context_unproved = true;
+        self.record(RefusalBasis::new(
+            class,
+            path,
+            node.map(|n| crate::result::ByteRange {
+                start_byte: n.start_byte(),
+                end_byte: n.end_byte(),
+            }),
+        ));
+    }
+    fn basis_for(&self, index: usize, derive: bool) -> Vec<RefusalBasis> {
+        let name = if derive {
+            items::BUILTIN_DERIVES[index].0
+        } else {
+            STANDARD_PRELUDE[index].0
+        };
+        self.refusal_basis
+            .iter()
+            .filter(|basis| {
+                if basis.class == "shadow" {
+                    basis.name.as_deref() == Some(name)
+                        || (!derive
+                            && self.derives.values().any(|i| {
+                                basis.name.as_deref() == Some(items::BUILTIN_DERIVES[*i].0)
+                            }))
+                } else {
+                    !derive || basis.class != "derive_veto"
+                }
+            })
+            .cloned()
+            .collect()
+    }
+    fn name(&mut self, text: &str, path: &str, range: Option<crate::result::ByteRange>) {
         if let Some(index) = STANDARD_PRELUDE
             .iter()
             .chain(items::BUILTIN_DERIVES.iter())
             .position(|(name, _)| *name == text.trim_start_matches("r#"))
         {
             self.names[index] = true;
+            self.record(RefusalBasis::new("shadow", path, range).named(text));
         }
     }
     fn refuses(&self, index: usize) -> bool {
@@ -120,10 +166,11 @@ impl Shadows {
                         .insert((path.into(), range.start_byte, range.end_byte), index);
                 } else {
                     self.derive_veto = true;
+                    self.record(RefusalBasis::new("derive_veto", path, Some(range)));
                 }
             }
         } else {
-            self.context_unproved = true;
+            self.context("conditional_context", path, Some(node));
         }
     }
 }
@@ -142,13 +189,13 @@ fn shadows(
     while let Some((current, in_pattern)) = stack.pop() {
         items::check(controls.0, controls.1)?;
         if current.has_error() || current.is_missing() {
-            found.context_unproved = true;
+            found.context("syntax_recovery", path, Some(current));
         }
         match current.kind() {
             "line_comment" | "block_comment" | "string_literal" | "raw_string_literal"
             | "char_literal" | "token_tree" => continue,
             "macro_invocation" | "macro_definition" => {
-                found.context_unproved = true;
+                found.context("chain_macro_statement", path, Some(current));
                 continue;
             }
             "attribute_item" | "inner_attribute_item" => {
@@ -175,9 +222,11 @@ fn shadows(
                 continue;
             }
             "use_declaration" => {
-                found.context_unproved |= items::use_facts(current, source, controls)?.0;
+                if items::use_facts(current, source, controls)?.0 {
+                    found.context("glob_import", path, Some(current));
+                }
                 for leaf in items::use_leaves(current, source, controls)? {
-                    found.name(&leaf.binding);
+                    found.name(&leaf.binding, path, Some(leaf.leaf_range));
                 }
                 continue;
             }
@@ -196,7 +245,14 @@ fn shadows(
             | "mod_item"
             | "extern_crate_declaration" => {
                 if let Some(name) = current.child_by_field_name("name") {
-                    found.name(&source[name.byte_range()]);
+                    found.name(
+                        &source[name.byte_range()],
+                        path,
+                        Some(crate::result::ByteRange {
+                            start_byte: name.start_byte(),
+                            end_byte: name.end_byte(),
+                        }),
+                    );
                 }
             }
             "identifier" | "shorthand_field_identifier"
@@ -205,7 +261,14 @@ fn shadows(
                         .parent()
                         .is_some_and(|p| p.kind() == "extern_crate_declaration") =>
             {
-                found.name(&source[current.byte_range()]);
+                found.name(
+                    &source[current.byte_range()],
+                    path,
+                    Some(crate::result::ByteRange {
+                        start_byte: current.start_byte(),
+                        end_byte: current.end_byte(),
+                    }),
+                );
             }
             _ => {}
         }
@@ -353,17 +416,20 @@ fn chain_shadows(
 ) -> Shadows {
     let mut result = Shadows::default();
     let Some(context) = contexts.get(path) else {
-        result.context_unproved = true;
+        result.context("unresolved_chain", path, None);
         return result;
     };
     result.context_unproved = !context.unresolved.is_empty()
         || context.filesystem_paths.first() != Some(&context.crate_root)
         || context.filesystem_paths.last().map(String::as_str) != Some(path);
+    if result.context_unproved {
+        result.record(RefusalBasis::new("unresolved_chain", path, None));
+    }
     for file in &context.filesystem_paths {
         if let Some(shadows) = modules.get(file) {
             result.merge(&shadows.visible(if file == path { node } else { None }));
         } else if !(absent_destination && file == path) {
-            result.context_unproved = true;
+            result.context("unresolved_chain", file, None);
         }
     }
     result
@@ -406,17 +472,19 @@ pub(super) fn discharge(
             };
             let tree = crate::trivia::parse(&repair.after, controls.0, controls.1)?
                 .ok_or_else(|| DomainError::new("planning_deadline", "import audit stopped"))?;
+            let mut proposed = shadows(path, tree.root_node(), &repair.after, true, controls)?;
+            // Parsed replacement offsets are not original-source coordinates.
+            for basis in &mut proposed.refusal_basis {
+                basis.anchor.range = match &repair.target {
+                    RewriteTarget::Source { anchor } => Some(anchor.range.clone()),
+                    RewriteTarget::Synthesis { .. } => None,
+                };
+            }
             final_modules
                 .entry(path.clone())
                 .or_default()
                 .root
-                .merge(&shadows(
-                    path,
-                    tree.root_node(),
-                    &repair.after,
-                    true,
-                    controls,
-                )?);
+                .merge(&proposed);
         }
     }
     // New sibling declarations bind names in their written parent too.
@@ -432,7 +500,7 @@ pub(super) fn discharge(
                 .entry(parent.clone())
                 .or_default()
                 .root
-                .name(name);
+                .name(name, path, None);
         }
     }
     let mut item_shadows = BTreeMap::new();
@@ -477,7 +545,7 @@ pub(super) fn discharge(
     let mut proofs = BTreeMap::new();
     let mut remaining = Vec::new();
     let mut proof_bytes = 0;
-    for need in needs.drain(..) {
+    for mut need in needs.drain(..) {
         items::check(controls.0, controls.1)?;
         let source = &files[&need.path].source;
         let node = parsed[&need.path]
@@ -534,6 +602,23 @@ pub(super) fn discharge(
                         .refuses_derive(*index)
                 {
                     derive_identity_unproved = true;
+                    if need.reason == DecisionReason::ExternalOrMissingBinding
+                        && candidate.is_some()
+                    {
+                        need.refusal_basis.push(RefusalBasis::new(
+                            "derive_veto",
+                            path,
+                            Some(crate::result::ByteRange {
+                                start_byte: *start,
+                                end_byte: *end,
+                            }),
+                        ));
+                        need.refusal_basis.extend(visible.basis_for(*index, true));
+                        need.refusal_basis.extend(
+                            chain_shadows(path, derive_node, contexts, &modules, false)
+                                .basis_for(*index, true),
+                        );
+                    }
                     continue;
                 }
                 record_proof(
@@ -592,6 +677,41 @@ pub(super) fn discharge(
                 &mut proof_bytes,
             )?;
         } else if !derive_discharged {
+            if matches!(
+                need.reason,
+                DecisionReason::ExternalOrMissingBinding | DecisionReason::GlobBindingUnproved
+            ) && let Some(index) = candidate
+            {
+                need.refusal_basis.extend(visible.basis_for(index, false));
+            }
+            if let Some(attribute) = need.attribute_range.as_ref().and_then(|range| {
+                parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(range.start_byte, range.end_byte)
+            }) && let Some(names) = items::derive_names(attribute, source)
+            {
+                for (index, range) in names {
+                    if let Some(index) = index {
+                        if visible.refuses_derive(index) {
+                            need.refusal_basis.extend(visible.basis_for(index, true));
+                        }
+                    } else {
+                        need.refusal_basis.push(RefusalBasis::new(
+                            "derive_veto",
+                            path,
+                            Some(range),
+                        ));
+                    }
+                }
+            }
+            let mut unique = Vec::new();
+            for basis in need.refusal_basis.drain(..) {
+                if !unique.contains(&basis) {
+                    unique.push(basis);
+                }
+            }
+            need.refusal_basis = unique;
             remaining.push(need);
         }
     }

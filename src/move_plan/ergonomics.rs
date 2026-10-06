@@ -262,7 +262,7 @@ pub(super) fn removal_gaps(
             item_ids: ids.clone(), evidence: Vec::new(), unresolved_consequence: "removal-boundary blank lines stay byte-identical unless explicitly collapsed".into(),
             resolution: "choice_available".into(), supported_choices: vec!["accept_default".into(), "retain".into(), "replace".into()],
             selected_choice: Some(selected_action.into()),
-            blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None,
+            blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None, refusal_basis: Vec::new(),
             removal_gap: Some(RemovalGapChoice { before_text: before.clone(), after_text: after.clone(), default_disposition: "keep_in_place".into(), selected_disposition: selected.into() }),
         };
         if result.plan.decisions.len() >= 100_000 {

@@ -447,6 +447,24 @@ impl Analyzer<'_> {
                 need.range = attribute.range.clone();
                 need.message =
                     "required written binding has conditional/unexamined attribute context".into();
+                let derive = self.parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(
+                        attribute.range.start_byte,
+                        attribute.range.end_byte,
+                    )
+                    .and_then(|node| items::derive_names(node, &self.files[path].source))
+                    .is_some();
+                need.refusal_basis.push(items::RefusalBasis::new(
+                    if derive {
+                        "derive_veto"
+                    } else {
+                        "conditional_context"
+                    },
+                    path,
+                    Some(attribute.range.clone()),
+                ));
                 return false;
             }
         }
@@ -1470,6 +1488,7 @@ impl Analyzer<'_> {
             },
             choice_target,
             lexical_uncertainty: None,
+            refusal_basis: Vec::new(),
             category,
             path: a.path,
             range: a.range,
@@ -1641,7 +1660,7 @@ impl Analyzer<'_> {
                                             "lexical alias evidence guard reached",
                                         ));
                                     }
-                                    failures.push(Need {attribute_range:None,reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),lexical_uncertainty:assessment.uncertainty,category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or unproved at an anchored access".into(),item_ids:repair.item_ids.clone()});
+                                    failures.push(Need {attribute_range:None,reason:DecisionReason::FinalAliasConflict,choice_target:Some(repair.target.clone()),lexical_uncertainty:assessment.uncertainty,refusal_basis:Vec::new(),category:"binding_collision",path:reference.path.clone(),range:reference.range.clone(),message:"caller-selected alias is shadowed or unproved at an anchored access".into(),item_ids:repair.item_ids.clone()});
                                 }
                             }
                             let need = Need {
@@ -1649,6 +1668,7 @@ impl Analyzer<'_> {
                                 reason: DecisionReason::UnsupportedConstruct,
                                 choice_target: None,
                                 lexical_uncertainty: None,
+                                refusal_basis: Vec::new(),
                                 category: "unsupported_dependency_form",
                                 path: reference.path.clone(),
                                 range: reference.range.clone(),

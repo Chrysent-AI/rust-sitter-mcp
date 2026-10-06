@@ -356,6 +356,43 @@ fn nested_item_capture_context_does_not_inherit_outer_local_proof() {
     assert!(witness.pattern.is_none());
 }
 #[test]
+fn lexical_refusal_basis_keeps_the_actual_positional_witness() {
+    for (source, class, expected) in [
+        (
+            "fn f() { selected(); m!(); }",
+            "chain_macro_statement",
+            "m!();",
+        ),
+        (
+            "fn f() { let (selected,) = value; selected(); }",
+            "lexical_uncertainty",
+            "selected",
+        ),
+    ] {
+        let flag = AtomicBool::new(false);
+        let controls = (Instant::now() + Duration::from_secs(5), &flag);
+        let tree = crate::trivia::parse(source, controls.0, controls.1)
+            .unwrap()
+            .unwrap();
+        let mut need = crate::items::need(
+            crate::items::DecisionReason::LexicalContextUnproved,
+            "binding_collision",
+            "probe.rs",
+            tree.root_node(),
+            "unproved",
+        );
+        need.lexical(assess(source, "selected", false));
+        need.disclose_refusal();
+        let basis = &need.refusal_basis[0];
+        assert_eq!(basis.class, class);
+        assert_eq!(basis.name.as_deref(), Some("selected"));
+        let range = basis.anchor.range.as_ref().unwrap();
+        assert_eq!(&source[range.start_byte..range.end_byte], expected);
+        need.disclose_refusal();
+        assert_eq!(need.refusal_basis.len(), 1);
+    }
+}
+#[test]
 fn interrupted_work_never_supplies_positive_proof() {
     let source = "fn f() { for x in values { selected(); } }";
     let flag = AtomicBool::new(false);

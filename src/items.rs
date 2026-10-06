@@ -4,6 +4,8 @@ mod chain;
 pub(crate) use attributes::{BUILTIN_DERIVES, context_independent_attribute, derive_names};
 mod globs;
 mod lexical;
+mod refusal;
+pub use refusal::RefusalBasis;
 mod test_consumers;
 use crate::{
     matching::Lines,
@@ -698,6 +700,8 @@ pub struct Need {
     pub reason: DecisionReason,
     pub choice_target: Option<crate::move_plan::RewriteTarget>,
     pub lexical_uncertainty: Option<LexicalUncertainty>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refusal_basis: Vec<RefusalBasis>,
     pub category: &'static str,
     pub path: String,
     pub range: ByteRange,
@@ -716,6 +720,7 @@ fn need(
         reason,
         choice_target: None,
         lexical_uncertainty: None,
+        refusal_basis: Vec::new(),
         category,
         path: path.into(),
         range: ByteRange {
