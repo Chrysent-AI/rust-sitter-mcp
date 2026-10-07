@@ -108,6 +108,38 @@ fn definition_bytes_and_invocation_origins_are_part_of_both_overlay_identity() {
 }
 
 #[test]
+fn final_only_helper_attribute_and_generated_enum_helpers_keep_identity_blocked() {
+    let flag = AtomicBool::new(false);
+    let controls = (Instant::now() + Duration::from_secs(30), &flag);
+    let config = config();
+    for (plain, attributed) in [
+        (
+            MACRO.to_string(),
+            MACRO.replace("pub struct", "#[serde(transparent)] pub struct"),
+        ),
+        (
+            "macro_rules! make { ($name:ident) => { pub enum $name { Unit } }; }".into(),
+            "macro_rules! make { ($name:ident) => { #[helper] pub enum $name { Unit } }; }".into(),
+        ),
+    ] {
+        let old = Inputs::new(texts(&plain), &config, controls).unwrap();
+        let new = Inputs::new(texts(&attributed), &config, controls).unwrap();
+        let mut needs = vec![need()];
+        let proofs = evaluate(&old, &new, &mut needs, &[], &coverage(&config), controls).unwrap();
+        assert!(proofs.is_empty());
+        assert_eq!(
+            needs[0].refusal_basis.last().unwrap().class,
+            "semantic_final_fact_unproved"
+        );
+        assert!(new.context.borrow().values().any(|e| e.reason
+            == "declarative_attribute_provider_uncertain"
+            && e.status == "skipped"
+            && e.anchor.expected_text == attributed
+            && e.basis.contains("provider-uncertain attribute")));
+    }
+}
+
+#[test]
 fn excluded_or_external_macro_definitions_and_conditional_parent_modules_refuse() {
     let flag = AtomicBool::new(false);
     let controls = (Instant::now() + Duration::from_secs(30), &flag);

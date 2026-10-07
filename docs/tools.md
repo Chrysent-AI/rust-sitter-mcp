@@ -441,9 +441,16 @@ The pinned RA tier expands vetted tokens and verifies that the resolved struct
 or enum name maps exactly to the written argument, not a coincidentally matching
 literal or a fallback call-site range. Output may contain structs/enums and
 impls, but no imports, modules or other namespace-producing items. Generated
-type attributes permit inert lint/doc metadata and well-formed additive derives;
-the exact `#[serde(transparent)]` helper accompanying a `Serialize`/`Deserialize`
-derive is declaration metadata only. Other helpers/arbitrary attributes refuse.
+type attributes permit only the existing inert `allow`/`warn`/`deny`/`forbid`/`doc`
+metadata and unshadowed bare compiler-built-in derives. Other attributes, including
+`#[serde(transparent)]` even beside `Serialize`/`Deserialize`, refuse as
+provider-uncertain. A derive token spelling does not establish helper registration:
+the same admitted tokens can denote an inert helper or an attribute macro that
+replaces the declaration. Custom/qualified derives also retain the refusal in this
+tier; written `macro_rules!` definitions cannot supply attribute/derive providers.
+The definition, invocation and enclosing written owners remain audited; unknown
+owner attributes refuse and conditional owners remain vetoed. No provider is loaded
+or executed and no registration evidence is guessed.
 This namespace audit removes the blanket module-macro veto **only for nominal
 facts**; generated-item context keeps it. No generated fields, constructors,
 variants, impls or methods are proved or become selectable inventory units.
@@ -451,7 +458,11 @@ variants, impls or methods are proved or become selectable inventory units.
 Successful records have additive `class:"declarative_macro_identity"`,
 `classification:"declaration_identity"` and basis text stating **"declaration
 identity established through bounded declarative-macro expansion of written
-tokens"**. Both declaration objects anchor the identifier argument and carry
+tokens"**. The basis additionally states that resolved ADT identity and written
+argument provenance are checked at both overlays, provider-uncertain attributes
+are refused, and helper registration is not inferred from derive spelling. These
+checks do not observe unmodeled procedural expansion or verify rustc compilation.
+Both declaration objects anchor the identifier argument and carry
 `declarative_macro:{invocation,definition}` with exact written anchors. All three
 anchors normalize through the assembler's origin map and must match at both
 overlays, with the same crate origin and positive access. Receiver fields are
@@ -472,11 +483,15 @@ original/final identities. Independent API/chain/trivia/repair gates still apply
 already-matched identity. Reasons include `bounded_declarative_namespace`,
 `bounded_declarative_definition`, `declarative_definition_unproved`,
 `declarative_external_definition`, `declarative_invocation_unproved`,
-`declarative_conditional_context`, `declarative_attribute_unproved`,
+`declarative_conditional_context`, `declarative_attribute_provider_uncertain`,
 `declarative_fragment_limit`, `declarative_recursion_limit`,
 `declarative_token_limit`, `declarative_nesting_limit`,
 `declarative_expansion_unproved`, `declarative_unparseable` and
-`declarative_output_unproved`. Unsupported expansion retains
+`declarative_output_unproved`. A provider-uncertain attribute is named in the
+skipped evaluation's basis; generated attributes anchor the whole written macro
+definition, never invented generated-file coordinates. Written owner attributes
+have their own exact anchors, with the reached invocation also marked skipped.
+Unsupported expansion retains
 `semantic_source_fact_unproved` or `semantic_final_fact_unproved`; changed or
 unmappable pairs retain the identity/mapping refusal. Missing RA resolution may
 follow bounded written named routes solely to disclose a reached macro refusal;

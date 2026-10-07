@@ -11,8 +11,8 @@ use ra_ap_syntax::{
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 
-pub(super) const BASIS: &str = "declaration identity established through bounded declarative-macro expansion of written tokens; original/final invocation and in-crate macro_rules definition anchors match; no generated impl, method, field, constructor or variant facts; no proc-macro execution, compilation or equivalence checking";
-const CONTEXT_BASIS: &str = "bounded declarative-macro written-token admission only; declaration identity additionally requires matching original/final invocation and definition anchors; generated members and proc macros are not admitted";
+pub(super) const BASIS: &str = "declaration identity established through bounded declarative-macro expansion of written tokens; resolved ADT and written argument provenance checked at both overlays; original/final invocation and in-crate macro_rules definition anchors match; provider-uncertain attributes refused, helper registration not inferred from derive spelling; no generated impl, method, field, constructor or variant facts; no proc-macro execution, compilation or equivalence checking";
+const CONTEXT_BASIS: &str = "bounded declarative-macro written-token admission only; declaration identity additionally requires matching original/final invocation and definition anchors; provider-uncertain attributes refused, helper registration not inferred from derive spelling; generated members and proc macros are not admitted";
 const TOKEN_CAP: usize = 4096;
 const NESTING_CAP: usize = 32;
 
@@ -61,7 +61,12 @@ fn tokens(node: &SyntaxNode) -> Result<Vec<SyntaxToken>, &'static str> {
     Ok(tokens)
 }
 
-fn unconditional(node: &SyntaxNode) -> Result<(), &'static str> {
+fn unconditional(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    node: &SyntaxNode,
+) -> Result<(), &'static str> {
     for ancestor in node.ancestors() {
         for attr in ancestor.children().filter_map(ast::Attr::cast) {
             if attr.syntax().descendants().any(|n| {
@@ -76,7 +81,7 @@ fn unconditional(node: &SyntaxNode) -> Result<(), &'static str> {
                 attr.simple_name().as_deref(),
                 Some("allow" | "warn" | "deny" | "forbid" | "doc" | "macro_export")
             ) {
-                return Err("declarative_attribute_unproved");
+                return Err(provider_uncertain(inputs, sema, module, &attr, None));
             }
         }
     }
@@ -90,7 +95,7 @@ fn written_module(
 ) -> Result<(), &'static str> {
     for scope in module.path_to_root(&inputs.db) {
         if let Some(declaration) = scope.declaration_source(&inputs.db) {
-            unconditional(declaration.value.syntax())?;
+            unconditional(inputs, sema, scope, declaration.value.syntax())?;
         }
         let source = scope.definition_source(&inputs.db);
         let file = source
@@ -111,7 +116,7 @@ fn written_module(
         if !parsed.errors().is_empty() {
             return Err("declarative_unparseable");
         }
-        unconditional(sema.parse_guess_edition(file).syntax())?;
+        unconditional(inputs, sema, scope, sema.parse_guess_edition(file).syntax())?;
     }
     Ok(())
 }
@@ -196,35 +201,134 @@ fn matcher(definition: &ast::MacroRules) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Generated attributes can rewrite the declaration. Only inert metadata and
-/// additive derives qualify; the exact transparent serde helper is metadata.
-fn type_attributes(item: &ast::Item) -> bool {
+/// A helper's spelling does not prove its registration or prevent replacement.
+/// Expansion attributes lack real-file anchors; disclose their written definition.
+fn provider_uncertain(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    attr: &ast::Attr,
+    definition: Option<&Declaration>,
+) -> &'static str {
+    let reason = "declarative_attribute_provider_uncertain";
+    let written = inputs.declaration(module, attr.syntax(), sema.hir_file_for(attr.syntax()));
+    if let Some(declaration) = written.as_ref().or(definition) {
+        let anchor = declaration.anchor.clone();
+        inputs.context.borrow_mut().insert(
+            (
+                anchor.path.clone(),
+                anchor.range.start_byte,
+                anchor.range.end_byte,
+                FactClass::NominalIdentity.name(),
+            ),
+            context::ContextEvaluation {
+                revision: String::new(),
+                crate_name: declaration.crate_origin.clone(),
+                anchor,
+                kind: if written.is_some() {
+                    "attribute"
+                } else {
+                    "declarative_macro_definition"
+                }
+                .into(),
+                fact_class: FactClass::NominalIdentity.name().into(),
+                basis: format!(
+                    "{CONTEXT_BASIS}; provider-uncertain attribute {}; helper registration and attribute inertness not proved",
+                    attr.syntax().text()
+                ),
+                status: "skipped".into(),
+                value: None,
+                reason: reason.into(),
+            },
+        );
+    }
+    reason
+}
+
+fn builtin_derives(inputs: &Inputs, sema: &Semantics<'_, RootDatabase>, attr: &ast::Attr) -> bool {
+    let Some((_, tree)) = attr.meta().and_then(|m| m.as_simple_call()) else {
+        return false;
+    };
+    let Ok(ts) = tokens(tree.syntax()) else {
+        return false;
+    };
+    if ts.len() < 3 || ts[0].text() != "(" || ts[ts.len() - 1].text() != ")" {
+        return false;
+    }
+    let mut names = Vec::new();
+    for (at, token) in ts[1..ts.len() - 1].iter().enumerate() {
+        if at % 2 == 0 {
+            let name = token.text().trim_start_matches("r#");
+            if token.kind() != SyntaxKind::IDENT
+                || !crate::items::BUILTIN_DERIVES
+                    .iter()
+                    .any(|(n, _)| *n == name)
+            {
+                return false;
+            }
+            names.push(name);
+        } else if token.text() != "," {
+            return false;
+        }
+    }
+    let Some(scope) = sema.scope(attr.syntax()) else {
+        return false;
+    };
+    let mut shadowed = false;
+    scope.process_all_names(&mut |name, definition| {
+        if names.contains(&name.as_str())
+            && matches!(definition, ra_ap_hir::ScopeDef::ModuleDef(ra_ap_hir::ModuleDef::Macro(m)) if m.builtin_derive_kind(&inputs.db).is_none())
+        {
+            shadowed = true;
+        }
+    });
+    !shadowed
+}
+
+/// Only existing inert metadata and unshadowed bare built-in derives are exempt.
+/// A written declarative macro cannot supply an attribute or derive provider.
+fn type_attributes(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    definition: &Declaration,
+    item: &ast::Item,
+) -> Result<(), &'static str> {
     let attrs: Vec<_> = item.attrs().collect();
-    let tree = |a: &ast::Attr| a.meta()?.as_simple_call().map(|(_, t)| t);
-    let has_serde_derive = attrs
+    // Check helpers before derives so a familiar derive spelling cannot hide the
+    // specific replacement-capable attribute in the anchored disclosure.
+    for attr in attrs
+        .iter()
+        .filter(|a| a.simple_name().as_deref() != Some("derive"))
+    {
+        if !matches!(
+            attr.simple_name().as_deref(),
+            Some("allow" | "warn" | "deny" | "forbid" | "doc")
+        ) {
+            return Err(provider_uncertain(
+                inputs,
+                sema,
+                module,
+                attr,
+                Some(definition),
+            ));
+        }
+    }
+    for attr in attrs
         .iter()
         .filter(|a| a.simple_name().as_deref() == Some("derive"))
-        .filter_map(tree)
-        .any(|t| {
-            tokens(t.syntax()).is_ok_and(|ts| {
-                ts.iter()
-                    .any(|t| matches!(t.text(), "Serialize" | "Deserialize"))
-            })
-        });
-    attrs.iter().all(|a| match a.simple_name().as_deref() {
-        Some("allow" | "warn" | "deny" | "forbid" | "doc") => true,
-        Some("derive") => tree(a)
-            .and_then(|t| tokens(t.syntax()).ok())
-            .is_some_and(|ts| {
-                ts.len() > 2 && super::context::nominal_derive_paths(&ts[1..ts.len() - 1]).is_ok()
-            }),
-        Some("serde") if has_serde_derive => tree(a)
-            .and_then(|t| tokens(t.syntax()).ok())
-            .is_some_and(|ts| {
-                ts.iter().map(|t| t.text()).collect::<Vec<_>>() == ["(", "transparent", ")"]
-            }),
-        _ => false,
-    })
+    {
+        if !builtin_derives(inputs, sema, attr) {
+            return Err(provider_uncertain(
+                inputs,
+                sema,
+                module,
+                attr,
+                Some(definition),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn inspect(
@@ -233,7 +337,7 @@ fn inspect(
     module: Module,
     call: &ast::MacroCall,
 ) -> Result<Expansion, &'static str> {
-    unconditional(call.syntax())?;
+    unconditional(inputs, sema, module, call.syntax())?;
     let mac = sema
         .resolve_macro_call(call)
         .ok_or("declarative_definition_unproved")?;
@@ -253,7 +357,7 @@ fn inspect(
     let invocation = inputs
         .declaration(module, call.syntax(), sema.hir_file_for(call.syntax()))
         .ok_or("declarative_invocation_unproved")?;
-    let definition_admission = unconditional(def.syntax())
+    let definition_admission = unconditional(inputs, sema, mac.module(&inputs.db), def.syntax())
         .and_then(|()| written_module(inputs, sema, mac.module(&inputs.db)))
         .and_then(|()| written_module(inputs, sema, module))
         .and_then(|()| matcher(&def));
@@ -285,8 +389,12 @@ fn inspect(
     }
     for item in syntax.children().filter_map(ast::Item::cast) {
         match &item {
-            ast::Item::Struct(s) if s.generic_param_list().is_none() && type_attributes(&item) => {}
-            ast::Item::Enum(e) if e.generic_param_list().is_none() && type_attributes(&item) => {}
+            ast::Item::Struct(s) if s.generic_param_list().is_none() => {
+                type_attributes(inputs, sema, module, &definition, &item)?;
+            }
+            ast::Item::Enum(e) if e.generic_param_list().is_none() => {
+                type_attributes(inputs, sema, module, &definition, &item)?;
+            }
             ast::Item::Impl(_) => {}
             _ => return Err("declarative_output_unproved"),
         }

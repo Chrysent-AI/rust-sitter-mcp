@@ -37,11 +37,15 @@ context disclosure, not an approximation or a partially expanded proof.
 Expansion may contain named structs/enums and impls, but no module-level imports,
 modules, constants, functions, macro definitions or other namespace-producing
 items. Generated impls are merely tolerated output: never used as facts.
-Generated type attributes must be inert lint/doc attributes or well-formed
-additive derives; arbitrary attribute macros and conditional attributes refuse.
-The exact `#[serde(transparent)]` helper on a type with a written `Serialize` or
-`Deserialize` derive is tolerated as declaration metadata, not executed or used
-as field/serialization evidence. Other helper shapes are not admitted.
+Generated type attributes must be the existing inert lint/doc attributes
+(`allow`, `warn`, `deny`, `forbid`, `doc`) or unshadowed bare compiler-built-in
+derives. All other attributes, including `#[serde(transparent)]` beside a written
+`Serialize`/`Deserialize` derive, refuse as provider-uncertain. Custom and qualified
+derives also refuse in this tier. A familiar spelling cannot establish helper
+registration: identical admitted tokens can name either an inert helper or an
+attribute macro that replaces the declaration, depending on unmodeled providers.
+Written declarative definitions cannot supply attribute/derive providers. No
+provider evidence is guessed and no procedural expansion is observed.
 Conditional attributes on a macro definition, invocation or their enclosing
 items/modules veto even if their predicates are listed ON. Definitions in another
 configured crate, builtin macros and procedural macros never qualify.
@@ -65,12 +69,20 @@ repair machinery and does not introduce a request field.
 
 Successful evidence uses additive `class:"declarative_macro_identity"` and basis
 text stating that identity was established through bounded declarative-macro
-expansion of written tokens. Receiver fields are null: generated field types,
-including unadmitted external types, are irrelevant to declaration identity and
+expansion of written tokens, with resolved ADT identity and written argument
+provenance checked at both overlays. Its basis states that provider-uncertain
+attributes refuse and helper registration is not inferred from derive spelling;
+RA equality is not a claim to observe unmodeled rustc replacements. Receiver fields
+are null: generated field types, including unadmitted external types, are irrelevant
+to declaration identity and
 must not be smuggled into a receiver/type-layout proof. Context records disclose
 original/final invocation and definition checks, cap/conditional failures and
-the identity-only basis. The opt-in request schema is unchanged. Default-off
-behavior, independent chain/trivia/API/repair gates and read-only byte-exact
+the identity-only basis. `declarative_attribute_provider_uncertain` records the
+attribute in its basis and anchors generated attributes to the whole written
+macro definition; written owner attributes have exact original-source anchors.
+The reached invocation also retains the refusal. The opt-in request schema is
+unchanged. Default-off behavior, independent chain/trivia/API/repair gates and
+read-only byte-exact
 planning are unchanged.
 
 For nominal context only, a module-level macro can cease to be a blanket veto
@@ -87,6 +99,9 @@ repetition/recursion/token/nesting caps, external definitions, generated
 methods/fields/constructors/variants, arbitrary attributes and generated imports.
 Check identity mismatch and final-only context failure independently. Also replay
 the frozen application signature shapes under their explicit edition/cfg graph;
-this proves only the signature prerequisite, not an applicable associated-method
-move batch. Formatting, lint, full tests and hook-backed quality gates remain
-required before handoff.
+helper-bearing declarations must remain blocked rather than preserve earlier
+unsupported proofs. Helper-free wrappers with inert metadata/bare built-in derives
+still prove only the signature prerequisite, not an applicable associated-method
+move batch. Verify replacement/re-export/alias and cfg-replacement counterexamples
+with identical admitted inputs but differing external providers. Formatting, lint,
+full tests and hook-backed quality gates remain required before handoff.
