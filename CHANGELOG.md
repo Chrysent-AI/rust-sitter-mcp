@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add `declarative_macro_identity` signature-type proofs through bounded in-crate
+  written `macro_rules!` expansion, with matching invocation/definition anchors
+  at both overlays and provisional preservation of accessible public facade
+  imports; retain conditional/complex expansion and generated-member vetoes,
+  and never execute procedural macros.
 * Extend `assume_standard_prelude` type proofs to `std::option::Option`,
   `std::result::Result`, `std::boxed::Box`, `std::vec::Vec` and
   `std::string::String`, preserving original/final shadow and context audits

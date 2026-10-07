@@ -1,6 +1,6 @@
 //! Written bindings that additive derive output cannot silently replace.
 use super::{Inputs, context::FactClass, scoped_context};
-use ra_ap_hir::{Adt, Module, ModuleDef, PathResolution, Semantics};
+use ra_ap_hir::{Adt, HasVisibility, Module, ModuleDef, PathResolution, Semantics};
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_syntax::{
     AstNode, SyntaxNode,
@@ -24,6 +24,9 @@ pub(super) fn stable_path(
     let PathResolution::Def(definition) = sema.resolve_path(path)? else {
         return None;
     };
+    if !definition.is_visible_from(&inputs.db, sema.scope(path.syntax())?.module()) {
+        return None;
+    }
     let segment = path.segment()?;
     let qualifier = qualifier(path);
     if let Some(prefix) = &qualifier {
@@ -85,7 +88,7 @@ pub(super) fn stable_path(
     }
     let module = sema.scope(path.syntax())?.module();
     let scope = module_syntax(inputs, sema, module)?;
-    if has_binding(&scope, &name) {
+    if has_binding(&scope, &name) || scope.children().any(|n| ast::MacroCall::can_cast(n.kind())) {
         return stable_binding(inputs, sema, &scope, &name, definition, depth, fact_class);
     }
     // Preserve the existing configured-dependency route, but never extend custom
@@ -124,6 +127,55 @@ pub(super) fn stable_path(
     scoped_context(inputs, sema, path.syntax(), FactClass::GeneratedItems)?;
     *fact_class = FactClass::GeneratedItems;
     Some(())
+}
+
+/// Failed RA resolution can be caused by an over-budget expansion with no ADT.
+/// Follow only written named routes to disclose the reached macro veto; this
+/// records evidence and never supplies a missing identity or follows a glob.
+pub(super) fn disclose_missing_path(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    path: &ast::Path,
+    depth: usize,
+) {
+    if depth > 32 {
+        return;
+    }
+    let module = if let Some(prefix) = qualifier(path) {
+        match sema.resolve_path(&prefix) {
+            Some(PathResolution::Def(ModuleDef::Module(m))) => m,
+            _ => return,
+        }
+    } else if let Some(scope) = sema.scope(path.syntax()) {
+        scope.module()
+    } else {
+        return;
+    };
+    let Some(scope) = module_syntax(inputs, sema, module) else {
+        return;
+    };
+    for call in scope.children().filter_map(ast::MacroCall::cast) {
+        super::declarative::context_admitted(inputs, sema, module, &call);
+    }
+    let Some(name) = path
+        .segment()
+        .and_then(|s| s.name_ref())
+        .map(|n| n.text().to_string())
+    else {
+        return;
+    };
+    for tree in scope.children().filter_map(ast::Use::cast).flat_map(|u| {
+        u.syntax()
+            .descendants()
+            .filter_map(ast::UseTree::cast)
+            .collect::<Vec<_>>()
+    }) {
+        if leaf_name(&tree).is_some_and(|n| same_name(&n, &name))
+            && let Some(path) = tree.path()
+        {
+            disclose_missing_path(inputs, sema, &path, depth + 1);
+        }
+    }
 }
 
 /// Nested use trees contribute implicit qualifiers: `use crate::{a::{Enum}}`.
@@ -239,6 +291,25 @@ fn stable_binding(
                         }
                         return stable_path(inputs, sema, &path, depth + 1, fact_class);
                     }
+                }
+                None
+            }
+            ast::Item::MacroCall(_) if matches!(definition, ModuleDef::Adt(_)) => {
+                let ModuleDef::Adt(adt) = definition else {
+                    unreachable!()
+                };
+                let file = sema
+                    .hir_file_for(item.syntax())
+                    .file_id()?
+                    .file_id(&inputs.db);
+                if let Some(declaration) = super::declarative::declaration(inputs, sema, adt)
+                    && declaration.declarative_macro.as_ref().is_some_and(|e| {
+                        e.invocation.range.start_byte
+                            == usize::from(item.syntax().text_range().start())
+                            && e.invocation.path == inputs.paths[&file]
+                    })
+                {
+                    return Some(());
                 }
                 None
             }

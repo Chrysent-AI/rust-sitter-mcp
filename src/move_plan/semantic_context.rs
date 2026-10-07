@@ -25,7 +25,7 @@ impl FactClass {
     pub(super) fn basis(self) -> &'static str {
         match self {
             Self::NominalIdentity => {
-                "nominal identity via stable written declaration or explicit import route; derive-generated imports can override globs, so unproved binding stability retains the non-builtin derive veto; generated-item facts retain their veto; no expansion, compilation or equivalence checking"
+                "nominal identity via stable written declaration or explicit import route; derive-generated imports can override globs, so unproved binding stability retains the non-builtin derive veto; generated-item facts retain their veto; bounded declarative namespace audits only; no proc-macro execution, compilation or equivalence checking"
             }
             Self::GeneratedItems => {
                 "written resolution with generated-item context audited; unknown/non-builtin derives retain their veto; no expansion, compilation or equivalence checking"
@@ -354,7 +354,9 @@ fn safe_meta(
 }
 
 /// Validate the written derive path list without resolving or executing macros.
-fn nominal_derive_paths(tokens: &[ra_ap_syntax::SyntaxToken]) -> Result<(), &'static str> {
+pub(super) fn nominal_derive_paths(
+    tokens: &[ra_ap_syntax::SyntaxToken],
+) -> Result<(), &'static str> {
     // Token trees retain separate punctuation tokens in the pinned RA parser.
     // A path separator must be a joint pair, not two whitespace-separated colons.
     let separator = |at: usize| match (tokens.get(at), tokens.get(at + 1)) {

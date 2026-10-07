@@ -2464,7 +2464,48 @@ impl Analyzer<'_> {
         } else {
             return false;
         };
+        let occurrence = need.clone();
         let Some(resolved) = self.written_target(need, &old, &using) else {
+            // A generated declaration has no written terminal inventory item.
+            // Carry only the caller's existing, written-accessible public facade
+            // for a type-position import; never guess a canonical terminal. The
+            // need remains until resolution proves identity/access at both ends.
+            let leaves = self.reexports(&old);
+            if self.request.resolve_semantic
+                && need.reason == DecisionReason::ExternalOrMissingBinding
+                && node.kind() == "type_identifier"
+                && imports.len() == 1
+                && !imports[0].leaf.public
+                && leaves.len() == 1
+                && !leaves[0].conditioned
+                && let Some(item) = self.parsed[&leaves[0].path]
+                    .items
+                    .iter()
+                    .find(|i| i.span.range == leaves[0].leaf.declaration)
+                && matches!(item.visibility_key, "pub" | "pub(crate)")
+                && self.accessible_route(need, &leaves[0].path, item, &using)
+                && self.final_contexts[&consumer].module_segments == using
+            {
+                // Failed written routing can retarget the need to a facade use.
+                // Resolution must audit the original type occurrence, not that use.
+                *need = occurrence;
+                let route = RouteEvidence {
+                    anchors: vec![anchor(self.files, &leaves[0].path, &leaves[0].leaf.declaration)],
+                    fallback: vec!["preserve written public facade import pending both-overlay declaration identity; no generated terminal guessed".into()],
+                };
+                let _ = self.import(
+                    &consumer,
+                    name,
+                    &old,
+                    &need.item_ids,
+                    (evidence, route),
+                    vec![anchor(
+                        self.files,
+                        &need.path,
+                        &span(node.start_byte(), node.end_byte()),
+                    )],
+                );
+            }
             return false;
         };
         let facade = !resolved.evidence.fallback.is_empty();

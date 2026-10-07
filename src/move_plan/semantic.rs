@@ -31,6 +31,8 @@ use std::{
 
 #[path = "semantic_context.rs"]
 mod context;
+#[path = "declarative.rs"]
+mod declarative;
 #[path = "semantic_identity.rs"]
 mod identity;
 pub use context::ContextEvaluation;
@@ -39,6 +41,9 @@ use std::cell::RefCell;
 
 const ANALYZER: &str = "ra_ap@0.0.357";
 
+#[cfg(test)]
+#[path = "declarative_tests.rs"]
+mod declarative_tests;
 #[cfg(test)]
 #[path = "semantic_tests.rs"]
 mod tests;
@@ -94,6 +99,7 @@ pub struct ResolutionCoverage {
 #[serde(rename_all = "snake_case")]
 pub enum ProofClass {
     RaResolved,
+    DeclarativeMacroIdentity,
 }
 /// Stable written identities, not revision-local RA IDs or pretty-printed types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -101,6 +107,8 @@ pub enum ProofClass {
 pub struct Declaration {
     pub crate_origin: String,
     pub anchor: SourceAnchor,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declarative_macro: Option<declarative::Evidence>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -281,6 +289,7 @@ impl Inputs {
         let start = usize::from(node.text_range().start());
         let end = usize::from(node.text_range().end());
         Some(Declaration {
+            declarative_macro: None,
             crate_origin: self
                 .roots
                 .get(&module.krate(&self.db).root_file(&self.db))?
@@ -341,7 +350,7 @@ pub fn discharge(
         semantic_input_digest: digest, final_overlay_digest: final_digest,
         analyzer: ANALYZER.into(), statement: String::new(),
         omissions: vec!["one explicit configuration only; no other targets/features/cfg combinations".into(),
-            "no discovered sysroot/dependency sources, build-script cfg/environment, macro expansion, target layout, compilation or equivalence checks".into(),
+            "no discovered sysroot/dependency sources, build-script cfg/environment, proc-macro execution, general macro expansion, generated-member facts, target layout, compilation or equivalence checks; declarative identity admission is capped at one ident fragment, one expansion step, 4096 definition/output tokens and nesting 32".into(),
             "context_evaluations covers only reached context checks; undeclared cfg atoms remain unknown, including unlisted features; inactive cfg_attr payloads are not evaluated".into()],
         context_evaluations: Vec::new(),
     };
@@ -482,9 +491,30 @@ fn normalize(decl: &Declaration, origins: &[MoveOrigin], old: &Inputs) -> Option
     {
         return None;
     }
+    let declarative_macro = if let Some(e) = &decl.declarative_macro {
+        let normalize_anchor = |anchor: &SourceAnchor| {
+            normalize(
+                &Declaration {
+                    crate_origin: decl.crate_origin.clone(),
+                    anchor: anchor.clone(),
+                    declarative_macro: None,
+                },
+                origins,
+                old,
+            )
+            .map(|d| d.anchor)
+        };
+        Some(declarative::Evidence {
+            invocation: normalize_anchor(&e.invocation)?,
+            definition: normalize_anchor(&e.definition)?,
+        })
+    } else {
+        None
+    };
     Some(Declaration {
         crate_origin: decl.crate_origin.clone(),
         anchor,
+        declarative_macro,
     })
 }
 fn normalize_receiver(
@@ -546,7 +576,11 @@ fn evaluate(
                 }
             }
             Some(Proof {
-                class: ProofClass::RaResolved,
+                class: if before.declaration.declarative_macro.is_some() {
+                    ProofClass::DeclarativeMacroIdentity
+                } else {
+                    ProofClass::RaResolved
+                },
                 anchor,
                 item_ids: need.item_ids.clone(),
                 destination_path: final_anchor.path.clone(),
@@ -555,10 +589,15 @@ fn evaluate(
                 adjusted_receiver: before.adjusted,
                 final_original_receiver: after.original,
                 final_adjusted_receiver: after.adjusted,
+                basis: if before.declaration.declarative_macro.is_some() {
+                    declarative::BASIS
+                } else {
+                    before.fact_class.basis()
+                }
+                .into(),
                 declaration: before.declaration,
                 final_declaration: after.declaration,
                 classification: before.classification.into(),
-                basis: before.fact_class.basis().into(),
                 source_access: true,
                 final_access: true,
                 coverage: coverage.clone(),
@@ -636,6 +675,16 @@ fn receiver(
 }
 fn adt_declaration(inputs: &Inputs, adt: Adt, fact_class: FactClass) -> Option<Declaration> {
     let sema = Semantics::new(&inputs.db);
+    let expanded = match adt {
+        Adt::Struct(s) => sema.source(s)?.file_id.is_macro(),
+        Adt::Enum(e) => sema.source(e)?.file_id.is_macro(),
+        Adt::Union(_) => return None,
+    };
+    if expanded {
+        return (fact_class == FactClass::NominalIdentity)
+            .then(|| declarative::declaration(inputs, &sema, adt))
+            .flatten();
+    }
     match adt {
         Adt::Struct(s) => {
             let source = sema.source(s)?;
@@ -766,7 +815,12 @@ fn scoped_context(
             ra_ap_hir::ModuleSource::BlockExpr(_) => return None,
         };
         for child in syntax.children() {
-            if ast::MacroCall::can_cast(child.kind()) {
+            if let Some(call) = ast::MacroCall::cast(child.clone()) {
+                if fact_class == FactClass::NominalIdentity
+                    && declarative::context_admitted(inputs, sema, scope, &call)
+                {
+                    continue;
+                }
                 context::record(
                     inputs,
                     sema,
@@ -916,7 +970,8 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
         });
     }
     let path = exact_path(syntax, &anchor.range)?;
-    let PathResolution::Def(definition) = sema.resolve_path(&path)? else {
+    let Some(PathResolution::Def(definition)) = sema.resolve_path(&path) else {
+        identity::disclose_missing_path(inputs, &sema, &path, 0);
         return None;
     };
     let fact_class = match definition {
@@ -998,6 +1053,32 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
         }
         ModuleDef::Adt(adt) => {
             let declaration = adt_declaration(inputs, adt, fact_class)?;
+            if declaration.declarative_macro.is_some() {
+                // Identity-only evidence must not infer fields, layout, constructors
+                // or members, even when RA happens to know the generated output.
+                if !path
+                    .syntax()
+                    .parent()
+                    .is_some_and(|n| ast::PathType::can_cast(n.kind()))
+                    || path
+                        .syntax()
+                        .descendants()
+                        .any(|n| ast::GenericArgList::can_cast(n.kind()))
+                    || declaration.crate_origin
+                        != *inputs
+                            .roots
+                            .get(&module.krate(&inputs.db).root_file(&inputs.db))?
+                {
+                    return None;
+                }
+                return Some(Fact {
+                    declaration,
+                    original: None,
+                    adjusted: None,
+                    classification: "declaration_identity",
+                    fact_class,
+                });
+            }
             // Construction needs field access too, not just access to the type name.
             if path
                 .syntax()
