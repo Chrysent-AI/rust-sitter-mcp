@@ -339,6 +339,126 @@ fn relative_named_reexport_in_a_declaring_parent_matches_the_probe_shape() {
 }
 
 #[test]
+fn direct_canonical_import_uses_public_fallback_without_widening_hidden_modules() {
+    for canonical_visible in [false, true] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod source;\nmod target;\n");
+        repo.write("cases/layout/target.rs", "");
+        let module = if canonical_visible {
+            "pub(crate) mod private;"
+        } else {
+            "mod private;"
+        };
+        let hop = "pub use private::Value;";
+        repo.write(
+            "cases/layout/source.rs",
+            &format!("{module}\nmod operations;\n{hop}\n"),
+        );
+        let declaration = "pub enum Value { Pass }";
+        repo.write(
+            "cases/layout/source/private.rs",
+            &format!("{declaration}\n"),
+        );
+        let source = "cases/layout/source/operations.rs";
+        let import = "use super::private::Value;";
+        let selected = "fn selected(value: Value) -> Value { value }";
+        repo.write(source, &format!("{import}\n{selected}\n"));
+        compile(&repo);
+        let mut args = request(&repo, source, selected);
+        args["moves"][0]["destination"] =
+            json!({"kind":"existing","path":"cases/layout/target.rs"});
+        let result = run(&repo, args);
+        let expected = if canonical_visible {
+            "use crate::source::private::Value;"
+        } else {
+            "use crate::source::Value;"
+        };
+        let rewrites = result["plan"]["rewrites"].as_array().unwrap();
+        let rewrite = rewrites
+            .iter()
+            .find(|r| r["kind"] == "import_insert")
+            .unwrap();
+        assert_eq!(rewrite["after_text"], expected, "{result}");
+        assert!(
+            !rewrites.iter().any(|r| r["kind"] == "visibility"),
+            "direct imports must not widen canonical module visibility: {result}"
+        );
+        if !canonical_visible {
+            assert_eq!(written(&result).len(), 1, "{result}");
+            assert_anchor(&repo, rewrite, source, import);
+            assert_anchor(&repo, rewrite, "cases/layout/lib.rs", "mod source;");
+            assert_anchor(&repo, rewrite, "cases/layout/source.rs", module);
+            assert_anchor(&repo, rewrite, "cases/layout/source.rs", hop);
+            assert_anchor(
+                &repo,
+                rewrite,
+                "cases/layout/source/private.rs",
+                declaration,
+            );
+            assert!(
+                rewrite["rationale"]
+                    .as_str()
+                    .unwrap()
+                    .contains("written_reexport_route_fallback"),
+                "{rewrite}"
+            );
+        }
+        let copy = apply(&repo, &result);
+        compile(&copy);
+        assert_eq!(
+            fs::read_to_string(copy.0.join("cases/layout/source.rs")).unwrap(),
+            fs::read_to_string(repo.0.join("cases/layout/source.rs")).unwrap()
+        );
+        assert!(
+            fs::read_to_string(copy.0.join("cases/layout/target.rs"))
+                .unwrap()
+                .contains(expected)
+        );
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    }
+}
+
+#[test]
+fn direct_canonical_import_without_public_route_refuses_instead_of_widening() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\nmod target;\n");
+    repo.write("cases/layout/target.rs", "");
+    repo.write("cases/layout/source.rs", "mod private;\nmod operations;\n");
+    repo.write(
+        "cases/layout/source/private.rs",
+        "pub enum Value { Pass }\n",
+    );
+    let source = "cases/layout/source/operations.rs";
+    let selected = "fn selected(value: Value) -> Value { value }";
+    repo.write(source, &format!("use super::private::Value;\n{selected}\n"));
+    compile(&repo);
+    let mut args = request(&repo, source, selected);
+    args["moves"][0]["destination"] = json!({"kind":"existing","path":"cases/layout/target.rs"});
+    let result = run(&repo, args);
+    withheld(&result);
+    let expected = anchor(&repo, "cases/layout/source.rs", "mod private;");
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+            .any(|b| b["class"] == "inaccessible_route:private"
+                && b["anchor"]["path"] == expected["path"]
+                && b["anchor"]["range"] == expected["range"]),
+        "{result}"
+    );
+    assert!(
+        !result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "visibility"),
+        "{result}"
+    );
+}
+
+#[test]
 fn canonical_reexport_route_checks_visibility_or_uses_the_public_fallback() {
     for (visibility, accessible) in [
         ("", false),

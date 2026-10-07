@@ -468,10 +468,13 @@ impl Analyzer<'_> {
         let (terminal, mut anchors) = self.follow_reexport(need, target)?;
         let mut route = self.mapped(&terminal);
         let mut fallback = Vec::new();
-        if !anchors.is_empty() {
-            let (path, item) = self.declaration(&terminal)?;
+        if let Some((path, item)) = self.declaration(&terminal) {
             let mut rejected = need.clone();
-            if !self.accessible_route(&mut rejected, &path, &item, using) {
+            // Direct relocation keeps its explicit visibility repairs, including
+            // synthesized edges; retained terminals must not widen hidden modules.
+            if !self.accessible_route(&mut rejected, &path, &item, using)
+                && (!anchors.is_empty() || self.final_path(&path, &item) == path)
+            {
                 // A facade proves access, not permission to expose a private terminal.
                 if !matches!(item.visibility_key, "pub" | "pub(crate)")
                     || self.final_path(&path, &item) != path
