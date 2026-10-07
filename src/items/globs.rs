@@ -319,6 +319,137 @@ impl<'a> GlobRoutes<'a> {
             inline,
         }
     }
+    fn named_import_competes(
+        &self,
+        module: &Module,
+        route: &str,
+        reference: Node<'_>,
+        depth: usize,
+    ) -> Result<bool, DomainError> {
+        check(self.controls.0, self.controls.1)?;
+        if depth > 16 {
+            return Ok(false);
+        }
+        let (prefix, name) = route.rsplit_once("::").unwrap_or(("self", route));
+        let Some(Target::Module(target)) = self.resolve(module, prefix, 0)? else {
+            return Ok(false);
+        };
+        let Some(data) = self.parsed.get(&target.path) else {
+            return Ok(false);
+        };
+        let Some(scope) = self.scope(&target, &data.tree) else {
+            return Ok(false);
+        };
+        let source = &self.files[&target.path].source;
+        let mut bindings = Vec::new();
+        for i in 0..scope.named_child_count() {
+            check(self.controls.0, self.controls.1)?;
+            let node = scope.named_child(i as u32).expect("scope child");
+            if node.kind() == "use_declaration" {
+                for leaf in use_leaves(node, source, self.controls)? {
+                    if leaf.binding.trim_start_matches("r#") == name.trim_start_matches("r#") {
+                        bindings.push(self.named_import_competes(
+                            &target,
+                            &leaf.path,
+                            reference,
+                            depth + 1,
+                        )?);
+                    }
+                }
+            } else if node.child_by_field_name("name").is_some_and(|n| {
+                source[n.byte_range()].trim_start_matches("r#") == name.trim_start_matches("r#")
+            }) {
+                bindings.push(same_namespace(node, reference));
+            }
+        }
+        Ok(bindings.len() == 1 && bindings[0])
+    }
+    /// Visible wildcard candidates for a bare consumer. Named bindings take
+    /// precedence in their own scope; child modules do not inherit parent uses.
+    /// Unknown/forwarded routes remain candidates, never identity proofs.
+    pub(crate) fn consumer_imports(
+        &self,
+        path: &str,
+        reference: Node<'_>,
+        affected: &str,
+        name: &str,
+    ) -> Result<Vec<ByteRange>, DomainError> {
+        let source = &self.files[path].source;
+        let mut imports = Vec::new();
+        let mut parent = reference.parent();
+        while let Some(scope) = parent {
+            check(self.controls.0, self.controls.1)?;
+            let module_body = scope.kind() == "declaration_list"
+                && scope.parent().is_some_and(|p| p.kind() == "mod_item");
+            if matches!(scope.kind(), "block" | "source_file") || module_body {
+                let mut globs = Vec::new();
+                let mut named = false;
+                for i in 0..scope.named_child_count() {
+                    check(self.controls.0, self.controls.1)?;
+                    let node = scope.named_child(i as u32).expect("scope child");
+                    let mut previous = node.prev_named_sibling();
+                    let mut attributed = false;
+                    while let Some(sibling) = previous {
+                        check(self.controls.0, self.controls.1)?;
+                        if !matches!(
+                            sibling.kind(),
+                            "attribute_item" | "line_comment" | "block_comment"
+                        ) {
+                            break;
+                        }
+                        attributed |= sibling.kind() == "attribute_item";
+                        previous = sibling.prev_named_sibling();
+                    }
+                    if node.kind() == "use_declaration" {
+                        if !attributed {
+                            for leaf in use_leaves(node, source, self.controls)? {
+                                if leaf.binding.trim_start_matches("r#") == name {
+                                    named |= self.named_import_competes(
+                                        &self.lexical(path, node),
+                                        &leaf.path,
+                                        reference,
+                                        0,
+                                    )?;
+                                }
+                            }
+                        }
+                        if use_facts(node, source, self.controls)?.0
+                            && self.exclusion(path, node, &[affected], name)?.0.is_none()
+                        {
+                            globs.push(ByteRange {
+                                start_byte: node.start_byte(),
+                                end_byte: node.end_byte(),
+                            });
+                        }
+                    } else {
+                        // A type-only declaration cannot hide a glob-resolved value.
+                        // Attributed declarations cannot prove an active binding.
+                        let namespace = same_namespace(node, reference);
+                        named |= !attributed
+                            && namespace
+                            && node.child_by_field_name("name").is_some_and(|n| {
+                                source[n.byte_range()].trim_start_matches("r#") == name
+                            });
+                    }
+                }
+                if named {
+                    return Ok(imports);
+                }
+                imports.extend(globs);
+                if imports.len() > 100_000 {
+                    return Err(DomainError::new(
+                        "reference_work_limit",
+                        "consumer glob evidence cap reached",
+                    ));
+                }
+                if scope.kind() == "source_file" || module_body {
+                    break;
+                }
+            }
+            parent = scope.parent();
+        }
+        Ok(imports)
+    }
     pub(crate) fn reaches_file(
         &self,
         path: &str,
@@ -508,5 +639,20 @@ impl<'a> GlobRoutes<'a> {
             reachable,
             forwarded,
         ))
+    }
+}
+
+fn same_namespace(node: Node<'_>, reference: Node<'_>) -> bool {
+    if reference.kind() == "type_identifier" {
+        matches!(
+            node.kind(),
+            "struct_item" | "enum_item" | "union_item" | "type_item" | "trait_item"
+        )
+    } else {
+        matches!(node.kind(), "function_item" | "const_item" | "static_item")
+            || (node.kind() == "struct_item"
+                && node
+                    .child_by_field_name("body")
+                    .is_none_or(|b| b.kind() == "ordered_field_declaration_list"))
     }
 }
