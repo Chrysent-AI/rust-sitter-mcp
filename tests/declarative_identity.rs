@@ -237,6 +237,70 @@ fn conditional_complex_recursive_and_namespace_producing_expansions_disclose_ref
 }
 
 #[test]
+fn nested_expansion_discloses_the_outer_written_depth_cap_without_identity() {
+    let text = "fn selected(item: crate::route::ItemId) -> crate::route::ItemId { item }";
+    let inner = "macro_rules! inner { ($name:ident) => { pub struct $name; }; }";
+    for (outer, nested) in [
+        (
+            "macro_rules! make { ($name:ident) => { inner!($name); }; }",
+            true,
+        ),
+        (
+            "macro_rules! make { ($name:ident) => { pub struct $name; }; }",
+            false,
+        ),
+    ] {
+        let repo = fixture("", text);
+        repo.write(
+            "cases/layout/model.rs",
+            &format!("{inner}\n{outer}\nmake!(ItemId);"),
+        );
+        repo.write("cases/layout/route.rs", "pub use crate::model::ItemId;");
+        let value = run(&repo, request(&repo, text));
+        let proofs: Vec<_> = value["plan"]["binding_proofs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| p["class"] == "declarative_macro_identity")
+            .collect();
+        if !nested {
+            assert_eq!(value["plan"]["applicable"], true, "{value}");
+            assert_eq!(proofs.len(), 2, "{value}");
+            continue;
+        }
+        blocked(&value);
+        assert!(proofs.is_empty(), "{value}");
+        assert!(
+            value["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+                .any(|b| b["class"] == "semantic_source_fact_unproved"),
+            "{value}"
+        );
+        let evaluations = value["plan"]["resolution_coverage"]["context_evaluations"]
+            .as_array()
+            .unwrap();
+        for (kind, text) in [
+            ("declarative_macro", "make!(ItemId);"),
+            ("declarative_macro_definition", outer),
+        ] {
+            let anchor = move_artifacts::anchor(&repo, "cases/layout/model.rs", text);
+            assert!(
+                evaluations.iter().any(|e| e["revision"] == "original"
+                    && e["kind"] == kind
+                    && e["fact_class"] == "nominal_identity"
+                    && e["status"] == "skipped"
+                    && e["reason"] == "declarative_recursion_limit"
+                    && e["anchor"] == anchor),
+                "{value}"
+            );
+        }
+    }
+}
+
+#[test]
 fn generated_members_constructors_and_variant_facts_remain_blocked() {
     for (definition, text) in [
         (

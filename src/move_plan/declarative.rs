@@ -354,11 +354,13 @@ pub(super) fn declaration(
         Adt::Enum(e) => sema.source(e)?.map(|e| e.syntax().clone()),
         Adt::Union(_) => return None,
     };
-    if source.file_id.macro_expansion_depth(&inputs.db) != 1 {
+    let depth = source.file_id.macro_expansion_depth(&inputs.db);
+    if depth == 0 {
         return None;
     }
-    let site = source.file_id.call_node(&inputs.db)?;
-    let file = site.file_id.file_id()?.file_id(&inputs.db);
+    // Audit the outer written call even when nested expansion cannot prove identity.
+    let site = source.file_id.original_call_node(&inputs.db)?;
+    let file = site.file_id.file_id(&inputs.db);
     let root = sema.parse_guess_edition(file);
     let call = root
         .syntax()
@@ -366,7 +368,7 @@ pub(super) fn declaration(
         .filter_map(ast::MacroCall::cast)
         .find(|c| c.syntax().text_range() == site.value.text_range())?;
     let module = sema.scope(call.syntax())?.module();
-    if !context_admitted(inputs, sema, module, &call) {
+    if !context_admitted(inputs, sema, module, &call) || depth != 1 {
         return None;
     }
     let expansion = inspect(inputs, sema, module, &call).ok()?;

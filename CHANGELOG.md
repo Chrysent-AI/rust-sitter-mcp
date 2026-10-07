@@ -21,6 +21,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Disclose nested declarative expansion refusals at the outer written invocation
+  and definition with `declarative_recursion_limit`, without admitting multi-step
+  declaration identities.
 * Audit only the effective binding of an extern-crate declaration: allow qualified
   standard-prelude proofs under `extern crate std as something;` while preserving
   the competing-root veto for `extern crate external as std;`.
