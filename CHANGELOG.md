@@ -1,0 +1,78 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.4.0] - 2026-10-07
+
+### Added
+
+* Add `refusal_basis` to retained `move_item` decisions, with original-source
+  anchors for prelude, derive, shadow and lexical vetoes and failed semantic
+  proof stages; omit unavailable coordinates instead of inventing ranges.
+* Add `written_reexport` evidence for consumer import repairs through unique,
+  unconditioned named public re-exports, preserving aliases and disclosing each
+  hop and terminal declaration; bound chains to eight hops and reject uncertain
+  routes without bypassing moved-item API decisions.
+* Evaluate written `cfg` and `cfg_attr` under the caller's
+  `semantic_configuration` and admit unshadowed bare compiler-built-in derive
+  context; disclose reached original/final checks, inactive payloads and skipped
+  reasons in `context_evaluations`, keeping undeclared atoms unknown.
+* Add `ra_resolved` proofs classified as `variant_path` for written enum variants
+  in value and pattern positions, with anchored variant and parent-enum identities
+  and access checks at both original and final revisions; do not claim compilation
+  or equivalence checking.
+* Extend `assume_standard_prelude` to unshadowed bare value-position `Some` and
+  `None`, with separate `standard_prelude_constructor` proofs and coverage;
+  disclose that constructor identity is assumed, derive-generated imports are
+  not modeled and macro hygiene is not proved.
+* Add the repository `changelog` skill for maintaining user-facing release notes
+  and cutting releases with explicit changelog rotation.
+
+### Changed
+
+* Replace the intermediate `hoist_possibility` lexical witness relation with
+  `statement_macro_before_reference` for at-or-before invocations and
+  `block_macro_may_introduce_items` for later invocations in enclosing blocks;
+  disclose written witnesses without claiming expansion or hygiene.
+* Scope custom-derive admission to nominal type and variant identity established
+  through active written declarations or explicit non-glob import routes in both
+  overlays; disclose `fact_class` and `basis`, retain conservative gates for
+  generated-item-dependent facts and configured external roots, and withhold
+  proofs when generated imports could override glob-resolved names.
+
+### Fixed
+
+* Allow `acknowledge_test_consumers` to acknowledge macro-witnessed bare references
+  in the moved file's exact inline `#[cfg(test)]` module only when written super
+  imports reach the source, type/value namespaces agree and a separate binding
+  audit finds no other uncertainty; preserve witnesses on disclosed risks.
+* Scope standard-prelude shadow audits to each reference's own/enclosing inline
+  modules and final destination batch instead of inheriting filesystem ancestors'
+  ordinary imports and declarations; keep `no_implicit_prelude` local and inherited
+  downward, while retaining module-identity and unbounded expansion vetoes.
+* Refuse lexical and standard-prelude proofs under potentially item-producing
+  macros or unexamined outer attributes in enclosing blocks regardless of source
+  order; keep body-only expansion sites from vetoing signatures outside those
+  blocks and anchor definite shadows at their declarations.
+* Distinguish scoped constructor/constant patterns from local binders and admit
+  pattern arguments only without competing written constants, unit constructors,
+  imports, globs or potentially item-producing macros; retain constructor path
+  dependencies and unused ambiguous pattern needs, and respect match-arm and
+  `let-else` binding scopes.
+* Check written accessibility of every intermediate canonical re-export module
+  from the final consumer; retain anchored `inaccessible_route:<segment>` refusal
+  bases when no admitted accessible route exists, without widening hidden modules.
+* Fall back to accessible written public re-export routes when a canonical path
+  is hidden, including direct canonical imports; prefer accessible canonical paths,
+  otherwise choose fewest hops then lexicographic absolute path and disclose
+  `written_reexport_route_fallback` with route and visibility anchors.
+* Block unrepaired bare consumers in other admitted files reached through visible
+  relative, aliased, grouped or forwarded glob routes with
+  `glob_consumer_unrepaired`, reference/import anchors and
+  `selection_change_required`; withhold artifacts rather than waive these consumers
+  through test acknowledgment or semantic resolution.
