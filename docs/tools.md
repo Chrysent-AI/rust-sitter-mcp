@@ -220,6 +220,17 @@ schema version remains 2 because the fields are additive. The count survives
 response fitting; omitted proof records are disclosed in `counts.omissions.binding_proofs`,
 and a response that cannot carry the full applicable audit withholds all artifacts.
 
+The same assumption also covers **bare value-position `Some` and `None`** from
+`std::option::Option`. Each gets `class:"standard_prelude_constructor"` with the
+same anchor/item/destination/path/basis shape, and
+`coverage.standard_prelude_constructor` counts occurrences separately from type
+and derive proofs. Both the constructor spelling and `Option` must be unshadowed
+under the original/final module, batch, lexical, derive and prelude-control audits.
+The basis says **"constructor identity assumed with the type; not macro hygiene
+proved"**. Qualified paths (`Option::Some`), patterns, other constructors and
+associated calls do not qualify. Empty proof/count fields are omitted; counts
+survive response fitting with the same omission/withholding rules as type proofs.
+
 The source **and** destination module identity chains must be complete. Competing
 explicit use-leaves, globs and same-name written declarations are checked in the
 reference's own module, lexically enclosing inline modules and the destination's
@@ -296,8 +307,9 @@ merged. Unknown names never receive proof records. Counts survive response fitti
 withhold all artifacts. Empty derive proof/count fields are omitted.
 
 No import is synthesized: the destination is assumed to have the same implicit
-prelude. Constructors, associated calls, methods and arbitrary macro expansion
-remain outside the bridge. All other collisions, missing context and blockers still apply to the
+prelude. Except for the bare value-position `Some`/`None` assumption above,
+constructors, associated calls, methods and arbitrary macro expansion remain
+outside the bridge. All other collisions, missing context and blockers still apply to the
 entire batch. Original bytes remain lossless, no `Cargo.toml` is read, and
 `semantic:"not_performed"` is unchanged. This option does not make idiomatic Rust
 relocation generally executable.
@@ -357,27 +369,48 @@ atom away. Unsupported predicates, malformed attributes and unknown atoms retain
 the veto. A known-OFF sibling is configuration information, not proof an inactive
 selected occurrence resolves. No new false-atom request field is introduced.
 
-Bare derives containing only `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `PartialEq`,
-`Ord`, `PartialOrd` and `Hash` are admitted as compiler-built-in trait-impl-only
-context; known competing macro bindings, qualified names and other derive names
-retain the veto. This is the same bare built-in name contract as standard-prelude
-evidence, not proc-macro execution or a macro-hygiene proof. For `cfg_attr`, an ON
-condition requires each payload attribute to be admitted recursively; an OFF
-condition records the payload as inactive without evaluating it. Existing inert
-lint/doc/inline/registration attributes remain admitted. Module-level macro
-invocations still veto resolution.
+The derive guard is scoped by the fact being proved:
+
+- **Nominal identity** of written types/enum variants (and their required-binding
+  attribute context) admits well-formed derives, including qualified and unknown
+  custom names on the target or a sibling. A derive receives the annotated item
+  and appends additional items; it cannot replace the written declaration:
+  https://doc.rust-lang.org/reference/procedural-macros.html#macro.proc.derive.output
+  This is **"nominal identity via written declaration; derive emits additional
+  items only; generated-item facts retain their veto"**, not a claim that custom
+  expansion is inert or that the crate compiles. Duplicate generated declarations
+  are compile errors, not alternate identities in a compiling crate.
+- **Generated-item-dependent facts**, including method/field receiver inference
+  and function resolution, keep the existing gate: bare derives containing only
+  `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `PartialEq`, `Ord`, `PartialOrd` and
+  `Hash` are admitted as compiler-built-in trait-impl-only context; known competing
+  macro bindings, qualified names and other derive names retain the veto.
+  Generated impl presence and trait-method resolution are not proved.
+
+For both classes, malformed derives, arbitrary attribute macros and module-level
+macro invocations still veto. For `cfg_attr`, an ON condition requires each payload
+attribute to be admitted recursively for the same fact class; an OFF condition
+records the payload as inactive without evaluating it. An undeclared condition
+still vetoes everything it wraps, including nominal identity. Existing inert
+lint/doc/inline/registration attributes remain admitted. No proc-macro execution
+or macro-hygiene proof is introduced.
 
 Only concrete, known receivers with preserved original **and adjusted** type
 identities qualify. The first scope resolves actual inherent functions (including
-associated calls), named fields, type/constructor paths and ordinary written
-function bindings. It checks the resolved declaration's actual impl ownership,
+associated calls), named fields, type/constructor paths, enum-variant paths in
+value and pattern positions, and ordinary written function bindings. A
+`classification:"variant_path"` proof anchors the terminal variant declaration
+and its parent enum identity at both revisions, with original/final access checks.
+Written variant/field attributes are audited even on cfg-hidden siblings; generic
+or unknown parent identities still refuse. This is RA resolution, not a new
+written-route proof or general pattern/binder-versus-constant solver. It checks the resolved declaration's actual impl ownership,
 not candidate iteration, and positive visibility from both the original and
 final lexical modules. Constructor fields must all be accessible. Receiver
 identities use reference adjustments, builtin names, written declaration anchors
 and concrete type arguments, not pretty-printed type strings or revision-local
 IDs. Generic function contexts, trait functions/trait objects, unknown inference,
 unsupported receiver shapes or const/lifetime substitutions, expanded/generated
-nodes and affected macro/attribute contexts retain their existing typed blockers.
+nodes and unadmitted macro/attribute contexts retain their existing typed blockers.
 Macro-bearing function bodies unrelated to the selected occurrence and ordinary
 proc-macro registration elsewhere do not key refusal on the crate's kind.
 Independent macro/module-chain/cfg(test), API, trivia and required-repair vetoes
@@ -388,12 +421,14 @@ Each discharged occurrence adds a discriminated
 `plan.binding_proofs[]` record with `class:"ra_resolved"`: full original and final
 anchors, contributing item IDs, original/adjusted receivers at both ends,
 original/final declaration identities (crate origin + stable written name
-anchor), classification, `source_access:true`, `final_access:true` and explicit
-configuration coverage. A plain function binding has null receiver fields.
+anchor), classification, a fact-class-specific `basis`, `source_access:true`,
+`final_access:true` and explicit configuration coverage. A plain function binding has null receiver fields.
 A required-binding attribute veto can separately produce a `ra_resolved` record
 with `classification:"context_attribute"`, an attribute declaration anchor and
-null receivers: this proves inert context at both revisions, **not** resolution
-of a dependent pattern/body. Written access checks and required visibility/module
+null receivers: this proves the required attribute context for the disclosed
+fact class at both revisions, **not** resolution of a dependent pattern/body or
+generated implementation. For nominal facts, admission is additive-derive
+identity evidence rather than a claim that generated output is inert. Written access checks and required visibility/module
 repairs still run before this context-only veto can discharge.
 `coverage.ra_resolved` counts these occurrences separately from prelude proofs,
 including records omitted during output fitting. Type identities/declarations
@@ -411,9 +446,15 @@ omissions scope every proof. `context_evaluations[]` adds deduplicated anchored
 records for reached context checks: `revision` (`original`/`final`), `crate_name`,
 `anchor` (exact path/range/text), `kind` (`attribute`, `cfg_predicate` or
 `module_macro`), `status` (`admitted`, `evaluated`, `inactive` or `skipped`),
-nullable predicate `value`, and `reason`. Reasons identify undeclared atoms,
-unsupported predicates, malformed/non-built-in derives, parser recovery or
-module macros; known predicates disclose both true and false values. The same
+nullable predicate `value`, `reason`, `fact_class` (`nominal_identity` or
+`generated_items`) and the explicit fact-class `basis`. Records are deduplicated
+per anchor **and fact class**: the same custom derive may be nominally admitted
+and skipped for a method fact, and both evaluations remain visible.
+`written_identity_under_declared_configuration` describes nominal admission;
+`inert_under_declared_configuration` remains the generated-item context admission
+reason. Other reasons identify undeclared atoms, unsupported predicates,
+malformed/non-built-in derives, parser recovery or module macros; known predicates
+disclose both true and false values. The same
 coverage accompanies proofs and zero-proof results. Omissions explicitly state
 that checks after a veto and inactive payloads were not evaluated; this is not an
 exhaustive attribute inventory. Zero proved occurrences never means verified code.
@@ -577,7 +618,7 @@ The placeholder must be replaced by the full object and the replacement by the e
 
 Defaults use complete CST paths and use leaves, not equal-looking text in comments, strings or token trees. Explicit aliases survive; grouped imports use an unchanged prefix, a shared prefix edit, or comment-free leaf extraction with unrelated leaves/trivia preserved. Local and inline-module import extraction keeps the original binding scope. Only necessary imports are synthesized; equivalent destination bindings are reused and shared needs are deduplicated. Items moving together do not create artificial cross-module imports or visibility changes.
 
-Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Ordinary tuple/slice/constructor/struct binding positions are compared against the queried spelling: disjoint written names do not create uncertainty for every spelling in that scope. Explicit `mut`/`ref` binders and ordinary struct shorthand can prove independent locals; a matching plain identifier in a composite or refutable pattern still requires binding-versus-constant evidence. For/match/if-let/while-let patterns are checked only where their bindings are in scope, not in initializers, other arms or an if-let's else branch. Unsupported patterns, let chains, relevant local imports, macros and recovered/conditional lexical contexts remain anchored uncertainty. No macro expansion or semantic resolution is performed. Prelude assumptions are limited to the explicit opt-in type-position bridge described above. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports on the default path.
+Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Ordinary tuple/slice/constructor/struct binding positions are compared against the queried spelling: disjoint written names do not create uncertainty for every spelling in that scope. Explicit `mut`/`ref` binders and ordinary struct shorthand can prove independent locals; a matching plain identifier in a composite or refutable pattern still requires binding-versus-constant evidence. For/match/if-let/while-let patterns are checked only where their bindings are in scope, not in initializers, other arms or an if-let's else branch. Unsupported patterns, let chains, relevant local imports, macros and recovered/conditional lexical contexts remain anchored uncertainty. No macro expansion or semantic resolution is performed. Prelude assumptions are limited to the explicit opt-in type-position and bare value-position Option-constructor bridge described above. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports on the default path.
 
 Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged absolute ancestor restrictions survive. Only a proven insufficient access receives `pub(crate)`. Relative restrictions whose scope changes, private fields/tuple constructors, members, associated/type-directed references, chained re-exports, relevant globs/macros, conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro outside the relevant binding context is not by itself a veto. Consumer-glob candidates are checked against written module routes: file identity plus inline-module anchors, scoped module aliases, grouped use prefixes, and exact default-layout parent declarations. A same-named module in another subtree is not the source module. Proven different modules and enum-variant globs are excluded; a caller-selected file root does not inherit aliases from every unrelated `crate` import. Unknown/recovered routes, competing inclusions, local alias shadows, and possible wildcard/re-export/same-name forwarding remain conservative candidates. This is admitted written-syntax evidence, not Cargo discovery, cfg evaluation, macro expansion, or semantic name resolution. Optional `coverage.glob_exclusions` counts excluded selected-item/glob pairs by reason (`different_written_module`, `enum_variants`, `no_written_route`); it is not a count of files skipped or semantic absence proofs. Test-consumer advice uses the same written-route classifier, including aliases that glob the immediate test parent; it infers no edge from an unknown route.
 
