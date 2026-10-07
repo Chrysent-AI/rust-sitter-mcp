@@ -31,8 +31,10 @@ use std::{
 
 #[path = "semantic_context.rs"]
 mod context;
+#[path = "semantic_identity.rs"]
+mod identity;
 pub use context::ContextEvaluation;
-use context::safe_attr;
+use context::{FactClass, safe_attr};
 use std::cell::RefCell;
 
 const ANALYZER: &str = "ra_ap@0.0.357";
@@ -123,6 +125,7 @@ pub struct Proof {
     pub declaration: Declaration,
     pub final_declaration: Declaration,
     pub classification: String,
+    pub basis: String,
     pub source_access: bool,
     pub final_access: bool,
     pub coverage: ResolutionCoverage,
@@ -141,6 +144,9 @@ pub fn candidate(need: &Need) -> bool {
         }))
 }
 
+// One attribute may be admitted for nominal identity and refused for method facts.
+type ContextKey = (String, usize, usize, &'static str);
+
 struct Inputs {
     db: RootDatabase,
     ids: BTreeMap<String, FileId>,
@@ -148,7 +154,7 @@ struct Inputs {
     texts: BTreeMap<String, String>,
     roots: BTreeMap<FileId, String>,
     configuration: Configuration,
-    context: RefCell<BTreeMap<(String, usize, usize), ContextEvaluation>>,
+    context: RefCell<BTreeMap<ContextKey, ContextEvaluation>>,
 }
 impl Inputs {
     fn new(
@@ -524,6 +530,7 @@ fn evaluate(
             let after = fact(new, &final_anchor)?;
             refusal_class = "semantic_identity_unproved";
             if before.classification != after.classification
+                || before.fact_class != after.fact_class
                 || before.declaration != normalize(&after.declaration, origins, old)?
             {
                 return None;
@@ -551,6 +558,7 @@ fn evaluate(
                 declaration: before.declaration,
                 final_declaration: after.declaration,
                 classification: before.classification.into(),
+                basis: before.fact_class.basis().into(),
                 source_access: true,
                 final_access: true,
                 coverage: coverage.clone(),
@@ -572,9 +580,15 @@ struct Fact {
     original: Option<Receiver>,
     adjusted: Option<Receiver>,
     classification: &'static str,
+    fact_class: FactClass,
 }
 
-fn receiver(inputs: &Inputs, ty: Type<'_>, depth: usize) -> Option<Receiver> {
+fn receiver(
+    inputs: &Inputs,
+    ty: Type<'_>,
+    fact_class: FactClass,
+    depth: usize,
+) -> Option<Receiver> {
     if depth > 16 || ty.contains_unknown() {
         return None;
     }
@@ -608,10 +622,10 @@ fn receiver(inputs: &Inputs, ty: Type<'_>, depth: usize) -> Option<Receiver> {
         });
     }
     let (adt, args) = ty.as_adt_with_args()?;
-    let declaration = adt_declaration(inputs, adt)?;
+    let declaration = adt_declaration(inputs, adt, fact_class)?;
     let arguments = args
         .into_iter()
-        .map(|a| receiver(inputs, a?, depth + 1))
+        .map(|a| receiver(inputs, a?, fact_class, depth + 1))
         .collect::<Option<_>>()?;
     Some(Receiver {
         references,
@@ -620,12 +634,12 @@ fn receiver(inputs: &Inputs, ty: Type<'_>, depth: usize) -> Option<Receiver> {
         arguments,
     })
 }
-fn adt_declaration(inputs: &Inputs, adt: Adt) -> Option<Declaration> {
+fn adt_declaration(inputs: &Inputs, adt: Adt, fact_class: FactClass) -> Option<Declaration> {
     let sema = Semantics::new(&inputs.db);
     match adt {
         Adt::Struct(s) => {
             let source = sema.source(s)?;
-            ordinary_context(inputs, &sema, source.value.syntax())?;
+            scoped_context(inputs, &sema, source.value.syntax(), fact_class)?;
             inputs.declaration(
                 s.module(&inputs.db),
                 source.value.name()?.syntax(),
@@ -634,7 +648,7 @@ fn adt_declaration(inputs: &Inputs, adt: Adt) -> Option<Declaration> {
         }
         Adt::Enum(s) => {
             let source = sema.source(s)?;
-            ordinary_context(inputs, &sema, source.value.syntax())?;
+            scoped_context(inputs, &sema, source.value.syntax(), fact_class)?;
             inputs.declaration(
                 s.module(&inputs.db),
                 source.value.name()?.syntax(),
@@ -645,12 +659,22 @@ fn adt_declaration(inputs: &Inputs, adt: Adt) -> Option<Declaration> {
     }
 }
 
-/// Ignore bodies of unrelated items, but refuse unknown namespace/impl effects in
-/// the visible module chain and at the selected written occurrence/declaration.
+/// Generated-item-dependent facts keep the conservative expansion context gate.
 fn ordinary_context(
     inputs: &Inputs,
     sema: &Semantics<'_, RootDatabase>,
     node: &SyntaxNode,
+) -> Option<Module> {
+    scoped_context(inputs, sema, node, FactClass::GeneratedItems)
+}
+
+/// Ignore unrelated bodies. Nominal path facts use this admission only after
+/// proving stable written bindings; cfg and arbitrary attribute macros still veto.
+fn scoped_context(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    node: &SyntaxNode,
+    fact_class: FactClass,
 ) -> Option<Module> {
     if node
         .ancestors()
@@ -661,7 +685,10 @@ fn ordinary_context(
     let module = sema.scope(node)?.module();
     for ancestor in node.ancestors() {
         if let Some(item) = ast::Item::cast(ancestor) {
-            if item.attrs().any(|a| !safe_attr(inputs, sema, module, &a)) {
+            if item
+                .attrs()
+                .any(|a| !safe_attr(inputs, sema, module, &a, fact_class))
+            {
                 return None;
             }
             if let ast::Item::Fn(f) = item
@@ -691,13 +718,19 @@ fn ordinary_context(
                 .descendants()
                 .filter_map(ast::Module::cast)
                 .find(|m| m.syntax().text_range() == declaration.value.syntax().text_range())?;
-            if module.attrs().any(|a| !safe_attr(inputs, sema, scope, &a)) {
+            if module
+                .attrs()
+                .any(|a| !safe_attr(inputs, sema, scope, &a, fact_class))
+            {
                 return None;
             }
         }
         let file = scope.krate(&inputs.db).root_file(&inputs.db);
         let root = sema.parse_guess_edition(file);
-        if root.attrs().any(|a| !safe_attr(inputs, sema, scope, &a)) {
+        if root
+            .attrs()
+            .any(|a| !safe_attr(inputs, sema, scope, &a, fact_class))
+        {
             return None;
         }
         let source = scope.definition_source(&inputs.db);
@@ -714,7 +747,10 @@ fn ordinary_context(
         let parsed = sema.parse_guess_edition(scope_file);
         let syntax = match source.value {
             ra_ap_hir::ModuleSource::SourceFile(_) => {
-                if parsed.attrs().any(|a| !safe_attr(inputs, sema, scope, &a)) {
+                if parsed
+                    .attrs()
+                    .any(|a| !safe_attr(inputs, sema, scope, &a, fact_class))
+                {
                     return None;
                 }
                 parsed.syntax().clone()
@@ -736,6 +772,7 @@ fn ordinary_context(
                     sema,
                     scope,
                     &child,
+                    fact_class,
                     ("module_macro", "skipped", None, "module_macro_invocation"),
                 );
                 return None;
@@ -744,7 +781,9 @@ fn ordinary_context(
                 // Sibling module conditions do not change this module's namespace.
                 // Conditions on a module we actually traverse are checked above.
                 if !matches!(item, ast::Item::Module(_))
-                    && item.attrs().any(|a| !safe_attr(inputs, sema, scope, &a))
+                    && item
+                        .attrs()
+                        .any(|a| !safe_attr(inputs, sema, scope, &a, fact_class))
                 {
                     return None;
                 }
@@ -774,8 +813,22 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
         if usize::from(attr.syntax().text_range().start()) == anchor.range.start_byte
             && usize::from(attr.syntax().text_range().end()) == anchor.range.end_byte
         {
-            let module = ordinary_context(inputs, &sema, attr.syntax())?;
-            if !safe_attr(inputs, &sema, module, &attr) {
+            let fact_class = if attr
+                .syntax()
+                .ancestors()
+                .find_map(ast::Item::cast)
+                .is_some_and(|item| {
+                    matches!(
+                        item,
+                        ast::Item::Struct(_) | ast::Item::Enum(_) | ast::Item::Union(_)
+                    )
+                }) {
+                FactClass::NominalIdentity
+            } else {
+                FactClass::GeneratedItems
+            };
+            let module = scoped_context(inputs, &sema, attr.syntax(), fact_class)?;
+            if !safe_attr(inputs, &sema, module, &attr, fact_class) {
                 return None;
             }
             return Some(Fact {
@@ -787,6 +840,7 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
                 original: None,
                 adjusted: None,
                 classification: "context_attribute",
+                fact_class,
             });
         }
     }
@@ -819,13 +873,14 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
             source.file_id,
         )?;
         let types = sema.type_of_expr(&call.receiver()?)?;
-        let original = receiver(inputs, types.original.clone(), 0)?;
-        let adjusted = receiver(inputs, types.adjusted(), 0)?;
+        let original = receiver(inputs, types.original.clone(), FactClass::GeneratedItems, 0)?;
+        let adjusted = receiver(inputs, types.adjusted(), FactClass::GeneratedItems, 0)?;
         return Some(Fact {
             declaration,
             original: Some(original),
             adjusted: Some(adjusted),
             classification: "inherent_function",
+            fact_class: FactClass::GeneratedItems,
         });
     }
     for field in syntax.descendants().filter_map(ast::FieldExpr::cast) {
@@ -850,26 +905,99 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
             source.file_id,
         )?;
         let types = sema.type_of_expr(&field.expr()?)?;
-        let original = receiver(inputs, types.original.clone(), 0)?;
-        let adjusted = receiver(inputs, types.adjusted(), 0)?;
+        let original = receiver(inputs, types.original.clone(), FactClass::GeneratedItems, 0)?;
+        let adjusted = receiver(inputs, types.adjusted(), FactClass::GeneratedItems, 0)?;
         return Some(Fact {
             declaration,
             original: Some(original),
             adjusted: Some(adjusted),
             classification: "field",
+            fact_class: FactClass::GeneratedItems,
         });
     }
     let path = exact_path(syntax, &anchor.range)?;
-    let module = ordinary_context(inputs, &sema, path.syntax())?;
     let PathResolution::Def(definition) = sema.resolve_path(&path)? else {
         return None;
     };
+    let fact_class = match definition {
+        ModuleDef::Adt(_) | ModuleDef::EnumVariant(_) => {
+            let mut path_class = FactClass::NominalIdentity;
+            let stable = identity::stable_path(inputs, &sema, &path, 0, &mut path_class).is_some();
+            context::record(
+                inputs,
+                &sema,
+                sema.scope(path.syntax())?.module(),
+                path.syntax(),
+                path_class,
+                (
+                    "binding",
+                    if stable { "admitted" } else { "skipped" },
+                    None,
+                    if stable && path_class == FactClass::GeneratedItems {
+                        "configured_dependency_root_with_conservative_context"
+                    } else if stable {
+                        "stable_written_identity"
+                    } else {
+                        "stable_written_identity_unproved"
+                    },
+                ),
+            );
+            if !stable {
+                // An unexpanded identity cannot establish that a glob or missing
+                // written route survives generated imports. Retain the need;
+                // also disclose any reached conservative attribute veto.
+                let _ = scoped_context(inputs, &sema, path.syntax(), FactClass::GeneratedItems);
+                return None;
+            }
+            path_class
+        }
+        _ => FactClass::GeneratedItems,
+    };
+    let module = scoped_context(inputs, &sema, path.syntax(), fact_class)?;
     if !definition.is_visible_from(&inputs.db, module) {
         return None;
     }
     match definition {
+        ModuleDef::EnumVariant(variant) => {
+            let source = sema.source(variant)?;
+            let declaration_module =
+                scoped_context(inputs, &sema, source.value.syntax(), fact_class)?;
+            // Variants are not ast::Items: audit their own attributes explicitly,
+            // including written siblings that RA may omit under incomplete cfg.
+            let enum_source = sema.source(variant.parent_enum(&inputs.db))?;
+            for written in enum_source.value.variant_list()?.variants() {
+                if written
+                    .syntax()
+                    .descendants()
+                    .filter_map(ast::Attr::cast)
+                    .any(|a| !safe_attr(inputs, &sema, declaration_module, &a, fact_class))
+                {
+                    return None;
+                }
+            }
+            let declaration = inputs.declaration(
+                variant.module(&inputs.db),
+                source.value.name()?.syntax(),
+                source.file_id,
+            )?;
+            // The parent enum is part of the anchored identity, not merely the
+            // terminal spelling. Generic/unknown enum arguments still refuse.
+            let original = receiver(
+                inputs,
+                variant.parent_enum(&inputs.db).ty(&inputs.db),
+                fact_class,
+                0,
+            )?;
+            Some(Fact {
+                declaration,
+                original: Some(original.clone()),
+                adjusted: Some(original),
+                classification: "variant_path",
+                fact_class,
+            })
+        }
         ModuleDef::Adt(adt) => {
-            let declaration = adt_declaration(inputs, adt)?;
+            let declaration = adt_declaration(inputs, adt, fact_class)?;
             // Construction needs field access too, not just access to the type name.
             if path
                 .syntax()
@@ -884,12 +1012,13 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
                     _ => return None,
                 }
             }
-            let original = receiver(inputs, adt.ty(&inputs.db), 0)?;
+            let original = receiver(inputs, adt.ty(&inputs.db), fact_class, 0)?;
             Some(Fact {
                 declaration,
                 original: Some(original.clone()),
                 adjusted: Some(original),
                 classification: "type_or_constructor",
+                fact_class,
             })
         }
         ModuleDef::Function(function) => {
@@ -911,12 +1040,13 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
                 if implementation.trait_(&inputs.db).is_some() {
                     return None;
                 }
-                let original = receiver(inputs, implementation.self_ty(&inputs.db), 0)?;
+                let original = receiver(inputs, implementation.self_ty(&inputs.db), fact_class, 0)?;
                 Some(Fact {
                     declaration,
                     original: Some(original.clone()),
                     adjusted: Some(original),
                     classification: "inherent_function",
+                    fact_class,
                 })
             } else {
                 Some(Fact {
@@ -924,6 +1054,7 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
                     original: None,
                     adjusted: None,
                     classification: "written_function",
+                    fact_class,
                 })
             }
         }

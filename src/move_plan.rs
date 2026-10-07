@@ -1844,6 +1844,10 @@ fn build(
             .iter()
             .filter(|p| p.class == prelude::BindingProofClass::StandardPrelude)
             .count();
+        result.coverage.standard_prelude_constructor = proofs
+            .iter()
+            .filter(|p| p.class == prelude::BindingProofClass::StandardPreludeConstructor)
+            .count();
         result.coverage.standard_builtin_derive = proofs
             .iter()
             .filter(|p| p.class == prelude::BindingProofClass::StandardBuiltinDerive)

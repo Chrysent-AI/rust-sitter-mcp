@@ -17,13 +17,17 @@ use tree_sitter::Node;
 
 // Edition-independent subset of https://doc.rust-lang.org/std/prelude/v1/index.html.
 // This is an explicit caller assumption, not Cargo/build-target discovery.
-const STANDARD_PRELUDE: [(&str, &str); 5] = [
+const STANDARD_PRELUDE: [(&str, &str); 7] = [
     ("Option", "std::option::Option"),
     ("Result", "std::result::Result"),
     ("Box", "std::boxed::Box"),
     ("Vec", "std::vec::Vec"),
     ("String", "std::string::String"),
+    ("Some", "std::option::Option::Some"),
+    ("None", "std::option::Option::None"),
 ];
+const TYPE_COUNT: usize = 5;
+const SHADOW_COUNT: usize = STANDARD_PRELUDE.len() + items::BUILTIN_DERIVES.len();
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -33,6 +37,9 @@ pub struct MoveCoverage {
     /// Number of discharged occurrences, including omitted proof records.
     #[serde(skip_serializing_if = "is_zero")]
     pub standard_prelude: usize,
+    /// Bare Option constructors discharged under the same caller assumption.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub standard_prelude_constructor: usize,
     /// Number of unshadowed compiler-built-in derive names discharged.
     #[serde(skip_serializing_if = "is_zero")]
     pub standard_builtin_derive: usize,
@@ -63,8 +70,10 @@ impl std::ops::DerefMut for MoveCoverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)] // Variant names mirror the published wire classes.
 pub enum BindingProofClass {
     StandardPrelude,
+    StandardPreludeConstructor,
     StandardBuiltinDerive,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -81,7 +90,7 @@ pub struct BindingProof {
 #[derive(Clone, Default)]
 struct Shadows {
     context_unproved: bool,
-    names: [bool; 14],
+    names: [bool; SHADOW_COUNT],
     conditional_derives: [bool; 9],
     derives: BTreeMap<(String, usize, usize), usize>,
     refusal_basis: Vec<RefusalBasis>,
@@ -226,7 +235,7 @@ impl Shadows {
                     end_byte: *end,
                 })
         });
-        self.names = [false; 14];
+        self.names = [false; SHADOW_COUNT];
         self.conditional_derives = [false; 9];
         self.context_unproved = self
             .refusal_basis
@@ -502,6 +511,32 @@ fn type_reference(node: Node<'_>) -> bool {
     true
 }
 
+/// Bare value-position constructors only; qualified paths and patterns remain
+/// written/semantic dependencies, not assumed prelude identities.
+fn constructor_reference(node: Node<'_>) -> bool {
+    if node.kind() != "identifier" || !items::reference_role(node) {
+        return false;
+    }
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        if parent.kind().ends_with("_pattern")
+            || parent.child_by_field_name("pattern") == Some(child)
+            || matches!(
+                parent.kind(),
+                "scoped_identifier"
+                    | "scoped_type_identifier"
+                    | "generic_function"
+                    | "use_declaration"
+                    | "macro_invocation"
+            )
+        {
+            return false;
+        }
+        child = parent;
+    }
+    true
+}
+
 /// Each entry holds only its own module's evidence. A need sees its ancestors,
 /// never a sibling or a descendant (including conditional test modules).
 #[derive(Clone, Default)]
@@ -546,7 +581,7 @@ impl ScopedShadows {
                 let mut unbounded = found.chain_context(false);
                 // Textual macro definitions inherit downward, never upward out
                 // of a child module like an unbounded expansion veto.
-                unbounded.names = [false; 14];
+                unbounded.names = [false; SHADOW_COUNT];
                 unbounded
                     .refusal_basis
                     .retain(|b| !matches!(b.class.as_str(), "shadow" | "macro_shadow"));
@@ -737,10 +772,20 @@ pub(super) fn discharge(
             .tree
             .root_node()
             .named_descendant_for_byte_range(need.range.start_byte, need.range.end_byte);
-        let candidate = node.filter(|n| type_reference(*n)).and_then(|_| {
-            STANDARD_PRELUDE.iter().position(|(name, _)| {
-                *name == source[need.range.start_byte..need.range.end_byte].trim_start_matches("r#")
-            })
+        let candidate = node.and_then(|node| {
+            STANDARD_PRELUDE
+                .iter()
+                .enumerate()
+                .position(|(index, (name, _))| {
+                    *name
+                        == source[need.range.start_byte..need.range.end_byte]
+                            .trim_start_matches("r#")
+                        && if index < TYPE_COUNT {
+                            type_reference(node)
+                        } else {
+                            constructor_reference(node)
+                        }
+                })
         });
         let selection = selected.iter().find(|(path, item, _)| {
             path == &need.path
@@ -775,36 +820,35 @@ pub(super) fn discharge(
         if let Some(index) = candidate
             && let Some(node) = node
         {
-            let assessment = items::lexical_assessment(
-                path,
-                node,
-                source,
-                STANDARD_PRELUDE[index].0,
-                controls,
-                false,
-            )?;
-            if assessment.binding != items::LexicalBinding::Absent {
-                if let Some(witness) = assessment.uncertainty {
-                    let anchor = witness.pattern.as_ref().unwrap_or(&witness.scope);
-                    visible.context_unproved = true;
-                    visible.record(
-                        RefusalBasis::new(
-                            if witness.witness_relation.is_some() {
-                                "chain_macro_statement"
-                            } else {
-                                "lexical_uncertainty"
-                            },
+            // Constructors require both their own spelling and the assumed
+            // Option type to be unshadowed in exactly the same lexical context.
+            for audited in std::iter::once(index).chain((index >= TYPE_COUNT).then_some(0)) {
+                let name = STANDARD_PRELUDE[audited].0;
+                let assessment =
+                    items::lexical_assessment(path, node, source, name, controls, false)?;
+                if assessment.binding != items::LexicalBinding::Absent {
+                    if let Some(witness) = assessment.uncertainty {
+                        let anchor = witness.pattern.as_ref().unwrap_or(&witness.scope);
+                        visible.context_unproved = true;
+                        visible.record(
+                            RefusalBasis::new(
+                                if witness.witness_relation.is_some() {
+                                    "chain_macro_statement"
+                                } else {
+                                    "lexical_uncertainty"
+                                },
+                                path,
+                                Some(anchor.range.clone()),
+                            )
+                            .named(name),
+                        );
+                    } else {
+                        visible.name(
+                            name,
                             path,
-                            Some(anchor.range.clone()),
-                        )
-                        .named(STANDARD_PRELUDE[index].0),
-                    );
-                } else {
-                    visible.name(
-                        STANDARD_PRELUDE[index].0,
-                        path,
-                        assessment.definite_binding.map(|binding| binding.range),
-                    );
+                            assessment.definite_binding.map(|binding| binding.range),
+                        );
+                    }
                 }
             }
         }
@@ -879,11 +923,16 @@ pub(super) fn discharge(
         if need.reason == DecisionReason::ExternalOrMissingBinding
             && let Some(index) = candidate
             && !visible.refuses(index)
+            && (index < TYPE_COUNT || !visible.refuses(0))
             && !derive_identity_unproved
         {
             record_proof(
                 BindingProof {
-                    class: BindingProofClass::StandardPrelude,
+                    class: if index < TYPE_COUNT {
+                        BindingProofClass::StandardPrelude
+                    } else {
+                        BindingProofClass::StandardPreludeConstructor
+                    },
                     anchor: SourceAnchor {
                         path: need.path,
                         expected_text: source[need.range.start_byte..need.range.end_byte].into(),
@@ -892,7 +941,11 @@ pub(super) fn discharge(
                     item_ids: need.item_ids,
                     destination_path: destination.clone(),
                     standard_path: STANDARD_PRELUDE[index].1.into(),
-                    basis: "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; written lexical bindings checked; direct block macro invocations, macro expression-statement wrappers and outer attribute siblings in the reference's block and ancestor blocks up to the nearest module audited regardless of source order, only strict context-independent attributes exempted; signatures outside those blocks ignore body expansion sites; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed".into(),
+                    basis: if index >= TYPE_COUNT {
+                        "caller enabled assume_standard_prelude; bare value-position Option constructor; constructor and Option type spellings unshadowed under the same original/final module, batch, lexical, derive and prelude-control audits as standard-prelude types; constructor identity assumed with the type; derive-generated imports are not modeled; not macro hygiene proved; no import synthesized; semantic checking not performed".into()
+                    } else {
+                        "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; written lexical bindings checked; direct block macro invocations, macro expression-statement wrappers and outer attribute siblings in the reference's block and ancestor blocks up to the nearest module audited regardless of source order, only strict context-independent attributes exempted; signatures outside those blocks ignore body expansion sites; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed".into()
+                    },
                 },
                 &mut proofs,
                 &mut proof_bytes,
@@ -906,6 +959,9 @@ pub(super) fn discharge(
             ) && let Some(index) = candidate
             {
                 need.refusal_basis.extend(visible.basis_for(index, false));
+                if index >= TYPE_COUNT {
+                    need.refusal_basis.extend(visible.basis_for(0, false));
+                }
             }
             if let Some(attribute) = need.attribute_range.as_ref().and_then(|range| {
                 parsed[path]
