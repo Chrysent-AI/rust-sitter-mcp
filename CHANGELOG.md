@@ -21,6 +21,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Refuse provider-uncertain attributes in declarative declaration-identity proofs,
+  including `serde(transparent)` beside familiar derive spellings; disclose the
+  attribute and written owner anchors instead of treating unproved helper
+  registration as inert metadata. Keep helper-free built-in-derive wrappers
+  admitted, without executing procedural macros or claiming compilation.
 * Disclose nested declarative expansion refusals at the outer written invocation
   and definition with `declarative_recursion_limit`, without admitting multi-step
   declaration identities.

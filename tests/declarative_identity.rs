@@ -9,7 +9,7 @@ use rust_sitter_mcp::{engine::Engine, move_plan::MoveRequest};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
-const WRAPPER: &str = "macro_rules! uuid_id { ($name:ident) => { #[derive(Clone, Copy, Debug, Deserialize, Serialize)] #[serde(transparent)] pub struct $name(Opaque); impl $name { pub fn new() -> Self { loop {} } pub fn read(&self) -> u32 { 1 } } }; }";
+const WRAPPER: &str = "macro_rules! uuid_id { ($name:ident) => { #[derive(Clone, Copy, Debug)] pub struct $name(Opaque); impl $name { pub fn new() -> Self { loop {} } pub fn read(&self) -> u32 { 1 } } }; }";
 const SELECTED: &str = "fn selected(item: crate::route::ItemId, dispatch: crate::route::DispatchId) -> crate::route::ItemId { item }";
 fn fixture(definition: &str, text: &str) -> Fixture {
     let repo = Fixture::generate();
@@ -109,6 +109,31 @@ fn wrapper_signature_identity_has_both_written_pairs_without_generated_field_inf
 }
 
 #[test]
+fn nine_helper_free_wrapper_occurrences_still_have_both_overlay_identities() {
+    let params = (0..9)
+        .map(|i| format!("p{i}: crate::route::ItemId"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = format!("fn selected({params}) {{}}");
+    let repo = fixture(WRAPPER, &text);
+    let value = run(&repo, request(&repo, &text));
+    assert_eq!(value["plan"]["applicable"], true, "{value}");
+    let proofs: Vec<_> = value["plan"]["binding_proofs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["class"] == "declarative_macro_identity")
+        .collect();
+    assert_eq!(proofs.len(), 9, "{value}");
+    assert!(
+        proofs
+            .iter()
+            .all(|p| p["declaration"]["declarative_macro"].is_object()
+                && p["final_declaration"]["declarative_macro"].is_object())
+    );
+}
+
+#[test]
 fn explicit_imports_preserve_bare_signature_identities_in_the_final_sibling() {
     let text = "fn selected(item: ItemId, dispatch: DispatchId) -> ItemId { item }";
     let repo = fixture(WRAPPER, text);
@@ -204,7 +229,7 @@ fn conditional_complex_recursive_and_namespace_producing_expansions_disclose_ref
         ),
         (
             "macro_rules! uuid_id { ($name:ident) => { #[custom] pub struct $name; }; }".into(),
-            "declarative_output_unproved",
+            "declarative_attribute_provider_uncertain",
         ),
         (huge, "declarative_token_limit"),
         (nested, "declarative_nesting_limit"),
@@ -334,6 +359,123 @@ fn generated_members_constructors_and_variant_facts_remain_blocked() {
                 .flatten()
                 .all(|p| p["classification"] == "declaration_identity"),
             "{value}"
+        );
+    }
+}
+
+#[test]
+fn provider_uncertain_attributes_refuse_with_written_definition_and_named_disclosure() {
+    for attrs in [
+        "#[derive(Serialize)] #[serde(transparent)]",
+        "#[serde(transparent)] #[derive(Serialize)]",
+        "#[derive(Clone)] #[serde(transparent)]",
+        "#[derive(Serialize, Deserialize)] #[serde(transparent)]",
+        "#[derive(Serialize)] #[provider::serde(transparent)]",
+        "#[serde = \"transparent\"]",
+        "#[helper]",
+        "#[derive(Serialize)]",
+        "#[derive(provider::Clone)]",
+    ] {
+        let definition = format!(
+            "macro_rules! uuid_id {{ ($name:ident) => {{ {attrs} pub struct $name(Opaque); }}; }}"
+        );
+        let repo = fixture(&definition, SELECTED);
+        let value = run(&repo, request(&repo, SELECTED));
+        blocked(&value);
+        assert!(
+            value["plan"]["binding_proofs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|p| p["class"] != "declarative_macro_identity"),
+            "{value}"
+        );
+        let evaluations = value["plan"]["resolution_coverage"]["context_evaluations"]
+            .as_array()
+            .unwrap();
+        let anchor = move_artifacts::anchor(&repo, "cases/layout/model.rs", &definition);
+        let name = if attrs.contains("serde") {
+            "serde"
+        } else if attrs.contains("helper") {
+            "helper"
+        } else {
+            "derive"
+        };
+        assert!(
+            evaluations.iter().any(|e| e["revision"] == "original"
+                && e["kind"] == "declarative_macro_definition"
+                && e["status"] == "skipped"
+                && e["reason"] == "declarative_attribute_provider_uncertain"
+                && e["anchor"] == anchor
+                && e["basis"]
+                    .as_str()
+                    .unwrap()
+                    .contains("provider-uncertain attribute")
+                && e["basis"].as_str().unwrap().contains(name)),
+            "{value}"
+        );
+        assert!(
+            evaluations.iter().any(|e| e["kind"] == "declarative_macro"
+                && e["reason"] == "declarative_attribute_provider_uncertain"),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn helper_attributes_on_written_owners_and_shadowed_builtin_derives_refuse() {
+    let text = "fn selected(value: crate::route::ItemId) -> crate::route::ItemId { value }";
+    for owner in [
+        "definition",
+        "invocation",
+        "module",
+        "crate",
+        "shadowed_derive",
+    ] {
+        let repo = fixture(WRAPPER, text);
+        match owner {
+            "definition" => repo.write("cases/layout/model.rs", &format!("#[helper] {WRAPPER} uuid_id!(ItemId); uuid_id!(DispatchId);")),
+            "invocation" => repo.write("cases/layout/model.rs", &format!("{WRAPPER} #[helper] uuid_id!(ItemId); uuid_id!(DispatchId);")),
+            "module" => repo.write("cases/layout/lib.rs", "mod source; #[helper] mod model; pub mod route;"),
+            "crate" => repo.write("cases/layout/lib.rs", "#![helper] mod source; mod model; pub mod route;"),
+            "shadowed_derive" => repo.write("cases/layout/model.rs", &format!("macro_rules! Clone {{ () => {{}}; }} {WRAPPER} uuid_id!(ItemId); uuid_id!(DispatchId);")),
+            _ => unreachable!(),
+        }
+        let value = run(&repo, request(&repo, text));
+        blocked(&value);
+        assert!(
+            value["plan"]["binding_proofs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|p| p["class"] != "declarative_macro_identity"),
+            "{owner}: {value}"
+        );
+        if owner == "crate" {
+            // The ordinary chain gate refuses before semantic admission is reached.
+            assert!(
+                value["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["anchors"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|a| a["expected_text"] == "#![helper]")),
+                "{value}"
+            );
+            continue;
+        }
+        assert!(
+            value["plan"]["resolution_coverage"]["context_evaluations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["status"] == "skipped"
+                    && (e["reason"] == "declarative_attribute_provider_uncertain"
+                        || e["reason"] == "unsupported_attribute")),
+            "{owner}: {value}"
         );
     }
 }
