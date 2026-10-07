@@ -31,6 +31,8 @@ use std::{
 
 #[path = "semantic_context.rs"]
 mod context;
+#[path = "semantic_identity.rs"]
+mod identity;
 pub use context::ContextEvaluation;
 use context::{FactClass, safe_attr};
 use std::cell::RefCell;
@@ -666,8 +668,8 @@ fn ordinary_context(
     scoped_context(inputs, sema, node, FactClass::GeneratedItems)
 }
 
-/// Ignore unrelated bodies. For nominal facts, additive derives cannot replace
-/// the written identity; cfg and arbitrary attribute macros still veto.
+/// Ignore unrelated bodies. Nominal path facts use this admission only after
+/// proving stable written bindings; cfg and arbitrary attribute macros still veto.
 fn scoped_context(
     inputs: &Inputs,
     sema: &Semantics<'_, RootDatabase>,
@@ -918,7 +920,37 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
         return None;
     };
     let fact_class = match definition {
-        ModuleDef::Adt(_) | ModuleDef::EnumVariant(_) => FactClass::NominalIdentity,
+        ModuleDef::Adt(_) | ModuleDef::EnumVariant(_) => {
+            let mut path_class = FactClass::NominalIdentity;
+            let stable = identity::stable_path(inputs, &sema, &path, 0, &mut path_class).is_some();
+            context::record(
+                inputs,
+                &sema,
+                sema.scope(path.syntax())?.module(),
+                path.syntax(),
+                path_class,
+                (
+                    "binding",
+                    if stable { "admitted" } else { "skipped" },
+                    None,
+                    if stable && path_class == FactClass::GeneratedItems {
+                        "configured_dependency_root_with_conservative_context"
+                    } else if stable {
+                        "stable_written_identity"
+                    } else {
+                        "stable_written_identity_unproved"
+                    },
+                ),
+            );
+            if !stable {
+                // An unexpanded identity cannot establish that a glob or missing
+                // written route survives generated imports. Retain the need;
+                // also disclose any reached conservative attribute veto.
+                let _ = scoped_context(inputs, &sema, path.syntax(), FactClass::GeneratedItems);
+                return None;
+            }
+            path_class
+        }
         _ => FactClass::GeneratedItems,
     };
     let module = scoped_context(inputs, &sema, path.syntax(), fact_class)?;

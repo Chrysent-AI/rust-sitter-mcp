@@ -226,9 +226,10 @@ same anchor/item/destination/path/basis shape, and
 `coverage.standard_prelude_constructor` counts occurrences separately from type
 and derive proofs. Both the constructor spelling and `Option` must be unshadowed
 under the original/final module, batch, lexical, derive and prelude-control audits.
-The basis says **"constructor identity assumed with the type; not macro hygiene
-proved"**. Qualified paths (`Option::Some`), patterns, other constructors and
-associated calls do not qualify. Empty proof/count fields are omitted; counts
+The basis says **"constructor identity assumed with the type; derive-generated
+imports are not modeled; not macro hygiene proved"**. This is a caller assumption,
+not an RA resolution claim about imports emitted by custom derives. Qualified
+paths (`Option::Some`), patterns, other constructors and associated calls do not qualify. Empty proof/count fields are omitted; counts
 survive response fitting with the same omission/withholding rules as type proofs.
 
 The source **and** destination module identity chains must be complete. Competing
@@ -371,15 +372,25 @@ selected occurrence resolves. No new false-atom request field is introduced.
 
 The derive guard is scoped by the fact being proved:
 
-- **Nominal identity** of written types/enum variants (and their required-binding
-  attribute context) admits well-formed derives, including qualified and unknown
-  custom names on the target or a sibling. A derive receives the annotated item
-  and appends additional items; it cannot replace the written declaration:
+- **Nominal identity** of written types/enum variants admits well-formed custom
+  derives only when the path's written bindings are stable against additive
+  output: a locally written declaration or explicit named import, with a written
+  non-glob route through its module prefixes and any re-exports. Aliases and
+  grouped use leaves qualify only when their `cfg`/`cfg_attr` leaves the binding
+  active; known-OFF imports are harmless context, not binding evidence. Variant
+  segments resolve inside the already-named enum. Both original and final
+  overlays must establish this rule. A derive appends items without replacing
+  its annotated declaration:
   https://doc.rust-lang.org/reference/procedural-macros.html#macro.proc.derive.output
-  This is **"nominal identity via written declaration; derive emits additional
-  items only; generated-item facts retain their veto"**, not a claim that custom
-  expansion is inert or that the crate compiles. Duplicate generated declarations
-  are compile errors, not alternate identities in a compiling crate.
+  But a generated explicit import **can override a glob-resolved name without a
+  compile error**. Glob-dependent or unestablished written routes therefore
+  withhold nominal path proofs, even if unexpanded RA identities agree. The basis
+  says **"nominal identity via stable written declaration or explicit import
+  route"** and discloses the generated-import limit. This is not an inert-expansion
+  claim or a compilation check. Direct required-binding attribute context remains
+  independently nominal; its admission does not prove a dependent path's stability.
+  Configured dependency roots from the extern prelude retain the conservative
+  `generated_items` context gate, not custom-derive admission.
 - **Generated-item-dependent facts**, including method/field receiver inference
   and function resolution, keep the existing gate: bare derives containing only
   `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `PartialEq`, `Ord`, `PartialOrd` and
@@ -427,9 +438,11 @@ A required-binding attribute veto can separately produce a `ra_resolved` record
 with `classification:"context_attribute"`, an attribute declaration anchor and
 null receivers: this proves the required attribute context for the disclosed
 fact class at both revisions, **not** resolution of a dependent pattern/body or
-generated implementation. For nominal facts, admission is additive-derive
-identity evidence rather than a claim that generated output is inert. Written access checks and required visibility/module
-repairs still run before this context-only veto can discharge.
+generated implementation. For nominal path facts, admission requires stable
+written bindings rather than an assumption that additive output preserves glob
+resolution. Attribute-only evidence concerns the direct written declaration.
+Written access checks and required visibility/module repairs still run before
+this context-only veto can discharge.
 `coverage.ra_resolved` counts these occurrences separately from prelude proofs,
 including records omitted during output fitting. Type identities/declarations
 are compared across revisions through the assembler's exact byte-origin map.
@@ -444,13 +457,20 @@ compilation/equivalence not performed"**. Its configuration, analyzer version,
 source `snapshot_id`, `semantic_input_digest`, `final_overlay_digest` and explicit
 omissions scope every proof. `context_evaluations[]` adds deduplicated anchored
 records for reached context checks: `revision` (`original`/`final`), `crate_name`,
-`anchor` (exact path/range/text), `kind` (`attribute`, `cfg_predicate` or
-`module_macro`), `status` (`admitted`, `evaluated`, `inactive` or `skipped`),
+`anchor` (exact path/range/text), `kind` (`attribute`, `cfg_predicate`,
+`module_macro` or `binding`), `status` (`admitted`, `evaluated`, `inactive` or `skipped`),
 nullable predicate `value`, `reason`, `fact_class` (`nominal_identity` or
 `generated_items`) and the explicit fact-class `basis`. Records are deduplicated
 per anchor **and fact class**: the same custom derive may be nominally admitted
 and skipped for a method fact, and both evaluations remain visible.
-`written_identity_under_declared_configuration` describes nominal admission;
+`binding` checks disclose `stable_written_identity` or
+`stable_written_identity_unproved` at the exact original/final path; the latter
+retains the semantic source/final-fact refusal and may also disclose a reached
+non-builtin-derive veto. An inactive candidate import/declaration additionally
+records `inactive_written_binding` on its attribute.
+`configured_dependency_root_with_conservative_context` identifies a configured
+external root audited without custom-derive admission.
+`written_identity_under_declared_configuration` describes nominal attribute admission;
 `inert_under_declared_configuration` remains the generated-item context admission
 reason. Other reasons identify undeclared atoms, unsupported predicates,
 malformed/non-built-in derives, parser recovery or module macros; known predicates

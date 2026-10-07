@@ -133,7 +133,7 @@ fn unknown_cfg_custom_or_malformed_derives_and_module_macros_keep_vetoes() {
                         && p["basis"]
                             .as_str()
                             .unwrap()
-                            .contains("nominal identity via written declaration")
+                            .contains("nominal identity via stable written declaration or explicit import route")
                 }),
             "{value}"
         );

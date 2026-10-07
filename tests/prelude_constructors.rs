@@ -59,7 +59,7 @@ fn bare_value_constructors_are_explicit_unshadowed_assumptions_not_semantic_proo
             proof["basis"]
                 .as_str()
                 .unwrap()
-                .contains("constructor identity assumed with the type; not macro hygiene proved")
+                .contains("constructor identity assumed with the type; derive-generated imports are not modeled; not macro hygiene proved")
         );
     }
     let copy = move_artifacts::apply(&repo, &value);
