@@ -7,6 +7,33 @@ use ra_ap_syntax::{AstNode, AstToken, SyntaxKind, SyntaxNode, ast};
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 
+/// Derives cannot replace declarations or explicit imports in a compiling crate,
+/// but generated imports can override globs. Path facts must establish stable
+/// written bindings before using the nominal admission.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FactClass {
+    NominalIdentity,
+    GeneratedItems,
+}
+impl FactClass {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::NominalIdentity => "nominal_identity",
+            Self::GeneratedItems => "generated_items",
+        }
+    }
+    pub(super) fn basis(self) -> &'static str {
+        match self {
+            Self::NominalIdentity => {
+                "nominal identity via stable written declaration or explicit import route; derive-generated imports can override globs, so unproved binding stability retains the non-builtin derive veto; generated-item facts retain their veto; no expansion, compilation or equivalence checking"
+            }
+            Self::GeneratedItems => {
+                "written resolution with generated-item context audited; unknown/non-builtin derives retain their veto; no expansion, compilation or equivalence checking"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ContextEvaluation {
@@ -14,6 +41,8 @@ pub struct ContextEvaluation {
     pub crate_name: String,
     pub anchor: SourceAnchor,
     pub kind: String,
+    pub fact_class: String,
+    pub basis: String,
     pub status: String,
     pub value: Option<bool>,
     pub reason: String,
@@ -24,6 +53,7 @@ pub(super) fn record(
     sema: &Semantics<'_, RootDatabase>,
     module: Module,
     node: &SyntaxNode,
+    fact_class: FactClass,
     outcome: (&str, &str, Option<bool>, &str),
 ) {
     let Some(declaration) = inputs.declaration(module, node, sema.hir_file_for(node)) else {
@@ -35,12 +65,15 @@ pub(super) fn record(
             anchor.path.clone(),
             anchor.range.start_byte,
             anchor.range.end_byte,
+            fact_class.name(),
         ),
         ContextEvaluation {
             revision: String::new(),
             crate_name: declaration.crate_origin,
             anchor,
             kind: outcome.0.into(),
+            fact_class: fact_class.name().into(),
+            basis: fact_class.basis().into(),
             status: outcome.1.into(),
             value: outcome.2,
             reason: outcome.3.into(),
@@ -53,6 +86,30 @@ pub(super) fn safe_attr(
     sema: &Semantics<'_, RootDatabase>,
     module: Module,
     attr: &ast::Attr,
+    fact_class: FactClass,
+) -> bool {
+    check_attr(inputs, sema, module, attr, fact_class, false)
+}
+
+/// An explicit import is stable evidence only when its cfg leaves it active;
+/// a known-OFF sibling can be harmless context without supplying a binding.
+pub(super) fn active_binding_attr(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    attr: &ast::Attr,
+    fact_class: FactClass,
+) -> bool {
+    check_attr(inputs, sema, module, attr, fact_class, true)
+}
+
+fn check_attr(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    attr: &ast::Attr,
+    fact_class: FactClass,
+    require_active: bool,
 ) -> bool {
     let root = module.krate(&inputs.db).root_file(&inputs.db);
     let Some(config) = inputs
@@ -83,7 +140,15 @@ pub(super) fn safe_attr(
     let outcome = if malformed {
         Err("unparseable_attribute")
     } else if let Some(meta) = attr.meta() {
-        safe_meta(inputs, sema, module, config, &meta, 0)
+        safe_meta(
+            inputs,
+            sema,
+            module,
+            config,
+            &meta,
+            (fact_class, require_active),
+            0,
+        )
     } else {
         Err("unparseable_attribute")
     };
@@ -92,6 +157,7 @@ pub(super) fn safe_attr(
         sema,
         module,
         attr.syntax(),
+        fact_class,
         (
             "attribute",
             if outcome.is_ok() {
@@ -100,9 +166,10 @@ pub(super) fn safe_attr(
                 "skipped"
             },
             None,
-            outcome
-                .err()
-                .unwrap_or("inert_under_declared_configuration"),
+            outcome.err().unwrap_or(match fact_class {
+                FactClass::NominalIdentity => "written_identity_under_declared_configuration",
+                FactClass::GeneratedItems => "inert_under_declared_configuration",
+            }),
         ),
     );
     outcome.is_ok()
@@ -114,22 +181,29 @@ fn safe_meta(
     module: Module,
     config: &CrateInput,
     meta: &ast::Meta,
+    admission: (FactClass, bool),
     depth: usize,
 ) -> Result<(), &'static str> {
+    let (fact_class, require_active) = admission;
     if depth > 32 {
         return Err("attribute_depth_limit");
     }
     match meta {
         ast::Meta::CfgMeta(cfg) => {
-            predicate(
+            let enabled = predicate(
                 inputs,
                 sema,
                 module,
                 config,
                 &cfg.cfg_predicate().ok_or("unparseable_cfg")?,
+                fact_class,
                 0,
             )?;
-            Ok(())
+            if require_active && !enabled {
+                Err("inactive_written_binding")
+            } else {
+                Ok(())
+            }
         }
         ast::Meta::CfgAttrMeta(cfg) => {
             let enabled = predicate(
@@ -138,6 +212,7 @@ fn safe_meta(
                 module,
                 config,
                 &cfg.cfg_predicate().ok_or("unparseable_cfg")?,
+                fact_class,
                 0,
             )?;
             let metas: Vec<_> = cfg.metas().collect();
@@ -146,12 +221,14 @@ fn safe_meta(
             }
             for nested in metas {
                 if enabled {
-                    let result = safe_meta(inputs, sema, module, config, &nested, depth + 1);
+                    let result =
+                        safe_meta(inputs, sema, module, config, &nested, admission, depth + 1);
                     record(
                         inputs,
                         sema,
                         module,
                         nested.syntax(),
+                        fact_class,
                         (
                             "attribute",
                             if result.is_ok() {
@@ -160,7 +237,12 @@ fn safe_meta(
                                 "skipped"
                             },
                             None,
-                            result.err().unwrap_or("inert_under_declared_configuration"),
+                            result.err().unwrap_or(match fact_class {
+                                FactClass::NominalIdentity => {
+                                    "written_identity_under_declared_configuration"
+                                }
+                                FactClass::GeneratedItems => "inert_under_declared_configuration",
+                            }),
                         ),
                     );
                     result?;
@@ -170,6 +252,7 @@ fn safe_meta(
                         sema,
                         module,
                         nested.syntax(),
+                        fact_class,
                         ("attribute", "inactive", None, "cfg_attr_condition_false"),
                     );
                 }
@@ -188,6 +271,25 @@ fn safe_meta(
                 || tokens.last().map(|t| t.text()) != Some(")")
             {
                 return Err("unparseable_derive");
+            }
+            if matches!(fact_class, FactClass::NominalIdentity)
+                && meta
+                    .syntax()
+                    .ancestors()
+                    .find_map(ast::Item::cast)
+                    .is_some_and(|item| {
+                        matches!(
+                            item,
+                            ast::Item::Struct(_) | ast::Item::Enum(_) | ast::Item::Union(_)
+                        )
+                    })
+            {
+                // https://doc.rust-lang.org/reference/procedural-macros.html#macro.proc.derive.output
+                // A custom derive's output is additive, including on this item.
+                // Direct declaration identity is stable; path facts reach this
+                // class only after checking written non-glob binding routes.
+                // This never admits generated impls or import-dependent guesses.
+                return nominal_derive_paths(&tokens[1..tokens.len() - 1]);
             }
             let mut name = true;
             let mut count = 0;
@@ -251,12 +353,64 @@ fn safe_meta(
     }
 }
 
+/// Validate the written derive path list without resolving or executing macros.
+fn nominal_derive_paths(tokens: &[ra_ap_syntax::SyntaxToken]) -> Result<(), &'static str> {
+    // Token trees retain separate punctuation tokens in the pinned RA parser.
+    // A path separator must be a joint pair, not two whitespace-separated colons.
+    let separator = |at: usize| match (tokens.get(at), tokens.get(at + 1)) {
+        (Some(a), _) if a.text() == "::" => 1,
+        (Some(a), Some(b))
+            if a.text() == ":"
+                && b.text() == ":"
+                && a.text_range().end() == b.text_range().start() =>
+        {
+            2
+        }
+        _ => 0,
+    };
+    let mut at = 0;
+    while at < tokens.len() {
+        at += separator(at);
+        loop {
+            let token = tokens.get(at).ok_or("unparseable_derive")?;
+            if !matches!(
+                token.kind(),
+                SyntaxKind::IDENT
+                    | SyntaxKind::CRATE_KW
+                    | SyntaxKind::SELF_KW
+                    | SyntaxKind::SUPER_KW
+            ) {
+                return Err("unparseable_derive");
+            }
+            at += 1;
+            let width = separator(at);
+            if width != 0 {
+                at += width;
+            } else {
+                break;
+            }
+        }
+        if at == tokens.len() {
+            return Ok(());
+        }
+        if tokens[at].text() != "," {
+            return Err("unparseable_derive");
+        }
+        at += 1;
+        if at == tokens.len() {
+            return Ok(());
+        }
+    }
+    Err("unparseable_derive")
+}
+
 fn predicate(
     inputs: &Inputs,
     sema: &Semantics<'_, RootDatabase>,
     module: Module,
     config: &CrateInput,
     pred: &ast::CfgPredicate,
+    fact_class: FactClass,
     depth: usize,
 ) -> Result<bool, &'static str> {
     let outcome = (|| {
@@ -301,7 +455,7 @@ fn predicate(
                 // Deliberately evaluate every operand: short-circuiting cannot hide unknown atoms.
                 let values: Vec<_> = composite
                     .cfg_predicates()
-                    .map(|p| predicate(inputs, sema, module, config, &p, depth + 1))
+                    .map(|p| predicate(inputs, sema, module, config, &p, fact_class, depth + 1))
                     .collect();
                 let values = values.into_iter().collect::<Result<Vec<_>, _>>()?;
                 match keyword.text() {
@@ -318,6 +472,7 @@ fn predicate(
         sema,
         module,
         pred.syntax(),
+        fact_class,
         (
             "cfg_predicate",
             if outcome.is_ok() {

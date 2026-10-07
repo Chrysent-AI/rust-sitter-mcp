@@ -121,8 +121,20 @@ fn unknown_cfg_custom_or_malformed_derives_and_module_macros_keep_vetoes() {
         let repo = fixture(attributes);
         let value = run(&repo, request(&repo, SELECTED));
         assert_eq!(value["plan"]["applicable"], false, "{attributes}: {value}");
+        // A nominal attribute proof is independent of method resolution: a
+        // custom derive cannot rewrite Value, but its generated impls are unknown.
         assert!(
-            value["coverage"]["ra_resolved"].is_null() || value["coverage"]["ra_resolved"] == 0,
+            value["plan"]["binding_proofs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|p| {
+                    p["classification"] == "context_attribute"
+                        && p["basis"]
+                            .as_str()
+                            .unwrap()
+                            .contains("nominal identity via stable written declaration or explicit import route")
+                }),
             "{value}"
         );
         assert!(value["plan"]["patch"].is_null());
@@ -144,6 +156,77 @@ fn unknown_cfg_custom_or_malformed_derives_and_module_macros_keep_vetoes() {
                     .any(|b| b["class"] == "semantic_source_fact_unproved")),
             "{value}"
         );
+    }
+}
+
+#[test]
+fn target_custom_derive_still_vetoes_trait_method_facts() {
+    let repo = fixture("#[derive(Custom)]");
+    repo.write("cases/layout/lib.rs", "mod source; #[derive(Custom)] pub struct Value; pub trait Read { fn read(&self) -> u32; } impl Read for Value { fn read(&self) -> u32 { 1 } }");
+    repo.write(
+        "cases/layout/source.rs",
+        &format!("use crate::Read;\n{SELECTED}"),
+    );
+    let value = run(&repo, request(&repo, SELECTED));
+    assert_eq!(value["plan"]["applicable"], false, "{value}");
+    assert!(value["plan"]["edits"].is_null());
+    assert!(value["plan"]["created_files"].is_null());
+    assert!(value["plan"]["patch"].is_null());
+    assert!(
+        evaluations(&value).iter().any(|e| {
+            e["anchor"]["expected_text"] == "#[derive(Custom)]"
+                && e["fact_class"] == "generated_items"
+                && e["status"] == "skipped"
+                && e["reason"] == "non_builtin_derive"
+        }),
+        "{value}"
+    );
+    assert!(
+        !value["plan"]["binding_proofs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|p| p["anchor"]["expected_text"] == "value.read"),
+        "{value}"
+    );
+}
+
+#[test]
+fn generated_item_guard_reaches_receiver_declarations_in_other_modules() {
+    for derive in ["Clone", "Custom"] {
+        for text in [
+            "fn selected(value: crate::model::Value) -> u32 { value.read() }",
+            "fn selected(value: crate::model::Value) -> u32 { crate::model::Value::read(&value) }",
+        ] {
+            let repo = Fixture::generate();
+            repo.write(
+                "cases/layout/lib.rs",
+                "mod source; pub mod model; impl model::Value { pub fn read(&self) -> u32 { 1 } }",
+            );
+            repo.write(
+                "cases/layout/model.rs",
+                &format!("#[derive({derive})] pub struct Value;"),
+            );
+            repo.write("cases/layout/source.rs", text);
+            let value = run(&repo, request(&repo, text));
+            assert_eq!(
+                value["plan"]["applicable"],
+                derive == "Clone",
+                "{derive}: {value}"
+            );
+            if derive == "Custom" {
+                assert!(value["plan"]["patch"].is_null());
+                assert!(
+                    evaluations(&value).iter().any(|e| {
+                        e["anchor"]["path"] == "cases/layout/model.rs"
+                            && e["fact_class"] == "generated_items"
+                            && e["reason"] == "non_builtin_derive"
+                            && e["status"] == "skipped"
+                    }),
+                    "{value}"
+                );
+            }
+        }
     }
 }
 
@@ -188,7 +271,7 @@ fn final_destination_context_is_evaluated_independently() {
 }
 
 #[test]
-fn effect_scope_dependency_derive_is_a_context_proof_not_pattern_discharge() {
+fn effect_scope_dependency_and_variant_pattern_have_independent_proofs() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source; mod scheduler;\n");
     repo.write(
@@ -233,9 +316,17 @@ fn effect_scope_dependency_derive_is_a_context_proof_not_pattern_discharge() {
                 && p["anchor"]["expected_text"] == "#[derive(Clone, Debug, Eq, PartialEq)]"),
         "{on}"
     );
-    assert_eq!(
-        on["plan"]["applicable"], false,
-        "pattern resolution remains out of scope"
+    assert_eq!(on["plan"]["applicable"], true, "{on}");
+    assert!(
+        on["plan"]["binding_proofs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| {
+                p["classification"] == "variant_path"
+                    && p["anchor"]["expected_text"] == "crate::scheduler::Effect::RecordTransition"
+            }),
+        "{on}"
     );
 }
 
