@@ -156,7 +156,7 @@ Consumer-side repairs can follow unique, unconditioned named `pub use` and
 `pub(crate) use` leaves to a directly inventoried declaration in an admitted
 ordinary module. Renamed leaves preserve the consumer's binding spelling:
 `pub use crate::implementation::B as C` produces a destination import such as
-`use crate::implementation::B as C;`, not an import through the facade. Relative
+`use crate::implementation::B as C;` when that canonical path is accessible. Relative
 paths use the declaring module's written context. Transitive routes are bounded
 to **eight re-export hops** and reject cycles, competing leaves, missing terminal
 declarations, globs and attributed/conditional leaves (including `cfg` and
@@ -168,11 +168,18 @@ from the final destination: `pub`/`pub(crate)` permit crate access; private and
 permits that parent's parent and descendants; `pub(in crate::...)`, `pub(in self...)`
 and `pub(in super...)` must name an evidenced ancestor containing the destination.
 Whitespace/comments in visibility modifiers do not alter this check. Inaccessible,
-missing or unprovable edges withhold the route rewrite rather than widening modules
-or falling back to the facade. The retained `visibility_scope_unproved` decision
-has `refusal_basis.class:"inaccessible_route:<segment>"`, with `name` naming the
-segment and an original module-declaration anchor when available. Synthesized or
-missing declarations omit the range. This is written reachability, not compilation.
+missing or unprovable canonical edges trigger a search of admitted written public
+re-export routes to the same terminal declaration. Each candidate retains the same
+unique-leaf, condition, cycle and eight-hop checks, and every module edge of the
+chosen public path must be visible from the final destination. The exporting modules
+must also have written access to their respective hop targets. Selection is
+**fewest re-export hops, then lexicographic absolute path**; the canonical path
+remains preferred when accessible. No canonical module visibility is widened for a
+fallback. If no accessible admitted route exists, the retained
+`visibility_scope_unproved` decision has `refusal_basis.class:"inaccessible_route:<segment>"`,
+with `name` naming the segment and an original module-declaration anchor when
+available. Synthesized or missing declarations omit the range. This is written
+reachability, not compilation; terminal attribute and moved-item API vetoes remain.
 
 These repairs retain their ordinary `kind` (`import_insert`, `use_path`, `path`
 or `import_leaf_extract`) and add `"written_reexport"` to `rewrites[].evidence`.
@@ -181,7 +188,12 @@ The same rewrite's `anchors` includes each complete original re-export
 and insertion-boundary anchors when applicable. This is syntactic evidence,
 not a `binding_proofs` semantic class. No new request flag or schema version is
 introduced, and `semantic:"not_performed"` remains unchanged without semantic
-resolution. Review the complete hop anchors and canonical `after_text` before
+resolution. A fallback additionally discloses `written_reexport_route_fallback`
+in `rationale`: the rejected canonical path and inaccessible segment, chosen public
+path, candidate count, hop count and ordering rule. Its anchors retain the original
+and chosen re-export hops, terminal declaration, rejected module declaration and
+chosen path's written module edges. This is additive rationale vocabulary, not a
+new evidence/proof class. Review these anchors and the chosen `after_text` before
 accepting or replacing an ordinary rewrite.
 
 This is **consumer-side import resolution only**. Moving a declaration that is
