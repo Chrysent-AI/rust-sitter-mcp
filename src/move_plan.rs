@@ -1922,19 +1922,39 @@ fn build(
             DecisionAction::RequestField { choices, .. } => choices.clone(),
             _ => Vec::new(),
         };
+        let mut anchors = vec![anchor(&need.path, &files[&need.path].source, &need.range)];
+        if need.reason == DecisionReason::GlobConsumerUnrepaired {
+            for basis in &need.refusal_basis {
+                if basis.class == "glob_import"
+                    && let Some(range) = &basis.anchor.range
+                {
+                    anchors.push(anchor(
+                        &basis.anchor.path,
+                        &files[&basis.anchor.path].source,
+                        range,
+                    ));
+                }
+            }
+        }
+        let evidence = anchors
+            .iter()
+            .map(|a| {
+                Lines::new(&files[&a.path].source).slice(
+                    a.range.start_byte,
+                    a.range.end_byte,
+                    request.limits.text_bytes,
+                )
+            })
+            .collect();
         let decision = Decision {
             reason: need.reason,
             next_action: action.next_action(),
             action,
             id,
             category: need.category.into(),
-            anchors: vec![anchor(&need.path, &files[&need.path].source, &need.range)],
+            anchors,
             item_ids: need.item_ids,
-            evidence: vec![Lines::new(&files[&need.path].source).slice(
-                need.range.start_byte,
-                need.range.end_byte,
-                request.limits.text_bytes,
-            )],
+            evidence,
             unresolved_consequence: need.message,
             resolution: if acknowledged {
                 "risk_acknowledged"

@@ -775,6 +775,7 @@ pub enum DecisionReason {
     TestConsumerAcknowledged,
     MacroContextUnexamined,
     GlobBindingUnproved,
+    GlobConsumerUnrepaired,
     ExternalOrMissingBinding,
     UnsupportedUnitKind,
     UnsupportedConstruct,
@@ -1368,8 +1369,8 @@ pub fn dependencies(
                                 "reference candidate cap reached",
                             ));
                         }
-                        // Other ordinary bare scopes cannot refer to this binding without a path/use;
-                        // same-file references and explicit paths are relevant conservative candidates.
+                        // Same-file and explicit-path consumers keep the existing repair path.
+                        // Other bare references need visible glob evidence, not module spelling.
                         let path_reference = current.parent().is_some_and(|p| {
                             matches!(p.kind(), "scoped_identifier" | "scoped_type_identifier")
                         });
@@ -1409,6 +1410,37 @@ pub fn dependencies(
                                     current,
                                     "remaining written consumer requires explicit repair/evidence",
                                 )),
+                            }
+                        } else {
+                            let imports =
+                                glob_routes.consumer_imports(path, current, source_path, name)?;
+                            if !imports.is_empty() {
+                                let assessment = lexical_assessment(
+                                    path,
+                                    current,
+                                    other_source,
+                                    name,
+                                    controls,
+                                    false,
+                                )?;
+                                if assessment.binding != LexicalBinding::Independent {
+                                    let mut value = need(
+                                        DecisionReason::GlobConsumerUnrepaired,
+                                        "glob_dependency",
+                                        path,
+                                        current,
+                                        "bare consumer may reach the moved item through visible glob imports; third-file glob consumers are not repaired",
+                                    );
+                                    value.lexical(assessment);
+                                    value.refusal_basis = imports
+                                        .into_iter()
+                                        .map(|range| {
+                                            RefusalBasis::new("glob_import", path, Some(range))
+                                                .named(name)
+                                        })
+                                        .collect();
+                                    needs.push(value);
+                                }
                             }
                         }
                     }

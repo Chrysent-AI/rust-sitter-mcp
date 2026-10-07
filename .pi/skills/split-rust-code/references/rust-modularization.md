@@ -44,7 +44,7 @@ Start with the most restrictive visibility that works:
 - **Prefer explicit imports** during a split — each new module imports exactly what it uses
 - **`crate::` paths** are clearest for internal absolute references; `self::`/`super::` express local relationships
 - **Don't reorder or merge import groups** during a move — the Rust Style Guide forbids merging/reordering groups
-- **Don't introduce new wildcard imports** as a split shortcut — they hide binding provenance and the MCP engine refuses uncertain globs. Existing globs in the source are fine.
+- **Don't introduce new wildcard imports** as a split shortcut — they hide binding provenance and the MCP engine refuses uncertain globs. Existing globs are not blanket vetoes, but bare consumers in other admitted files reached through candidate globs block with `glob_consumer_unrepaired`; review their exact call-site and glob-statement anchors rather than assuming the old route survives.
 
 ## File layout conventions
 

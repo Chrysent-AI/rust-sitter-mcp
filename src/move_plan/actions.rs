@@ -34,6 +34,10 @@ impl DecisionAction {
                 fields: vec!["moves".into()],
                 instruction: "change the affected selected items; acknowledgment does not establish supported binding identity or unit context".into(),
             },
+            DecisionReason::GlobConsumerUnrepaired => Self::SelectionChangeRequired {
+                fields: vec!["moves".into()],
+                instruction: "change the selected move to preserve the anchored glob consumer; third-file glob consumer repair and acknowledgment are not supported".into(),
+            },
             DecisionReason::CrossGroupReferenceReview => Self::field("move_item", "moves", DecisionPurpose::SubmitForAnalysis),
             DecisionReason::TestConsumerAcknowledged => Self::field("move_item", "acknowledge_test_consumers", DecisionPurpose::ReviewDefault),
             DecisionReason::OrdinaryTriviaChoice => Self::RequestField {
