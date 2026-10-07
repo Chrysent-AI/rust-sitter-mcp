@@ -14,6 +14,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `std::string::String`, preserving original/final shadow and context audits
   and caller-assumption labeling without semantic configuration.
 
+### Fixed
+
+* Discharge admitted qualified standard-prelude types despite same-name imports
+  or declarations; audit competing `std` roots in the module/block scope chain,
+  including written `mod std` declarations and `extern crate ... as std` aliases,
+  while preserving context vetoes and nonsemantic caller-assumption labeling.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added
