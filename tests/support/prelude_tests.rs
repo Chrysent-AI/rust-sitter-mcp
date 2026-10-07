@@ -212,6 +212,64 @@ fn qualified_prelude_ignores_terminal_imports_and_declarations() {
 }
 
 #[test]
+fn qualified_prelude_extern_crates_audit_effective_bindings() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for path in ["source.rs", "destination.rs", "lib.rs"] {
+        for (declaration, allowed) in [
+            ("extern crate std as something;", true),
+            ("extern crate external as std;", false),
+            ("extern crate std;", false),
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            let source = format!("{declaration}\n{old}");
+            repo.write(&file, &source);
+            let result = run(
+                &repo,
+                enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+            );
+            assert_eq!(
+                proof_count(&result, "std::result::Result"),
+                usize::from(allowed),
+                "{path}: {declaration}: {result}"
+            );
+            assert_eq!(result["plan"]["applicable"], allowed, "{result}");
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            if allowed {
+                assert_eq!(
+                    result["plan"]["binding_proofs"][0]["class"],
+                    "standard_prelude"
+                );
+                apply(&repo, &result);
+            } else {
+                withheld(&result);
+                assert!(
+                    result["plan"]["decisions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|decision| {
+                            decision["refusal_basis"].as_array().is_some_and(|bases| {
+                                bases.iter().any(|basis| {
+                                    basis["class"] == "shadow"
+                                        && basis["name"] == "std"
+                                        && basis["anchor"]["path"] == file
+                                        && basis["anchor"]["range"]["start_byte"]
+                                            == declaration.rfind("std").unwrap()
+                                        && basis["anchor"]["range"]["end_byte"]
+                                            == declaration.len() - 1
+                                })
+                            })
+                        }),
+                    "{result}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn qualified_prelude_keeps_both_overlay_root_and_context_vetoes() {
     let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
     for path in ["source.rs", "destination.rs"] {

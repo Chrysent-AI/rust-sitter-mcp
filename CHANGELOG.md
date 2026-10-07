@@ -16,6 +16,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Audit only the effective binding of an extern-crate declaration: allow qualified
+  standard-prelude proofs under `extern crate std as something;` while preserving
+  the competing-root veto for `extern crate external as std;`.
 * Discharge admitted qualified standard-prelude types despite same-name imports
   or declarations; audit competing `std` roots in the module/block scope chain,
   including written `mod std` declarations and `extern crate ... as std` aliases,

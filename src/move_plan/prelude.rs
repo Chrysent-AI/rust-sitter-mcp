@@ -403,6 +403,23 @@ fn shadows(
                 }
                 continue;
             }
+            "extern_crate_declaration" => {
+                // A renamed crate binds only its alias, not its original name.
+                if let Some(name) = current
+                    .child_by_field_name("alias")
+                    .or_else(|| current.child_by_field_name("name"))
+                {
+                    found.name(
+                        &source[name.byte_range()],
+                        path,
+                        Some(crate::result::ByteRange {
+                            start_byte: name.start_byte(),
+                            end_byte: name.end_byte(),
+                        }),
+                    );
+                }
+                continue;
+            }
             "function_item"
             | "function_signature_item"
             | "struct_item"
@@ -416,7 +433,6 @@ fn shadows(
             | "type_parameter"
             | "const_parameter"
             | "mod_item"
-            | "extern_crate_declaration"
             | "macro_definition" => {
                 if let Some(name) = current.child_by_field_name("name") {
                     if current.kind() == "macro_definition" {
@@ -442,12 +458,7 @@ fn shadows(
                     );
                 }
             }
-            "identifier" | "shorthand_field_identifier"
-                if in_pattern
-                    || current
-                        .parent()
-                        .is_some_and(|p| p.kind() == "extern_crate_declaration") =>
-            {
+            "identifier" | "shorthand_field_identifier" if in_pattern => {
                 found.name(
                     &source[current.byte_range()],
                     path,

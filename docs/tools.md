@@ -217,7 +217,9 @@ qualification bypasses the terminal-name binding, so explicit same-name imports
 (such as a local `use ...::Result`) do not shadow `std::result::Result` and require
 no terminal-name audit. The `std` root must still be unshadowed: written competing
 `mod std` declarations and `extern crate ... as std` aliases in the reference's
-module/block scope chain veto proof at either overlay. Original/final root,
+module/block scope chain veto proof at either overlay. Extern-crate declarations
+bind their alias when present, otherwise their crate name; renaming `std` to
+`something` does not introduce a competing `std` binding. Original/final root,
 context, derive, macro and prelude-control audits remain in force. Other qualified
 paths, relative paths, associated calls and qualified constructors do not qualify.
 No semantic configuration is required for this
