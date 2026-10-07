@@ -83,7 +83,7 @@ macro definition; written owner attributes have exact original-source anchors.
 The reached invocation also retains the refusal.
 
 `assume_declared_helpers` adds a separate default-false caller assertion alongside
-configured `resolve_semantic`: provider-uncertain generated struct/enum attributes
+configured `resolve_semantic`: provider-uncertain written or generated struct/enum attributes
 belong to registered derive helpers, not replacing providers. Well-formed companion
 custom/qualified derive path lists on helper-bearing types are checked syntactically
 only. The engine neither classifies registration nor executes providers. Conditional
@@ -95,8 +95,7 @@ separately, including omitted records, without inflating `coverage.ra_resolved`;
 shared `resolution_coverage.decisions` counts their sum. Assumed context admissions
 use `assumed_declared_helpers` and name the reached helper on the written definition.
 All original/final identity anchors and access checks remain mandatory. The flag
-cannot admit cfg/cfg_attr or prelude controls, written-owner/ordinary written helper
-attributes, helper-free custom derives, over-cap definitions, proc-macro construction
+cannot admit cfg/cfg_attr or prelude controls, attributes on non-type written owners, helper-free generated custom derives, over-cap definitions, proc-macro construction
 or generated members. Omission/false preserves containment response bytes.
 Independent chain/trivia/API/repair gates and
 read-only byte-exact

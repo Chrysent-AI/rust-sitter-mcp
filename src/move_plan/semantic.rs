@@ -379,8 +379,18 @@ pub fn discharge(
         "resolution performed for {} decisions under one explicit configuration; compilation/equivalence not performed",
         proofs.len()
     );
+    // The reached-context inventory belongs to the batch, not each occurrence.
+    // Keep per-proof configuration/digests/counts without quadratic disclosure.
+    let mut proof_coverage = coverage.clone();
+    if request
+        .moves
+        .iter()
+        .any(|entry| entry.enclosing_impl.is_some())
+    {
+        proof_coverage.context_evaluations.clear();
+    }
     for proof in &mut proofs {
-        proof.coverage = coverage.clone();
+        proof.coverage = proof_coverage.clone();
     }
     result.coverage.assumed_declared_identity = proofs
         .iter()

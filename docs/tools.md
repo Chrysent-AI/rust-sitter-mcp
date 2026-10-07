@@ -472,7 +472,7 @@ same configured RA tier. The schema version is unchanged.
 
 `assume_declared_helpers` is a request-level boolean, default `false`, requiring
 `resolve_semantic:true` and the same explicit `semantic_configuration`. It is an
-assertion by the caller that each provider-uncertain attribute on a generated
+assertion by the caller that each provider-uncertain attribute on a written or generated
 struct/enum belongs to a **registered derive helper**, not a replacing attribute
 provider. The engine does not classify or verify that assertion, infer registration
 from a derive spelling, or execute any provider. Well-formed companion custom or
@@ -497,8 +497,9 @@ occurrences, not just real proofs. No counter is emitted when its count is zero.
 Omission or `false` preserves the containment response bytes. Both-overlay
 identity/access, cfg, shape/token/nesting caps, procedural-macro construction and
 all generated impl/member/field/constructor/variant vetoes remain in force.
-This flag does not enable ordinary written derive-helper attributes or method
-partitioning.
+Direct ordinary written struct/enum helpers also qualify for nominal identity only,
+with exact original/final declaration and reached attribute anchors. Attributes on
+other written owners and generated-item facts remain blocked.
 
 A bare type imported through an existing accessible written public named facade
 can carry that same facade import provisionally into a sibling. The rewrite
@@ -662,7 +663,23 @@ Patch/edit/creation shapes and read-only behavior are unchanged.
 
 ### Supported units and ordinary layout
 
-Functions, structs, enums, unions, traits, whole impls (including anonymous impls), type aliases, consts and statics have `supported_unit` inventory eligibility. Their dependencies may still block relocation. Whole modules have `module_context` eligibility reasons; use/extern/foreign constructs have `scope_dependency`; macro definitions/invocations have `macro_dependency`; other significant units are explicitly unsupported. Attributes/docs are associated constituents, not independently selectable inventory units. Nested/body/member/partial selections are rejected.
+Functions, structs, enums, unions, traits, whole impls (including anonymous impls), type aliases, consts and statics have `supported_unit` inventory eligibility. Their dependencies may still block relocation. Whole modules have `module_context` eligibility reasons; use/extern/foreign constructs have `scope_dependency`; macro definitions/invocations have `macro_dependency`; other significant units are explicitly unsupported. Attributes/docs are associated constituents, not independently selectable inventory units. Nested/body/partial selections are rejected. Whole written inherent functions and
+associated consts are selectable with `moves[].enclosing_impl`, an exact header-only
+`SourceAnchor` ending immediately before `{`. Inventory `enclosing_impl` contains
+that anchor, the whole impl `range`, unchanged `header`, nominal `written_type` and
+`exclusions`; it never repeats the impl body. Trait/unsafe/negative impls, attributed
+impls, cfg/unexamined member attributes, generic members and macro-generated members
+remain excluded. Generic/where impl headers can be copied unchanged when their
+written dependencies and type identity are preserved; no header transformation is
+supported. Existing/new-sibling destinations synthesize audited `impl_wrapper`
+rewrites without reindentation. `{"kind":"existing_impl","path":"src/target.rs",
+"implementation":<whole impl anchor>,"before_item":<optional member anchor>}`
+merges only into a byte-identical header resolving to the same written type; an
+insertion anchor must be an unselected member of that impl. Method visibility repairs
+remain explicit private/`pub(crate)` choices; unproved field access still blocks.
+Associated-item batches publish reached context evaluations once in
+`plan.resolution_coverage.context_evaluations`; per-proof coverage retains metadata
+with an empty context array.
 
 `crate_root` is an admitted existing Rust file chosen as the analysis root, **not** an inferred Cargo target. Source/destination identities require unique, ordinary written `mod name;` chains within admitted scope. Missing/conditional/competing/`#[path]` mappings and inherited context uncertainty block. References are scoped to the admitted corpus; no absence claim covers generated code or unexamined build targets.
 
@@ -674,7 +691,7 @@ Ordinary children of the root or an existing `mod.rs` reside in that file's dire
 
 - **Macro-generated crate roots:** `crate_root!()`-style roots can emit module declarations from macro bodies; `include!(concat!(env!("OUT_DIR"), ...))` can supply build-generated declarations. The syntactic stage neither expands macros nor executes build scripts, so it cannot discover or prove these module trees. Such selections are advice-only, not applicable moves. Literal declaration-shaped tokens can name the macro cause; an opaque include without written declarations remains unproved rather than guessed.
 - **Cargo autotest discovery:** creating a sibling directly under `tests/*.rs` can create a new integration-test crate under Cargo's default discovery rules. Ordinary module validity cannot see this build-graph change; review the target layout and Cargo test discovery externally before applying a patch.
-- **Macro-invocation-as-item files:** when most of a file consists of macro invocations generating implementations, the inventory exposes those invocations, not their expanded items. This archetype is unsplittable by whole-item moves, like a file dominated by one large `impl`; use advice rather than treating generated methods/items as selectable written units.
+- **Macro-invocation-as-item files:** when most of a file consists of macro invocations generating implementations, the inventory exposes those invocations, not their expanded items. This archetype is unsplittable by written-item moves; unlike ordinary inherent impl members, generated members are not selectable; use advice rather than treating generated methods/items as selectable written units.
 
 Serialize MCP probes: a parallel call returns `BUSY`; wait for the active call to finish before retrying, rather than treating the busy result as an applicability measurement.
 

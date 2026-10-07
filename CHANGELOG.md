@@ -9,6 +9,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add whole written inherent method/const partitioning with header-only enclosing
+  anchors, unchanged generic/where headers, audited verbatim impl wrappers and
+  same-type existing-impl destinations; retain trait, cfg and generated-member vetoes.
+* Extend `assume_declared_helpers` to direct written struct/enum helper attributes
+  for caller-assumed nominal identity, keeping conditional coverage separate.
+  Associated-item batches share reached-context evidence instead of repeating it
+  in every proof.
+
 * Add default-off `assume_declared_helpers` for caller-asserted registered helpers
   on bounded declarative generated types, with distinct `assumed_declared_identity`
   proofs and coverage, unchanged both-overlay anchors and independent vetoes;

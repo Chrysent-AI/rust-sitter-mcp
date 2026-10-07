@@ -137,7 +137,7 @@ fn check_attr(
         .errors()
         .iter()
         .any(|e| attr.syntax().text_range().contains_range(e.range()));
-    let outcome = if malformed {
+    let mut outcome = if malformed {
         Err("unparseable_attribute")
     } else if let Some(meta) = attr.meta() {
         safe_meta(
@@ -152,6 +152,26 @@ fn check_attr(
     } else {
         Err("unparseable_attribute")
     };
+    // Only direct written type attributes qualify, never attributes on imports,
+    // modules, functions, macro definitions/invocations or cfg_attr payloads.
+    let assumed = outcome == Err("unsupported_attribute")
+        && inputs.assume_declared_helpers
+        && fact_class == FactClass::NominalIdentity
+        && attr
+            .syntax()
+            .parent()
+            .and_then(ast::Item::cast)
+            .is_some_and(|item| matches!(item, ast::Item::Struct(_) | ast::Item::Enum(_)))
+        && attr.meta().is_some_and(|meta| {
+            !matches!(
+                meta.simple_name().as_deref(),
+                Some("cfg" | "cfg_attr" | "no_implicit_prelude" | "no_std" | "no_core")
+            )
+        });
+    if assumed {
+        outcome = Ok(());
+        inputs.assumed_declared_helpers.set(true);
+    }
     record(
         inputs,
         sema,
@@ -172,6 +192,26 @@ fn check_attr(
             }),
         ),
     );
+    if assumed
+        && let Some(declaration) =
+            inputs.declaration(module, attr.syntax(), sema.hir_file_for(attr.syntax()))
+    {
+        let anchor = declaration.anchor;
+        let key = (
+            anchor.path,
+            anchor.range.start_byte,
+            anchor.range.end_byte,
+            fact_class.name(),
+        );
+        if let Some(evaluation) = inputs.context.borrow_mut().get_mut(&key) {
+            evaluation.reason = "assumed_declared_helpers".into();
+            evaluation.basis = format!(
+                "{}; caller-assumed written helper {}",
+                super::declarative::ASSUMED_BASIS,
+                attr.syntax().text()
+            );
+        }
+    }
     outcome.is_ok()
 }
 
