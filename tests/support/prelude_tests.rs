@@ -173,14 +173,51 @@ fn qualified_prelude_signatures_are_opt_in_lossless_and_nonsemantic() {
 }
 
 #[test]
-fn qualified_prelude_keeps_both_overlay_shadow_and_context_vetoes() {
+fn qualified_prelude_ignores_terminal_imports_and_declarations() {
     let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
     for path in ["source.rs", "destination.rs"] {
         for prefix in [
             "use unknown as Result;\n",
             "use std::result::Result;\n",
             "struct Result;\n",
-            "mod std {}\n",
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            repo.write(&file, &format!("{prefix}{old}"));
+            let result = run(
+                &repo,
+                enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+            );
+            assert_eq!(
+                result["plan"]["applicable"], true,
+                "{path}: {prefix}: {result}"
+            );
+            assert_eq!(proof_count(&result, "std::result::Result"), 1, "{result}");
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            apply(&repo, &result);
+        }
+    }
+    for selected in [
+        "fn selected() { use unknown as Result; let value: std::result::Result<u8, u8>; }",
+        "fn selected() { use std::result::Result; let value: std::result::Result<u8, u8>; }",
+    ] {
+        let repo = fixture(selected);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        assert_eq!(proof_count(&result, "std::result::Result"), 1, "{result}");
+    }
+}
+
+#[test]
+fn qualified_prelude_keeps_both_overlay_root_and_context_vetoes() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for path in ["source.rs", "destination.rs"] {
+        for prefix in [
+            "mod std { pub mod result { pub struct Result; } }\n",
+            "extern crate external as std;\n",
             "use unknown as std;\n",
             "use unknown::*;\n",
             "#![no_implicit_prelude]\n",
@@ -204,7 +241,12 @@ fn qualified_prelude_keeps_both_overlay_shadow_and_context_vetoes() {
         }
     }
     for selected in [
-        "fn selected() { use unknown as Result; let value: std::result::Result<u8, u8>; }",
+        "fn selected() { mod std { pub mod result { pub struct Result; } } let value: std::result::Result<u8, u8>; }",
+        "fn selected() { let value: std::result::Result<u8, u8>; mod std { pub mod result { pub struct Result; } } }",
+        "fn selected() { mod std {} { let value: std::result::Result<u8, u8>; } }",
+        "fn selected() { extern crate external as std; let value: std::result::Result<u8, u8>; }",
+        "fn selected() { let value: std::result::Result<u8, u8>; extern crate external as std; }",
+        "fn selected() { mod enclosing { mod std {} mod inner { struct Record { value: std::result::Result<u8, u8> } } } }",
         "fn selected() { introduce!(); let value: std::result::Result<u8, u8>; }",
         "fn selected() { let value: std::result::Result<u8, u8>; introduce!(); }",
         "fn selected() { let value: std::result::Result<u8, u8>; #[introduce] struct Other; }",
@@ -220,7 +262,53 @@ fn qualified_prelude_keeps_both_overlay_shadow_and_context_vetoes() {
 }
 
 #[test]
-fn qualified_prelude_final_batch_arrivals_and_planned_imports_veto() {
+fn qualified_prelude_root_scope_chain_and_disjoint_scopes() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for root in ["mod std {}", "extern crate external as std;"] {
+        let repo = fixture(selected);
+        repo.write(
+            "cases/layout/lib.rs",
+            &format!("{root}\nmod source;\nmod destination;\n"),
+        );
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        assert_eq!(proof_count(&result, "std::result::Result"), 0, "{result}");
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|decision| {
+                    decision["refusal_basis"].as_array().is_some_and(|bases| {
+                        bases.iter().any(|basis| {
+                            basis["class"] == "shadow"
+                                && basis["name"] == "std"
+                                && basis["anchor"]["path"] == "cases/layout/lib.rs"
+                        })
+                    })
+                }),
+            "{result}"
+        );
+    }
+    for selected in [
+        "fn selected() -> std::result::Result<u8, u8> { mod std {} loop {} }",
+        "fn selected() { { mod std {} } let value: std::result::Result<u8, u8>; }",
+        "fn selected() { mod enclosing { struct Record { value: std::result::Result<u8, u8> } mod sibling { mod std {} } } }",
+    ] {
+        let repo = fixture(selected);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        assert_eq!(proof_count(&result, "std::result::Result"), 1, "{result}");
+    }
+}
+
+#[test]
+fn qualified_prelude_final_batch_terminal_arrivals_and_planned_imports_do_not_veto() {
     let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
     for other in ["struct Result;", "struct Other { value: Result<u8, u8> }"] {
         let repo = fixture(selected);
@@ -242,8 +330,8 @@ fn qualified_prelude_final_batch_arrivals_and_planned_imports_veto() {
                 ]),
             )),
         );
-        withheld(&result);
-        assert_eq!(proof_count(&result, "std::result::Result"), 0, "{result}");
+        assert_eq!(proof_count(&result, "std::result::Result"), 1, "{result}");
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
     }
 }
 

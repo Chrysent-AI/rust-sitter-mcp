@@ -212,11 +212,15 @@ hand-authored, edition-independent subset of the standard prelude:
 https://doc.rust-lang.org/std/prelude/v1/index.html
 The same type proof covers exactly the written `std::`-rooted paths
 `std::option::Option`, `std::result::Result`, `std::boxed::Box`, `std::vec::Vec`
-and `std::string::String` in type position. Their basis names the qualified form;
-all the same original/final shadow and context audits apply, including competing
-explicit imports of the terminal type name, and the `std` root must also remain
-unshadowed. Other qualified paths, relative paths, associated calls and qualified
-constructors do not qualify. No semantic configuration is required for this
+and `std::string::String` in type position. Their basis names the qualified form:
+qualification bypasses the terminal-name binding, so explicit same-name imports
+(such as a local `use ...::Result`) do not shadow `std::result::Result` and require
+no terminal-name audit. The `std` root must still be unshadowed: written competing
+`mod std` declarations and `extern crate ... as std` aliases in the reference's
+module/block scope chain veto proof at either overlay. Original/final root,
+context, derive, macro and prelude-control audits remain in force. Other qualified
+paths, relative paths, associated calls and qualified constructors do not qualify.
+No semantic configuration is required for this
 caller-assumed coverage.
 
 This is a caller assumption, not written-import or semantic proof. Each discharged
@@ -240,11 +244,14 @@ not an RA resolution claim about imports emitted by custom derives. Qualified
 paths (`Option::Some`), patterns, other constructors and associated calls do not qualify. Empty proof/count fields are omitted; counts
 survive response fitting with the same omission/withholding rules as type proofs.
 
-The source **and** destination module identity chains must be complete. Competing
-explicit use-leaves, globs and same-name written declarations are checked in the
-reference's own module, lexically enclosing inline modules and the destination's
+The source **and** destination module identity chains must be complete. For bare
+spellings, competing explicit use-leaves, globs and same-name written declarations
+are checked in the reference's own module, lexically enclosing inline modules and
+the destination's
 final insertion scope (departures removed, arrivals and planned imports included).
-Filesystem ancestors' imports and declarations do not inherit into child modules.
+Filesystem ancestors' terminal-name imports and declarations do not inherit into
+child modules; competing `std` root bindings remain relevant to qualified paths
+throughout the module identity chain.
 An attributed declaration contributes its written name conservatively even when
 its presence is conditional: `#[cfg(test)] mod tests;` shadows `tests`, not `Option`.
 Child/sibling scopes' finite names and derives do not leak to a parent reference.

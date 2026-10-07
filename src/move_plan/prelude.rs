@@ -188,11 +188,13 @@ impl Shadows {
     }
     /// Keep unbounded context; filesystem inheritance also keeps scoped prelude controls.
     /// Inline-to-parent promotion must not carry no_implicit_prelude upward.
-    /// Imports and written names belong to their declaring module, not its children.
+    /// Terminal names stay in their declaring module; competing std roots stay
+    /// relevant throughout the module identity chain.
     fn chain_context(&self, inherit_scoped_prelude: bool) -> Self {
         let mut result = Self::default();
         for basis in &self.refusal_basis {
-            if basis.class == "macro_shadow"
+            if (basis.class == "macro_shadow"
+                || (basis.class == "shadow" && basis.name.as_deref() == Some("std")))
                 && let Some(name) = &basis.name
             {
                 result.name(name, &basis.anchor.path, basis.anchor.range.clone());
@@ -798,6 +800,8 @@ pub(super) fn discharge(
         });
         let qualified =
             candidate.is_some() && node.is_some_and(|node| node.kind() == "scoped_type_identifier");
+        // Qualification bypasses the terminal binding, not the std root.
+        let audited_candidate = candidate.map(|index| if qualified { STD_ROOT } else { index });
         let selection = selected.iter().find(|(path, item, _)| {
             path == &need.path
                 && need.item_ids.contains(&item.id)
@@ -828,15 +832,47 @@ pub(super) fn discharge(
         ));
         visible.merge(&item_shadows[&item.id].visible(context_node));
         visible.merge(&arrivals[destination]);
-        if let Some(index) = candidate
+        if qualified && let Some(node) = node {
+            // Block-local extern-crate aliases are hoisted too, but are not
+            // included in the ordinary lexical binding assessment.
+            let mut parent = node.parent();
+            while let Some(scope) = parent {
+                items::check(controls.0, controls.1)?;
+                if matches!(scope.kind(), "source_file" | "mod_item") {
+                    break;
+                }
+                if scope.kind() == "block" {
+                    for i in 0..scope.named_child_count() {
+                        items::check(controls.0, controls.1)?;
+                        let declaration = scope.named_child(i as u32).expect("statement");
+                        if declaration.kind() == "extern_crate_declaration"
+                            && let Some(name) = declaration
+                                .child_by_field_name("alias")
+                                .or_else(|| declaration.child_by_field_name("name"))
+                            && source[name.byte_range()].trim_start_matches("r#") == "std"
+                        {
+                            visible.name(
+                                "std",
+                                path,
+                                Some(crate::result::ByteRange {
+                                    start_byte: name.start_byte(),
+                                    end_byte: name.end_byte(),
+                                }),
+                            );
+                        }
+                    }
+                }
+                parent = scope.parent();
+            }
+        }
+        if let Some(index) = audited_candidate
             && let Some(node) = node
         {
             // Constructors require both their own spelling and the assumed
             // Option type to be unshadowed in exactly the same lexical context.
-            // A std-rooted path also requires its root to stay unshadowed.
-            for audited in std::iter::once(index)
-                .chain((index >= TYPE_COUNT).then_some(0))
-                .chain(qualified.then_some(STD_ROOT))
+            // Qualified types audit only the root, never terminal imports.
+            for audited in
+                std::iter::once(index).chain((!qualified && index >= TYPE_COUNT).then_some(0))
             {
                 let name = if audited == STD_ROOT {
                     STD_ROOT_NAME.0
@@ -941,9 +977,8 @@ pub(super) fn discharge(
             });
         if need.reason == DecisionReason::ExternalOrMissingBinding
             && let Some(index) = candidate
-            && !visible.refuses(index)
+            && !visible.refuses(audited_candidate.expect("prelude candidate"))
             && (index < TYPE_COUNT || !visible.refuses(0))
-            && (!qualified || !visible.refuses(STD_ROOT))
             && !derive_identity_unproved
         {
             record_proof(
@@ -966,7 +1001,7 @@ pub(super) fn discharge(
                     } else {
                         let form = if qualified {
                             format!(
-                                "fully-qualified type-position {}; type spelling and std root unshadowed; ",
+                                "fully-qualified type-position {}; terminal binding bypassed (same-name imports do not shadow this path); std root audited for competing written mod/extern-crate declarations in the module/block scope chain; ",
                                 STANDARD_PRELUDE[index].1
                             )
                         } else {
@@ -988,13 +1023,11 @@ pub(super) fn discharge(
                     | DecisionReason::ConditionalOrInheritedContext
             ) && let Some(index) = candidate
             {
-                need.refusal_basis.extend(visible.basis_for(index, false));
+                need.refusal_basis.extend(
+                    visible.basis_for(audited_candidate.expect("prelude candidate"), false),
+                );
                 if index >= TYPE_COUNT {
                     need.refusal_basis.extend(visible.basis_for(0, false));
-                }
-                if qualified {
-                    need.refusal_basis
-                        .extend(visible.basis_for(STD_ROOT, false));
                 }
             }
             if let Some(attribute) = need.attribute_range.as_ref().and_then(|range| {
