@@ -7,8 +7,9 @@ use ra_ap_syntax::{AstNode, AstToken, SyntaxKind, SyntaxNode, ast};
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 
-/// Derives append items; they cannot replace a written declaration. Only facts
-/// about that declaration may ignore their unknown generated output.
+/// Derives cannot replace declarations or explicit imports in a compiling crate,
+/// but generated imports can override globs. Path facts must establish stable
+/// written bindings before using the nominal admission.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum FactClass {
     NominalIdentity,
@@ -24,7 +25,7 @@ impl FactClass {
     pub(super) fn basis(self) -> &'static str {
         match self {
             Self::NominalIdentity => {
-                "nominal identity via written declaration; derive emits additional items only; generated-item facts retain their veto; no expansion, compilation or equivalence checking"
+                "nominal identity via stable written declaration or explicit import route; derive-generated imports can override globs, so unproved binding stability retains the non-builtin derive veto; generated-item facts retain their veto; no expansion, compilation or equivalence checking"
             }
             Self::GeneratedItems => {
                 "written resolution with generated-item context audited; unknown/non-builtin derives retain their veto; no expansion, compilation or equivalence checking"
@@ -87,6 +88,29 @@ pub(super) fn safe_attr(
     attr: &ast::Attr,
     fact_class: FactClass,
 ) -> bool {
+    check_attr(inputs, sema, module, attr, fact_class, false)
+}
+
+/// An explicit import is stable evidence only when its cfg leaves it active;
+/// a known-OFF sibling can be harmless context without supplying a binding.
+pub(super) fn active_binding_attr(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    attr: &ast::Attr,
+    fact_class: FactClass,
+) -> bool {
+    check_attr(inputs, sema, module, attr, fact_class, true)
+}
+
+fn check_attr(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    module: Module,
+    attr: &ast::Attr,
+    fact_class: FactClass,
+    require_active: bool,
+) -> bool {
     let root = module.krate(&inputs.db).root_file(&inputs.db);
     let Some(config) = inputs
         .configuration
@@ -116,7 +140,15 @@ pub(super) fn safe_attr(
     let outcome = if malformed {
         Err("unparseable_attribute")
     } else if let Some(meta) = attr.meta() {
-        safe_meta(inputs, sema, module, config, &meta, fact_class, 0)
+        safe_meta(
+            inputs,
+            sema,
+            module,
+            config,
+            &meta,
+            (fact_class, require_active),
+            0,
+        )
     } else {
         Err("unparseable_attribute")
     };
@@ -149,15 +181,16 @@ fn safe_meta(
     module: Module,
     config: &CrateInput,
     meta: &ast::Meta,
-    fact_class: FactClass,
+    admission: (FactClass, bool),
     depth: usize,
 ) -> Result<(), &'static str> {
+    let (fact_class, require_active) = admission;
     if depth > 32 {
         return Err("attribute_depth_limit");
     }
     match meta {
         ast::Meta::CfgMeta(cfg) => {
-            predicate(
+            let enabled = predicate(
                 inputs,
                 sema,
                 module,
@@ -166,7 +199,11 @@ fn safe_meta(
                 fact_class,
                 0,
             )?;
-            Ok(())
+            if require_active && !enabled {
+                Err("inactive_written_binding")
+            } else {
+                Ok(())
+            }
         }
         ast::Meta::CfgAttrMeta(cfg) => {
             let enabled = predicate(
@@ -185,7 +222,7 @@ fn safe_meta(
             for nested in metas {
                 if enabled {
                     let result =
-                        safe_meta(inputs, sema, module, config, &nested, fact_class, depth + 1);
+                        safe_meta(inputs, sema, module, config, &nested, admission, depth + 1);
                     record(
                         inputs,
                         sema,
@@ -249,7 +286,9 @@ fn safe_meta(
             {
                 // https://doc.rust-lang.org/reference/procedural-macros.html#macro.proc.derive.output
                 // A custom derive's output is additive, including on this item.
-                // This admits only declaration identity, never its generated impls.
+                // Direct declaration identity is stable; path facts reach this
+                // class only after checking written non-glob binding routes.
+                // This never admits generated impls or import-dependent guesses.
                 return nominal_derive_paths(&tokens[1..tokens.len() - 1]);
             }
             let mut name = true;

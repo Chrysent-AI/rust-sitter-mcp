@@ -21,10 +21,13 @@ fn fixture(declarations: &str) -> Fixture {
     repo
 }
 fn request(repo: &Fixture) -> Value {
+    request_for(repo, SELECTED)
+}
+fn request_for(repo: &Fixture, selected: &str) -> Value {
     json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],
         "resolve_semantic":true,"limits":{"time_budget_ms":30000,"diagnostic_count":1000},
         "semantic_configuration":{"crates":[{"name":"fixture","root_file":"cases/layout/lib.rs","edition":"2024","features":[],"cfg":[],"dependencies":[]}]},
-        "moves":[{"item":move_artifacts::anchor(repo,"cases/layout/source.rs",SELECTED),"destination":{"kind":"new_sibling","path":"cases/layout/moved.rs","parent_path":"cases/layout/lib.rs"}}]})
+        "moves":[{"item":move_artifacts::anchor(repo,"cases/layout/source.rs",selected),"destination":{"kind":"new_sibling","path":"cases/layout/moved.rs","parent_path":"cases/layout/lib.rs"}}]})
 }
 fn run(repo: &Fixture, args: Value) -> Value {
     let before = observe(&repo.0);
@@ -37,7 +40,7 @@ fn run(repo: &Fixture, args: Value) -> Value {
 }
 
 #[test]
-fn variant_identity_survives_own_and_unrelated_additive_derives() {
+fn stable_variant_identity_survives_own_and_unrelated_additive_derives() {
     for declarations in [
         "#[derive(Clone)] pub enum Outcome { Pass, Fail(u32) }",
         "#[derive(Clone)] pub enum Outcome { Pass, Fail(u32) } #[derive(Custom)] struct Other;",
@@ -79,7 +82,9 @@ fn variant_identity_survives_own_and_unrelated_additive_derives() {
                 "Outcome"
             );
             assert_eq!(proof["adjusted_receiver"], proof["original_receiver"]);
-            assert!(proof["basis"].as_str().unwrap().contains("nominal identity via written declaration; derive emits additional items only; generated-item facts retain their veto"));
+            assert!(proof["basis"].as_str().unwrap().contains(
+                "nominal identity via stable written declaration or explicit import route"
+            ));
         }
         let evaluations = result["plan"]["resolution_coverage"]["context_evaluations"]
             .as_array()
@@ -92,7 +97,7 @@ fn variant_identity_survives_own_and_unrelated_additive_derives() {
                     && e["basis"]
                         .as_str()
                         .unwrap()
-                        .contains("derive emits additional items only")),
+                        .contains("derive-generated imports can override globs")),
                 "{result}"
             );
         }
@@ -103,6 +108,192 @@ fn variant_identity_survives_own_and_unrelated_additive_derives() {
                 .unwrap()
                 .contains(SELECTED)
         );
+    }
+}
+
+/// A real proc macro: rustc expands this workspace, while the bounded RA graph
+/// deliberately does not. The competing explicit import must not become a proof
+/// of the glob's unexpanded identity.
+fn injecting_fixture(import: &str, selected: &str) -> Fixture {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/Cargo.toml", "[package]\nname = \"derive-binding-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[dependencies]\ninjector = { path = \"injector\" }\n[workspace]\nmembers = [\"injector\"]\n");
+    repo.write("cases/layout/injector/Cargo.toml", "[package]\nname = \"injector\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n");
+    repo.write("cases/layout/injector/src/lib.rs", "extern crate proc_macro;\n#[proc_macro_derive(Inject)]\npub fn inject(_: proc_macro::TokenStream) -> proc_macro::TokenStream { \"use crate::b::B::V;\".parse().unwrap() }\n#[proc_macro_derive(InjectEnum)]\npub fn inject_enum(_: proc_macro::TokenStream) -> proc_macro::TokenStream { \"pub use crate::b::B as A;\".parse().unwrap() }\n");
+    repo.write("cases/layout/lib.rs", "#![allow(dead_code, unused_imports)]\nmod source;\npub enum A { V }\npub mod a { pub enum A { V } }\npub mod b { pub enum B { V } }\n");
+    repo.write("cases/layout/source.rs", &format!("{import}\n{selected}\n"));
+    repo
+}
+fn cargo_check(repo: &Fixture) {
+    let result = std::process::Command::new("cargo")
+        .args(["check", "--workspace", "--offline", "--quiet"])
+        .current_dir(repo.0.join("cases/layout"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn generated_explicit_import_overriding_glob_withholds_variant_proof() {
+    for (imports, selected, occurrence) in [
+        (
+            "use crate::A::*; use injector::Inject; #[derive(Inject)] struct Other;",
+            "fn selected() -> crate::b::B { V }",
+            "V",
+        ),
+        (
+            "use crate::a::*; use injector::InjectEnum; #[derive(InjectEnum)] struct Other;",
+            "fn selected() -> crate::b::B { A::V }",
+            "A::V",
+        ),
+        // An explicit local import does not make a glob-dependent re-export
+        // source stable against imports emitted in that source module.
+        (
+            "use crate::routes::A;",
+            "fn selected() -> crate::b::B { A::V }",
+            "A::V",
+        ),
+    ] {
+        let repo = injecting_fixture(imports, selected);
+        if imports.contains("routes") {
+            repo.write("cases/layout/lib.rs", "#![allow(dead_code, unused_imports)]\nmod source; pub mod a { pub enum A { V } } pub mod b { pub enum B { V } } pub mod routes { pub use crate::a::*; use injector::InjectEnum; #[derive(InjectEnum)] struct Other; }\n");
+        }
+        let root = std::fs::read_to_string(repo.0.join("cases/layout/lib.rs")).unwrap();
+        repo.write("cases/layout/lib.rs", &format!("{root}mod destination;\n"));
+        repo.write(
+            "cases/layout/destination.rs",
+            if occurrence == "V" {
+                "use crate::A::*;\n"
+            } else {
+                "use crate::a::A;\n"
+            },
+        );
+        // The return type proves which enum rustc actually chose after expansion.
+        // Destination bindings deliberately preserve RA's unexpanded identity,
+        // so agreement between overlays cannot substitute for the admission rule.
+        cargo_check(&repo);
+        let mut args = request_for(&repo, selected);
+        args["moves"][0]["destination"] =
+            json!({"kind":"existing","path":"cases/layout/destination.rs"});
+        let result = run(&repo, args);
+        assert_eq!(result["status"], "complete", "{result}");
+        assert_eq!(result["plan"]["applicable"], false, "{result}");
+        for artifact in ["edits", "created_files", "patch"] {
+            assert!(result["plan"][artifact].is_null(), "{result}");
+        }
+        assert!(
+            !result["plan"]["binding_proofs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["classification"] == "variant_path"),
+            "{result}"
+        );
+        // Bare glob references already have a syntactic veto and never enter RA;
+        // qualified paths exercise the stronger nominal-identity admission.
+        if occurrence == "V" {
+            assert!(
+                result["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["refusal_basis"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|b| b["class"] == "glob_import")),
+                "{result}"
+            );
+            continue;
+        }
+        let evaluations = result["plan"]["resolution_coverage"]["context_evaluations"]
+            .as_array()
+            .unwrap();
+        assert!(
+            evaluations.iter().any(|e| e["kind"] == "binding"
+                && e["status"] == "skipped"
+                && e["reason"] == "stable_written_identity_unproved"
+                && e["anchor"]["expected_text"] == occurrence),
+            "{result}"
+        );
+        if imports.contains("derive") {
+            assert!(
+                evaluations
+                    .iter()
+                    .any(|e| e["reason"] == "non_builtin_derive"
+                        && e["status"] == "skipped"
+                        && e["anchor"]["expected_text"]
+                            .as_str()
+                            .unwrap()
+                            .contains("derive(Inject")),
+                "{result}"
+            );
+        }
+        assert!(
+            result["plan"]["decisions"].as_array().unwrap().iter().any(
+                |d| d["blocks_applicability"] == true
+                    && d["refusal_basis"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|b| b["class"] == "semantic_source_fact_unproved")
+            ),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn explicit_enum_binding_stays_stable_with_real_derive_generated_import() {
+    for imports in [
+        "use crate::A; use injector::Inject; #[derive(Inject)] struct Other;",
+        "use crate::{A as Explicit}; use injector::Inject; #[derive(Inject)] struct Other;",
+        "use crate::{routes::{A}}; use injector::Inject; #[derive(Inject)] struct Other;",
+    ] {
+        let base = if imports.contains("Explicit") {
+            "Explicit"
+        } else {
+            "A"
+        };
+        let selected = format!(
+            "fn selected(value: {base}) -> {base} {{ match value {{ {base}::V => {base}::V }} }}"
+        );
+        let repo = injecting_fixture(imports, &selected);
+        if imports.contains("routes") {
+            repo.write("cases/layout/lib.rs", "#![allow(dead_code, unused_imports)]\nmod source; mod destination; pub enum A { V } pub mod b { pub enum B { V } } pub mod routes { pub use crate::A; }\n");
+            repo.write("cases/layout/destination.rs", "use crate::A;\n");
+        }
+        cargo_check(&repo);
+        let mut args = request_for(&repo, &selected);
+        if imports.contains("routes") {
+            // Supply a written destination binding to isolate nested-use
+            // identity from the separate import-repair capability boundary.
+            args["moves"][0]["destination"] =
+                json!({"kind":"existing","path":"cases/layout/destination.rs"});
+        }
+        let result = run(&repo, args);
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        let proof = result["plan"]["binding_proofs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["classification"] == "variant_path")
+            .unwrap();
+        assert!(
+            proof["basis"]
+                .as_str()
+                .unwrap()
+                .contains("stable written declaration or explicit import route")
+        );
+        assert_eq!(
+            proof["original_receiver"]["declaration"]["anchor"]["expected_text"],
+            "A"
+        );
+        let copy = move_artifacts::apply(&repo, &result);
+        cargo_check(&copy);
     }
 }
 
