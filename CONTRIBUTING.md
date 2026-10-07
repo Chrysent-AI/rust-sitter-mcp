@@ -20,6 +20,7 @@ Do not use `--no-verify` unless a maintainer explicitly asks for it in a specifi
 
 | Gate | Command (as the hook runs it) |
 |---|---|
+| Identifier-leak gate | `bash scripts/check-leaked-identifiers.sh` (added lines + commit message) |
 | Secret scan (staged) | `gitleaks protect --staged` |
 | Formatting | `cargo fmt --all -- --check` |
 | Lint | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |
