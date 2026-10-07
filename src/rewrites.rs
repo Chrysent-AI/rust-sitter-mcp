@@ -145,6 +145,40 @@ struct ImportBinding {
     conditioned: bool,
     scope_range: Option<ByteRange>,
 }
+#[derive(Default, Clone)]
+struct RouteEvidence {
+    anchors: Vec<SourceAnchor>,
+    fallback: Vec<String>,
+}
+impl RouteEvidence {
+    fn merge(&mut self, other: Self) {
+        for a in other.anchors {
+            if !self.anchors.contains(&a) {
+                self.anchors.push(a);
+            }
+        }
+        for disclosure in other.fallback {
+            if !self.fallback.contains(&disclosure) {
+                self.fallback.push(disclosure);
+            }
+        }
+    }
+    fn disclose(&self, rationale: &mut String) -> usize {
+        let before = rationale.len();
+        for disclosure in &self.fallback {
+            if !rationale.contains(disclosure) {
+                rationale.push_str("; ");
+                rationale.push_str(disclosure);
+            }
+        }
+        rationale.len() - before
+    }
+}
+struct WrittenTarget {
+    terminal: String,
+    route: String,
+    evidence: RouteEvidence,
+}
 struct Analyzer<'a> {
     request: &'a MoveRequest,
     files: &'a BTreeMap<String, FileSnapshot>,
@@ -346,11 +380,10 @@ impl Analyzer<'_> {
             .collect()
     }
     // Consumer-side routing only: never discharge a moved declaration's API need.
-    fn written_target(
+    fn follow_reexport(
         &self,
         need: &mut Need,
         target: &str,
-        using: &[String],
     ) -> Option<(String, Vec<SourceAnchor>)> {
         const MAX_REEXPORT_HOPS: usize = 8;
         let mut target = target.to_owned();
@@ -367,9 +400,6 @@ impl Analyzer<'_> {
                     return None;
                 }
                 if !anchors.is_empty() {
-                    if !self.accessible_route(need, &path, &item, using) {
-                        return None;
-                    }
                     anchors.push(anchor(self.files, &path, &item.span.range));
                 }
                 return Some((target, anchors));
@@ -405,12 +435,119 @@ impl Analyzer<'_> {
                 self.missing_target(need, &target);
                 return None;
             };
+            // Each hop must also be written-accessible to its exporting module.
+            // The final consumer need not see the hidden implementation edges.
+            let exported = self.declaration(&next).or_else(|| {
+                let leaves = self.reexports(&next);
+                (leaves.len() == 1)
+                    .then(|| {
+                        let leaf = leaves[0];
+                        self.parsed[&leaf.path]
+                            .items
+                            .iter()
+                            .find(|i| i.span.range == leaf.leaf.declaration)
+                            .map(|i| (leaf.path.clone(), i.clone()))
+                    })
+                    .flatten()
+            });
+            if let Some((path, exported)) = exported
+                && !self.accessible_route(need, &path, &exported, &binding.module)
+            {
+                return None;
+            }
             anchors.push(anchor(self.files, &binding.path, &binding.leaf.declaration));
             target = next;
         }
     }
-    // Following a facade does not authorize widening the canonical route's modules.
-    // Check the final consumer against every written edge before producing any repair.
+    fn written_target(
+        &self,
+        need: &mut Need,
+        target: &str,
+        using: &[String],
+    ) -> Option<WrittenTarget> {
+        let (terminal, mut anchors) = self.follow_reexport(need, target)?;
+        let mut route = self.mapped(&terminal);
+        let mut fallback = Vec::new();
+        if !anchors.is_empty() {
+            let (path, item) = self.declaration(&terminal)?;
+            let mut rejected = need.clone();
+            if !self.accessible_route(&mut rejected, &path, &item, using) {
+                // A facade proves access, not permission to expose a private terminal.
+                if !matches!(item.visibility_key, "pub" | "pub(crate)")
+                    || self.final_path(&path, &item) != path
+                {
+                    *need = rejected;
+                    return None;
+                }
+                let mut candidates = Vec::new();
+                for binding in &self.imports {
+                    items::check(self.controls.0, self.controls.1).ok()?;
+                    if binding.scope_range.is_some() || binding.conditioned || !binding.leaf.public
+                    {
+                        continue;
+                    }
+                    let Some(context) = self
+                        .contexts
+                        .get(&binding.path)
+                        .filter(|c| c.unresolved.is_empty() && c.module_segments == binding.module)
+                    else {
+                        continue;
+                    };
+                    let candidate = canonical(context, &binding.leaf.binding);
+                    let mut probe = need.clone();
+                    let Some((end, mut hops)) = self.follow_reexport(&mut probe, &candidate) else {
+                        continue;
+                    };
+                    if end != terminal || hops.is_empty() {
+                        continue;
+                    }
+                    let Some(export) = self.parsed[&binding.path]
+                        .items
+                        .iter()
+                        .find(|i| i.span.range == binding.leaf.declaration)
+                    else {
+                        continue;
+                    };
+                    if self.accessible_route(&mut probe, &binding.path, export, using) {
+                        let hop_count = hops.len() - 1;
+                        for a in &context.declaration_anchors {
+                            if !hops.contains(a) {
+                                hops.push(a.clone());
+                            }
+                        }
+                        candidates.push((hop_count, candidate, hops));
+                    }
+                }
+                candidates.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+                candidates.dedup_by(|a, b| a.1 == b.1);
+                let Some((hops, chosen, chosen_anchors)) = candidates.first() else {
+                    *need = rejected;
+                    return None;
+                };
+                let rejection = rejected.refusal_basis.last()?;
+                if let Some(range) = &rejection.anchor.range {
+                    anchors.push(anchor(self.files, &rejection.anchor.path, range));
+                }
+                for a in chosen_anchors {
+                    if !anchors.contains(a) {
+                        anchors.push(a.clone());
+                    }
+                }
+                fallback.push(format!(
+                    "written_reexport_route_fallback: canonical {route} rejected ({class}); choose {chosen} from {count} accessible written routes by shortest re-export hops, then lexicographic absolute path ({hops} hops); no canonical visibility widening",
+                    class = rejection.class, count = candidates.len()
+                ));
+                route = chosen.clone();
+            }
+        }
+        Some(WrittenTarget {
+            terminal,
+            route,
+            evidence: RouteEvidence { anchors, fallback },
+        })
+    }
+    // Check the chosen path's written edges; a facade does not authorize widening
+    // the hidden canonical modules it intentionally avoids.
     fn accessible_route(&self, need: &mut Need, path: &str, item: &Item, using: &[String]) -> bool {
         let final_path = self.final_path(path, item);
         let Some(context) = self.final_contexts.get(final_path) else {
@@ -508,7 +645,7 @@ impl Analyzer<'_> {
         need.reason = DecisionReason::VisibilityScopeUnproved;
         need.category = "visibility_context";
         need.message = format!(
-            "canonical written re-export route segment {segment} is inaccessible or its visibility from the destination is unproved; no route rewrite or module widening is offered"
+            "written re-export route segment {segment} is inaccessible or its visibility from the destination is unproved; no accessible admitted route rewrite or module widening is offered"
         );
         let class = format!("inaccessible_route:{segment}");
         let basis = if let Some(a) = declaration {
@@ -626,10 +763,14 @@ impl Analyzer<'_> {
         path: &str,
         item: &Item,
         using: &[String],
+        facade_access: bool,
     ) -> bool {
         // Attribute-only semantic evidence cannot substitute for binding access.
         // Keep all required visibility/module repairs even if context is discharged later.
-        if self.request.resolve_semantic && !self.visibility(path, item, using, &need.item_ids) {
+        if !facade_access
+            && self.request.resolve_semantic
+            && !self.visibility(path, item, using, &need.item_ids)
+        {
             need.reason = DecisionReason::VisibilityScopeUnproved;
             need.category = "visibility_context";
             need.message =
@@ -670,7 +811,10 @@ impl Analyzer<'_> {
                 return false;
             }
         }
-        if self.request.resolve_semantic || self.visibility(path, item, using, &need.item_ids) {
+        if facade_access
+            || self.request.resolve_semantic
+            || self.visibility(path, item, using, &need.item_ids)
+        {
             return true;
         }
         need.reason = DecisionReason::VisibilityScopeUnproved;
@@ -780,7 +924,7 @@ impl Analyzer<'_> {
         binding: &str,
         target: &str,
         ids: &[String],
-        evidence: (SourceAnchor, Vec<SourceAnchor>),
+        evidence: (SourceAnchor, RouteEvidence),
         references: Vec<SourceAnchor>,
     ) -> bool {
         if let Some(data) = self.parsed.get(path)
@@ -847,8 +991,14 @@ impl Analyzer<'_> {
             .get(path)
             .map(|data| crate::move_plan::ergonomics::import_boundary(data, source))
             .unwrap_or((source.len(), None));
-        let written_reexport = !evidence.1.is_empty();
-        let mut anchors: Vec<_> = std::iter::once(evidence.0).chain(evidence.1).collect();
+        let written_reexport = !evidence.1.anchors.is_empty();
+        let mut rationale = format!(
+            "preserve the unique written binding {binding} through explicit {target}; insert after the last attached use, or before the first attached item"
+        );
+        evidence.1.disclose(&mut rationale);
+        let mut anchors: Vec<_> = std::iter::once(evidence.0)
+            .chain(evidence.1.anchors)
+            .collect();
         if let Some(item) = boundary_item {
             anchors.push(anchor(self.files, path, &item.span.range));
         }
@@ -862,9 +1012,27 @@ impl Analyzer<'_> {
         };
         let text = import_text(target, binding);
         self.add(Repair {
-            path: path.into(), range: span(at, at), after: text, kind: "import_insert", written_reexport,
-            target: RewriteTarget::Synthesis { path: path.into(), slot: "import".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(binding.into()) },
-            item_ids: ids.to_vec(), anchors, rationale: format!("preserve the unique written binding {binding} through explicit {target}; insert after the last attached use, or before the first attached item; boundary ending {eol:?} is separately audited"), declaration_for: None, references, caller_override: false, import_module: None, import_scope: None,
+            path: path.into(),
+            range: span(at, at),
+            after: text,
+            kind: "import_insert",
+            written_reexport,
+            target: RewriteTarget::Synthesis {
+                path: path.into(),
+                slot: "import".into(),
+                items: self.contributors(ids),
+                boundary_role: None,
+                parent_path: None,
+                binding: Some(binding.into()),
+            },
+            item_ids: ids.to_vec(),
+            anchors,
+            rationale: format!("{rationale}; boundary ending {eol:?} is separately audited"),
+            declaration_for: None,
+            references,
+            caller_override: false,
+            import_module: None,
+            import_scope: None,
         });
         true
     }
@@ -975,8 +1143,8 @@ impl Analyzer<'_> {
             import_scope: None,
         });
     }
-    fn path_evidence(&mut self, need: &Need, anchors: &[SourceAnchor]) {
-        if anchors.is_empty() {
+    fn path_evidence(&mut self, need: &Need, evidence: &RouteEvidence) {
+        if evidence.anchors.is_empty() {
             return;
         }
         if let Some(repair) = self.repairs.iter_mut().find(|r| {
@@ -986,7 +1154,8 @@ impl Analyzer<'_> {
                 && r.range.end_byte >= need.range.end_byte
         }) {
             repair.written_reexport = true;
-            for a in anchors {
+            self.descriptor_bytes += evidence.disclose(&mut repair.rationale);
+            for a in &evidence.anchors {
                 if !repair.anchors.contains(a) {
                     self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
                     if self.descriptor_bytes > 128 * 1024 * 1024 {
@@ -996,6 +1165,7 @@ impl Analyzer<'_> {
                     repair.anchors.push(a.clone());
                 }
             }
+            self.exceeded |= self.descriptor_bytes > 128 * 1024 * 1024;
         }
     }
     fn import_references(
@@ -1157,7 +1327,7 @@ impl Analyzer<'_> {
         let repair_start = self.repairs.len();
         let mut mappings = Vec::new();
         let mut declarations = Vec::new();
-        let mut reexports = Vec::new();
+        let mut reexports = RouteEvidence::default();
         for leaf in &leaves {
             let Some(old) = self.resolve_use(&need.path, &module, node, &leaf.path) else {
                 let first = leaf.path.split("::").next().unwrap_or("");
@@ -1181,26 +1351,31 @@ impl Analyzer<'_> {
                 return false;
             };
             // Public exposures of moved items remain separate API decisions.
-            let (terminal, hops) = if leaf.public {
-                (old.clone(), Vec::new())
+            let resolved = if leaf.public {
+                WrittenTarget {
+                    terminal: old.clone(),
+                    route: self.mapped(&old),
+                    evidence: RouteEvidence::default(),
+                }
             } else {
                 let Some(resolved) = self.written_target(need, &old, &using) else {
                     return false;
                 };
                 resolved
             };
-            declarations.push(self.declaration(&terminal));
-            for a in hops {
-                if !reexports.contains(&a) {
-                    self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
-                    if self.descriptor_bytes > 128 * 1024 * 1024 {
-                        self.exceeded = true;
-                        return false;
-                    }
-                    reexports.push(a);
-                }
+            declarations.push((
+                self.declaration(&resolved.terminal),
+                !resolved.evidence.fallback.is_empty(),
+            ));
+            for a in &resolved.evidence.anchors {
+                self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
             }
-            let new = self.mapped(&terminal);
+            if self.descriptor_bytes > 128 * 1024 * 1024 {
+                self.exceeded = true;
+                return false;
+            }
+            reexports.merge(resolved.evidence);
+            let new = resolved.route;
             if old != new {
                 let parent = node.parent().expect("use scope");
                 let scope = (parent.kind() == "block")
@@ -1306,8 +1481,10 @@ impl Analyzer<'_> {
                 };
                 if let Some(replacement) = replacement {
                     self.source_repair(need, prefix_range.clone(), replacement, "use_path");
-                    for (p, i) in declarations.iter().flatten() {
-                        if !self.visibility_need(need, p, i, &using) {
+                    for (declaration, facade) in &declarations {
+                        if let Some((p, i)) = declaration
+                            && !self.visibility_need(need, p, i, &using, *facade)
+                        {
                             return false;
                         }
                     }
@@ -1316,8 +1493,15 @@ impl Analyzer<'_> {
                 }
             }
         }
-        for ((leaf, (old, new)), declaration) in leaves.iter().zip(mappings).zip(declarations) {
+        for ((leaf, (old, new)), (declaration, facade)) in
+            leaves.iter().zip(mappings).zip(declarations)
+        {
             if old == new && module == using {
+                if let Some((p, i)) = declaration
+                    && !self.visibility_need(need, &p, &i, &using, facade)
+                {
+                    return false;
+                }
                 continue;
             }
             if leaf.public {
@@ -1404,7 +1588,7 @@ impl Analyzer<'_> {
                 }
             }
             if let Some((p, i)) = declaration
-                && !self.visibility_need(need, &p, &i, &using)
+                && !self.visibility_need(need, &p, &i, &using, facade)
             {
                 return false;
             }
@@ -1412,8 +1596,8 @@ impl Analyzer<'_> {
         self.use_evidence(repair_start, &reexports);
         true
     }
-    fn use_evidence(&mut self, start: usize, anchors: &[SourceAnchor]) {
-        if anchors.is_empty() {
+    fn use_evidence(&mut self, start: usize, evidence: &RouteEvidence) {
+        if evidence.anchors.is_empty() {
             return;
         }
         for repair in &mut self.repairs[start..] {
@@ -1424,7 +1608,8 @@ impl Analyzer<'_> {
                 continue;
             }
             repair.written_reexport = true;
-            for a in anchors {
+            self.descriptor_bytes += evidence.disclose(&mut repair.rationale);
+            for a in &evidence.anchors {
                 if !repair.anchors.contains(a) {
                     self.descriptor_bytes += a.path.len() + a.expected_text.len() + 128;
                     if self.descriptor_bytes > 128 * 1024 * 1024 {
@@ -1434,6 +1619,7 @@ impl Analyzer<'_> {
                     repair.anchors.push(a.clone());
                 }
             }
+            self.exceeded |= self.descriptor_bytes > 128 * 1024 * 1024;
         }
     }
     fn scoped_imports(
@@ -1532,16 +1718,13 @@ impl Analyzer<'_> {
             need.reason = DecisionReason::ExternalOrMissingBinding;
             return false;
         };
-        let Some((old, reexports)) = self.written_target(need, &old, &using) else {
+        let Some(resolved) = self.written_target(need, &old, &using) else {
             return false;
         };
-        let Some((path, binding)) = self.declaration(&old) else {
-            return self.missing_target(need, &old);
+        let Some((path, binding)) = self.declaration(&resolved.terminal) else {
+            return self.missing_target(need, &resolved.terminal);
         };
-        let after = self.mapped(&old);
-        if after == old && old_module == using {
-            return true;
-        }
+        let after = resolved.route;
         if self.constructor_unknown(&binding, node) {
             need.reason = DecisionReason::MemberOrConstructorUnproved;
             need.category = "visibility_context";
@@ -1557,9 +1740,15 @@ impl Analyzer<'_> {
                 after,
                 "path",
             );
-            self.path_evidence(need, &reexports);
+            self.path_evidence(need, &resolved.evidence);
         }
-        self.visibility_need(need, &path, &binding, &using)
+        self.visibility_need(
+            need,
+            &path,
+            &binding,
+            &using,
+            !resolved.evidence.fallback.is_empty(),
+        )
     }
     fn constructor_unknown(&self, item: &Item, reference: Node<'_>) -> bool {
         if item.kind != "struct_item" {
@@ -2223,13 +2412,13 @@ impl Analyzer<'_> {
             let Some(old) = self.imported_target(nearest[0]) else {
                 return false;
             };
-            let Some((old, _)) = self.written_target(need, &old, &using) else {
+            let Some(resolved) = self.written_target(need, &old, &using) else {
                 return false;
             };
-            return if let Some((p, i)) = self.declaration(&old) {
-                self.visibility_need(need, &p, &i, &using)
-            } else if old.starts_with("crate::") {
-                self.missing_target(need, &old)
+            return if let Some((p, i)) = self.declaration(&resolved.terminal) {
+                self.visibility_need(need, &p, &i, &using, !resolved.evidence.fallback.is_empty())
+            } else if resolved.terminal.starts_with("crate::") {
+                self.missing_target(need, &resolved.terminal)
             } else {
                 true
             };
@@ -2272,9 +2461,11 @@ impl Analyzer<'_> {
         } else {
             return false;
         };
-        let Some((old, reexports)) = self.written_target(need, &old, &using) else {
+        let Some(resolved) = self.written_target(need, &old, &using) else {
             return false;
         };
+        let facade = !resolved.evidence.fallback.is_empty();
+        let old = resolved.terminal;
         if let Some((_, binding)) = self.declaration(&old)
             && self.constructor_unknown(&binding, node)
         {
@@ -2285,7 +2476,7 @@ impl Analyzer<'_> {
                     .into();
             return false;
         }
-        let target = self.mapped(&old);
+        let target = resolved.route;
         let same_module = self.declaration(&old).is_some_and(|(p, i)| {
             self.final_contexts
                 .get(self.final_path(&p, &i))
@@ -2299,13 +2490,13 @@ impl Analyzer<'_> {
                     target.clone(),
                     "path",
                 );
-                self.path_evidence(need, &reexports);
+                self.path_evidence(need, &resolved.evidence);
             } else if !self.import(
                 &consumer,
                 name,
                 &target,
                 &need.item_ids,
-                (evidence, reexports),
+                (evidence, resolved.evidence),
                 vec![anchor(
                     self.files,
                     &need.path,
@@ -2321,7 +2512,7 @@ impl Analyzer<'_> {
             }
         }
         if let Some((p, i)) = self.declaration(&old) {
-            self.visibility_need(need, &p, &i, &using)
+            self.visibility_need(need, &p, &i, &using, facade)
         } else if old.starts_with("crate::") {
             self.missing_target(need, &old)
         } else {
