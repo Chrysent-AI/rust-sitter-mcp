@@ -6,6 +6,29 @@ Guidance for all agents (and humans) working in this repository.
 
 After cloning (or if hooks ever seem missing), run `make install-hooks` before your first commit. The tracked hooks in `.githooks/` enforce the project's quality gates on every commit — staged secret scanning, formatting, clippy, tests, dependency policy, and tooling regressions. Commits that bypass or skip the gates (`--no-verify` without maintainer instruction) are not acceptable contributions; CI runs the same core build/test gates (plus secret scanning) and will fail the PR; the staged-content secret scan and the dependency-log rule additionally run in the local hooks.
 
+## Internal identifiers and proprietary names never leak (binding)
+
+Internal tracking identifiers — an uppercase type word plus a number in the
+orchestration harness's epic/story/task/bug style — are harness-internal and
+must never appear on any public or shipped surface: commit messages, PR titles
+and descriptions, issues, `CHANGELOG.md` entries, README or other
+documentation, code comments, test fixture names or contents, and benchmark
+corpora. Describe a change by its content ("block unrepaired glob consumers of
+moved items"), never by its ticket.
+
+The same rule covers names of proprietary internal systems, products, and
+corpora used as test material or benchmarks: name them neutrally ("the target
+application", "the benchmark corpus") in anything tracked by this repository.
+The concrete protected-name list is maintained by the maintainer in the
+untracked file `.githooks/protected-names.local` (one name per line); it is
+deliberately not committed.
+
+The pre-commit hook enforces both classes on staged content and the commit
+message (see `scripts/check-leaked-identifiers.sh`). Apply the same rule
+manually everywhere hooks cannot reach — PRs, issues, external posts — and
+never introduce the identifiers through branch names, worktree directory
+names, tags, or saved artifacts inside the repository.
+
 ## Dependency policy (binding for all work in this repo)
 
 Every change that adds or re-pins a dependency requires a short research step BEFORE the Cargo.toml change lands. No exceptions for "small" or "obvious" deps — the note can be one line, but it must exist.

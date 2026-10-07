@@ -7,7 +7,7 @@ Run from any directory; the default corpus is resolved relative to the script:
 
 ```sh
 scripts/replay-unlocks ~/.cargo/bin/rust-sitter-mcp target/debug/rust-sitter-mcp
-scripts/replay-unlocks ~/.cargo/bin/rust-sitter-mcp target/debug/rust-sitter-mcp opi
+scripts/replay-unlocks ~/.cargo/bin/rust-sitter-mcp target/debug/rust-sitter-mcp target
 python3 scripts/test-replay-unlocks.py
 ```
 
@@ -15,7 +15,7 @@ The optional positional filter matches batch IDs, codebases and human labels.
 `--json` emits the same measurements as structured JSON, including original
 category/reason counts, coverage and display omissions. `--timeout 120` bounds
 each JSON-RPC request. `--corpus DIR` selects a corpus directory. Use
-`--repo target=/absolute/path/to/opi` (repeatable for other codebases) to relocate
+`--repo target=/absolute/path/to/target` (repeatable for other codebases) to relocate
 the original snapshots without regenerating anchors. Missing repositories,
 changed frozen source hashes, stale anchors, incomplete analysis, RPC failures
 and timeouts exit nonzero: they are **not** reported as zero unlocks.
@@ -105,12 +105,12 @@ Candidate debug binary, rebuilt before replay:
 | Batch | baseline-off | baseline-on | candidate-off | candidate-on |
 | --- | --- | --- | --- | --- |
 | duct-path-helpers-3 | false | false | false | false |
-| opi-app-lifecycle-2 | false | false | false | false |
-| opi-app-redraw-3 | false | false | false | false |
-| opi-headless-args-30 | false | false | false | false |
-| opi-headless-bounded-2 | false | false | false | false |
-| opi-main-config-3 | false | false | false | false |
-| opi-main-mcp-3 | false | false | false | false |
+| target-app-lifecycle-2 | false | false | false | false |
+| target-app-redraw-3 | false | false | false | false |
+| target-headless-args-30 | false | false | false | false |
+| target-headless-bounded-2 | false | false | false | false |
+| target-main-config-3 | false | false | false | false |
+| target-main-mcp-3 | false | false | false | false |
 | rust-sitter-template-types-3 | false | false | false | false |
 
 Target app: **0/6 applicable** in all four variants. Across all three codebases:

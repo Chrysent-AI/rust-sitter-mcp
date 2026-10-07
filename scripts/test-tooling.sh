@@ -7,6 +7,8 @@ trap 'rm -rf "$scratch"' EXIT
 repo="$scratch/checkout with spaces"
 mkdir -p "$repo" "$scratch/bin"
 cp -R "$root/.githooks" "$root/scripts" "$root/src" "$repo/"
+# The protected-name list is untracked by design; fresh checkouts lack it.
+rm -f "$repo/.githooks/protected-names.local"
 cp "$root/Cargo.toml" "$root/Cargo.lock" "$root/rust-toolchain.toml" "$root/Makefile" "$repo/"
 mkdir "$repo/docs"
 cp "$root/docs/dependency-log.md" "$repo/docs/"
