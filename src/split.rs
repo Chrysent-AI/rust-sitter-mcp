@@ -961,7 +961,7 @@ fn build(
             "source_path",
         ));
     };
-    let source_data = items::parse(
+    let mut source_data = items::parse(
         source,
         request.limits.text_bytes,
         controls.deadline,
@@ -970,8 +970,30 @@ fn build(
     )?;
     result.account(descriptor_bytes(&(
         &source_data.items,
+        &source_data.associated_items,
         &source_data.trivia,
     ))?)?;
+    // Keep overlapping enclosing impls in the retain set while partitioning their members.
+    for item in &mut source_data.items {
+        if item.kind == "impl_item"
+            && source_data.associated_items.iter().any(|m| {
+                m.enclosing_impl
+                    .as_ref()
+                    .is_some_and(|p| p.range == item.span.range)
+            })
+        {
+            item.eligibility = "context_sensitive".into();
+            item.reasons
+                .push("partition_associated_units_instead".into());
+        }
+    }
+    let mut advice_units: Vec<_> = source_data
+        .items
+        .iter()
+        .chain(&source_data.associated_items)
+        .cloned()
+        .collect();
+    advice_units.sort_by_key(|i| (i.span.range.start_byte, i.span.range.end_byte));
     let clean = trivia::move_clean(&source_data.tree, controls.deadline, controls.cancelled)?;
     result.integrity.syntax = if clean {
         "input_checked"
@@ -979,20 +1001,17 @@ fn build(
         "input_recovered"
     }
     .into();
-    result.counts.inventory_items = source_data.items.len();
-    result.counts.eligible_items = source_data
-        .items
+    result.counts.inventory_items = advice_units.len();
+    result.counts.eligible_items = advice_units
         .iter()
         .filter(|i| i.eligibility == "supported_unit")
         .count();
-    result.inventory = source_data
-        .items
+    result.inventory = advice_units
         .iter()
         .take(request.max_items)
         .cloned()
         .collect();
-    result.draft_eligibility.membership_complete =
-        result.inventory.len() == source_data.items.len();
+    result.draft_eligibility.membership_complete = result.inventory.len() == advice_units.len();
     let lines = Lines::new(&source.source);
     let physical_lines = source.source.bytes().filter(|b| *b == b'\n').count()
         + usize::from(!source.source.is_empty() && !source.source.ends_with('\n'));
@@ -1050,7 +1069,7 @@ fn build(
     if !result.draft_eligibility.membership_complete {
         result.omit(
             "inventory_items",
-            source_data.items.len() - result.inventory.len(),
+            advice_units.len() - result.inventory.len(),
         );
         result.incomplete("max_items");
         return Ok(());

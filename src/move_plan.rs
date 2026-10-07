@@ -36,11 +36,18 @@ pub enum Destination {
         path: String,
         parent_path: String,
     },
+    ExistingImpl {
+        path: String,
+        implementation: SourceAnchor,
+        before_item: Option<SourceAnchor>,
+    },
 }
 impl Destination {
     pub(crate) fn path(&self) -> &str {
         match self {
-            Self::Existing { path, .. } | Self::NewSibling { path, .. } => path,
+            Self::Existing { path, .. }
+            | Self::NewSibling { path, .. }
+            | Self::ExistingImpl { path, .. } => path,
         }
     }
 }
@@ -49,6 +56,8 @@ impl Destination {
 #[serde(deny_unknown_fields)]
 pub struct Move {
     pub item: SourceAnchor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enclosing_impl: Option<SourceAnchor>,
     pub destination: Destination,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1243,11 +1252,12 @@ fn validate_anchor<'a>(
     if !parsed[&value.path]
         .items
         .iter()
+        .chain(&parsed[&value.path].associated_items)
         .any(|i| i.span.range == value.range)
     {
         return Err(error(
             "INVALID_ITEM_SELECTION",
-            "anchor must identify one whole direct top-level item",
+            "anchor must identify one whole top-level or associated item",
             field,
         ));
     }
@@ -1416,9 +1426,45 @@ fn build(
         let item = parsed[&entry.item.path]
             .items
             .iter()
+            .chain(&parsed[&entry.item.path].associated_items)
             .find(|i| i.span.range == entry.item.range)
             .expect("validated item")
             .clone();
+        if let Some(implementation) = &item.enclosing_impl {
+            if entry.enclosing_impl.as_ref() != Some(&implementation.anchor) {
+                return Err(error(
+                    "INVALID_IMPL_SELECTION",
+                    "associated items require the exact enclosing_impl anchor",
+                    &field,
+                ));
+            }
+            if !item.reasons.is_empty()
+                || !matches!(item.visibility_key, "private" | "pub(crate)" | "pub")
+            {
+                result.blocker(
+                    "UNSUPPORTED_ASSOCIATED_ITEM",
+                    "inherent member exclusion or unsupported visibility",
+                    Some(&entry.item.path),
+                    Some(entry.item.range.clone()),
+                );
+                result.structural_decision(
+                    "associated_context",
+                    DecisionReason::UnsupportedUnitKind,
+                    vec![entry.item.clone(), implementation.anchor.clone()],
+                    vec![item.id.clone()],
+                    &format!(
+                        "associated unit exclusions: {:?}; visibility {}",
+                        item.reasons, item.visibility
+                    ),
+                )?;
+            }
+        } else if entry.enclosing_impl.is_some() {
+            return Err(error(
+                "INVALID_IMPL_SELECTION",
+                "top-level selection cannot supply enclosing_impl",
+                &field,
+            ));
+        }
         let destination = entry.destination.path();
         scope::normalized_path(destination).map_err(|mut e| {
             e.field = Some(format!("moves[{index}].destination.path"));
@@ -1432,6 +1478,78 @@ fn build(
             ));
         }
         match &entry.destination {
+            Destination::ExistingImpl {
+                path,
+                implementation,
+                before_item,
+            } => {
+                if implementation.path != *path {
+                    return Err(error(
+                        "STALE_DESTINATION",
+                        "implementation belongs to another file",
+                        &field,
+                    ));
+                }
+                validate_anchor(implementation, &files, &parsed, "STALE_DESTINATION", &field)?;
+                let source_impl = item.enclosing_impl.as_ref().ok_or_else(|| {
+                    error(
+                        "INVALID_DESTINATION",
+                        "existing_impl requires an associated item",
+                        &field,
+                    )
+                })?;
+                let target = parsed[path]
+                    .tree
+                    .root_node()
+                    .named_descendant_for_byte_range(
+                        implementation.range.start_byte,
+                        implementation.range.end_byte,
+                    )
+                    .expect("validated impl");
+                let target_impl =
+                    items::associated::identity(&files[path], target, &parsed[path].trivia)
+                        .filter(|_| target.kind() == "impl_item")
+                        .ok_or_else(|| {
+                            error(
+                                "INVALID_DESTINATION",
+                                "implementation must anchor a whole top-level impl",
+                                &field,
+                            )
+                        })?;
+                if source_impl.header != target_impl.header || !target_impl.exclusions.is_empty() {
+                    result.blocker(
+                        "IMPL_HEADER_MISMATCH",
+                        "impl headers must be byte-identical and within the inherent subset",
+                        Some(path),
+                        Some(implementation.range.clone()),
+                    );
+                    result.structural_decision(
+                        "associated_context",
+                        DecisionReason::UnsupportedUnitKind,
+                        vec![entry.item.clone(), implementation.clone()],
+                        vec![item.id.clone()],
+                        "destination impl header differs or is excluded",
+                    )?;
+                }
+                if let Some(before) = before_item {
+                    validate_anchor(before, &files, &parsed, "STALE_DESTINATION", &field)?;
+                    if before.path != *path
+                        || !parsed[path].associated_items.iter().any(|i| {
+                            i.span.range == before.range
+                                && i.enclosing_impl
+                                    .as_ref()
+                                    .is_some_and(|p| p.range == implementation.range)
+                        })
+                        || request.moves.iter().any(|m| m.item == *before)
+                    {
+                        return Err(error(
+                            "INVALID_DESTINATION",
+                            "before_item must be an unselected member of the destination impl",
+                            &field,
+                        ));
+                    }
+                }
+            }
             Destination::Existing { path, before_item } => {
                 if !files.contains_key(path) {
                     return Err(error(
@@ -1749,7 +1867,10 @@ fn build(
             }
             None => new.is_some_and(|e| items::public_chain(e, &parsed)),
         };
-        if selection.item.visibility_key == "pub" && new_exposure {
+        if selection.item.enclosing_impl.is_none()
+            && selection.item.visibility_key == "pub"
+            && new_exposure
+        {
             result.blocker(
                 "REEXPORT_DEPENDENCY",
                 "destination would expose a changed public path; explicit API decision required",
@@ -1784,7 +1905,9 @@ fn build(
                 (deadline, cancelled),
             )?;
             let (path, role) = match &selection.destination {
-                Destination::Existing { path, .. } => (path, items::ChainRole::Destination),
+                Destination::Existing { path, .. } | Destination::ExistingImpl { path, .. } => {
+                    (path, items::ChainRole::Destination)
+                }
                 Destination::NewSibling { parent_path, .. } => {
                     (parent_path, items::ChainRole::DeclarationParent)
                 }
@@ -2200,12 +2323,15 @@ fn collect_trivia(
             let previous = data
                 .items
                 .iter()
-                .rev()
-                .find(|i| i.span.range.end_byte <= t.range.start);
+                .chain(&data.associated_items)
+                .filter(|i| i.span.range.end_byte <= t.range.start)
+                .max_by_key(|i| i.span.range.end_byte);
             let next = data
                 .items
                 .iter()
-                .find(|i| i.span.range.start_byte >= t.range.end);
+                .chain(&data.associated_items)
+                .filter(|i| i.span.range.start_byte >= t.range.end)
+                .min_by_key(|i| i.span.range.start_byte);
             let choice_relevant = owned.is_some()
                 || selected.iter().any(|s| {
                     s.source == *path
@@ -2412,6 +2538,20 @@ fn collect_trivia(
         let mut prefix = extra.remove(&index).unwrap_or_default();
         prefix.sort_by(|a, b| (&a.path, &a.range).cmp(&(&b.path, &b.range)));
         prefix.extend(merged);
+        if s.item.enclosing_impl.is_some() {
+            for run in &mut prefix {
+                let source = &files[&run.path].source;
+                let line_start = source[..run.range.start_byte]
+                    .rfind('\n')
+                    .map_or(0, |at| at + 1);
+                if source[line_start..run.range.start_byte]
+                    .bytes()
+                    .all(|b| matches!(b, b' ' | b'\t'))
+                {
+                    run.range.start_byte = line_start;
+                }
+            }
+        }
         s.runs = prefix;
     }
     let mut consumed: Vec<_> = selected.iter().flat_map(|s| s.runs.iter()).collect();
@@ -2646,6 +2786,62 @@ fn copy_run(
     });
 }
 #[allow(clippy::too_many_arguments)] // The original-coordinate assembly has one immutable corpus.
+fn impl_boundary(
+    request: &MoveRequest,
+    used: &mut BTreeSet<usize>,
+    result: &mut MoveEnvelope,
+    insertion: &mut Insertion,
+    selected: &[Selection],
+    contributors: &[usize],
+    role: &str,
+    text: &str,
+) -> Result<(), DomainError> {
+    let target = RewriteTarget::Synthesis {
+        path: insertion.path.clone(),
+        slot: "impl_wrapper".into(),
+        items: contributors
+            .iter()
+            .map(|i| request.moves[*i].item.clone())
+            .collect(),
+        boundary_role: Some(role.into()),
+        parent_path: None,
+        binding: None,
+    };
+    let ids: Vec<_> = contributors
+        .iter()
+        .map(|i| selected[*i].item.id.clone())
+        .collect();
+    let (id, after) = rewrite(
+        request,
+        used,
+        result,
+        target,
+        "impl_wrapper",
+        text,
+        &ids,
+        None,
+    )?;
+    let audit = result.plan.rewrites.last_mut().expect("wrapper audit");
+    audit.anchors = contributors
+        .iter()
+        .filter_map(|i| {
+            selected[*i]
+                .item
+                .enclosing_impl
+                .as_ref()
+                .map(|p| p.anchor.clone())
+        })
+        .collect();
+    audit.rationale = "synthesize only the identical written inherent impl header and braces; copied members are never reindented or pretty-printed".into();
+    let start = insertion.text.len();
+    insertion.text.push_str(&after);
+    insertion
+        .rewrites
+        .push((id, range(start, insertion.text.len())));
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // The original-coordinate assembly has one immutable corpus.
 fn assemble(
     request: &MoveRequest,
     files: &BTreeMap<String, FileSnapshot>,
@@ -2716,6 +2912,26 @@ fn assemble(
                         .unwrap_or(before.range.start_byte)
                 } else {
                     files[path].source.len()
+                }
+            }
+            Destination::ExistingImpl {
+                path,
+                implementation,
+                before_item,
+            } => {
+                if let Some(before) = before_item {
+                    parsed[path]
+                        .trivia
+                        .iter()
+                        .filter(|t| {
+                            t.owned_by(before.range.start_byte..before.range.end_byte)
+                                && t.range.end <= before.range.start_byte
+                        })
+                        .map(|t| t.range.start)
+                        .min()
+                        .unwrap_or(before.range.start_byte)
+                } else {
+                    implementation.range.end_byte - 1
                 }
             }
             Destination::NewSibling { .. } => 0,
@@ -2916,9 +3132,54 @@ fn assemble(
             creations.get_mut(&created_path).expect("creation").link =
                 Some(DeclarationLink::Synthesized { rewrite_id: id });
         }
+        let mut active_wrapper: Option<(String, Vec<usize>)> = None;
         for index in indexes.iter().copied() {
             items::check(deadline, cancelled)?;
             let s = &selected[index];
+            let header = s
+                .item
+                .enclosing_impl
+                .as_ref()
+                .filter(|_| !matches!(s.destination, Destination::ExistingImpl { .. }))
+                .map(|p| p.header.clone());
+            if active_wrapper.as_ref().map(|p| &p.0) != header.as_ref() {
+                if let Some((_, contributors)) = active_wrapper.take() {
+                    impl_boundary(
+                        request,
+                        &mut used,
+                        result,
+                        &mut insertion,
+                        selected,
+                        &contributors,
+                        "close",
+                        &format!("{eol}}}{eol}"),
+                    )?;
+                }
+                if let Some(header) = header {
+                    let contributors: Vec<_> = indexes
+                        .iter()
+                        .copied()
+                        .filter(|i| {
+                            selected[*i]
+                                .item
+                                .enclosing_impl
+                                .as_ref()
+                                .is_some_and(|p| p.header == header)
+                        })
+                        .collect();
+                    impl_boundary(
+                        request,
+                        &mut used,
+                        result,
+                        &mut insertion,
+                        selected,
+                        &contributors,
+                        "open",
+                        &format!("{eol}{header}{{{eol}"),
+                    )?;
+                    active_wrapper = Some((header, contributors));
+                }
+            }
             insertion.item_ids.push(s.item.id.clone());
             for run in &s.runs {
                 items::check(deadline, cancelled)?;
@@ -3010,6 +3271,18 @@ fn assemble(
                 }
                 copy_run(&mut insertion, files, &run.path, cursor, run.range.end_byte);
             }
+        }
+        if let Some((_, contributors)) = active_wrapper.take() {
+            impl_boundary(
+                request,
+                &mut used,
+                result,
+                &mut insertion,
+                selected,
+                &contributors,
+                "close",
+                &format!("{eol}}}{eol}"),
+            )?;
         }
         if (at < original.len() || !files.contains_key(&path) || has_declarations)
             && !insertion.text.is_empty()

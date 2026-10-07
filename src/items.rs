@@ -1,4 +1,5 @@
 //! Written top-level inventory and ordinary module evidence. No manifest or semantic resolver.
+pub(crate) mod associated;
 mod attributes;
 mod chain;
 pub(crate) use attributes::{BUILTIN_DERIVES, context_independent_attribute, derive_names};
@@ -54,10 +55,13 @@ pub struct Item {
     pub eligibility: String,
     pub reasons: Vec<String>,
     pub signal_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing_impl: Option<associated::ImplIdentity>,
 }
 pub struct ParsedFile {
     pub tree: Tree,
     pub items: Vec<Item>,
+    pub associated_items: Vec<Item>,
     pub trivia: Vec<trivia::Trivia>,
 }
 pub fn check(deadline: Instant, cancelled: &AtomicBool) -> Result<(), DomainError> {
@@ -171,11 +175,21 @@ pub fn parse(
                 .map(str::to_owned)
                 .collect(),
             signal_ids: Vec::new(),
+            enclosing_impl: None,
         });
     }
+    let associated_items = associated::inventory(
+        file,
+        &tree,
+        &trivia,
+        text_bytes,
+        (deadline, cancelled),
+        observed,
+    )?;
     Ok(ParsedFile {
         tree,
         items,
+        associated_items,
         trivia,
     })
 }
@@ -907,6 +921,8 @@ pub fn dependencies(
                 check(deadline, cancelled)?;
                 bound_needs(&needs, &mut seen_needs, analysis_bytes)?;
                 if destination == other_destination
+                    && item.enclosing_impl.is_none()
+                    && other.enclosing_impl.is_none()
                     && other.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name)
                 {
                     let node = parsed[path]
@@ -956,6 +972,7 @@ pub fn dependencies(
             continue;
         }
         if let Some(name) = item.name.as_deref()
+            && item.enclosing_impl.is_none()
             && data
                 .items
                 .iter()
@@ -977,7 +994,8 @@ pub fn dependencies(
         if item.visibility_key == "restricted" {
             needs.push(need(DecisionReason::VisibilityScopeUnproved, "visibility_context", source_path, node, "restricted visibility changes lexical scope; explicit repair is outside dependency-free moves"));
         }
-        let publicly_exposed = item.visibility_key == "pub"
+        let publicly_exposed = item.enclosing_impl.is_none()
+            && item.visibility_key == "pub"
             && contexts
                 .get(source_path)
                 .is_some_and(|e| public_chain(e, parsed));
@@ -1011,6 +1029,21 @@ pub fn dependencies(
         // A linear absence check avoids searching every lexical block for names that
         // cannot be local. A positive spelling still goes through the scoped checker.
         let mut possible_locals = std::collections::BTreeSet::new();
+        if item.enclosing_impl.is_some()
+            && let Some(parameters) = node
+                .parent()
+                .and_then(|body| body.parent())
+                .and_then(|implementation| implementation.child_by_field_name("type_parameters"))
+        {
+            for i in 0..parameters.named_child_count() {
+                if let Some(name) = parameters
+                    .named_child(i as u32)
+                    .and_then(|parameter| parameter.child_by_field_name("name"))
+                {
+                    possible_locals.insert(source[name.byte_range()].trim_start_matches("r#"));
+                }
+            }
+        }
         let mut stack = vec![(node, false)];
         while let Some((current, in_pattern)) = stack.pop() {
             check(deadline, cancelled)?;
@@ -1120,14 +1153,17 @@ pub fn dependencies(
                     ));
                 }
                 let name = source[current.byte_range()].trim_start_matches("r#");
-                let self_context =
-                    name == "Self" && matches!(item.kind.as_str(), "impl_item" | "trait_item");
-                let own = item.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name);
+                let self_context = name == "Self"
+                    && (item.enclosing_impl.is_some()
+                        || matches!(item.kind.as_str(), "impl_item" | "trait_item"));
+                let own = item.enclosing_impl.is_none()
+                    && item.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name);
                 let bound = possible_locals.contains(name)
                     && lexical::local(current, node, source, name, deadline, cancelled);
                 let co_moved = selected.iter().any(|(p, other, dest)| {
                     p == source_path
                         && dest == destination
+                        && other.enclosing_impl.is_none()
                         && other.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name)
                 });
                 if !self_context && !own && !bound && !co_moved {
@@ -1155,7 +1191,9 @@ pub fn dependencies(
                 stack.push(current.named_child(i as u32).expect("child"));
             }
         }
-        if let Some(name) = &item.name {
+        if let Some(name) = &item.name
+            && item.enclosing_impl.is_none()
+        {
             let name = name.trim_start_matches("r#");
             // Namespace distinction is deliberately conservative; collision is never silently renamed.
             if let Some(dest) = parsed.get(destination) {

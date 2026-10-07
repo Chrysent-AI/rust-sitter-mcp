@@ -843,6 +843,12 @@ pub(super) fn risks(
         let mut risks: BTreeMap<(&str, DecisionReason), Vec<ByteRange>> = BTreeMap::new();
         // Reserve transient typed risk records before accumulating their ranges.
         result.account((item.attributes.len() + 3).saturating_mul(128))?;
+        if item.enclosing_impl.is_some() && !item.reasons.is_empty() {
+            risks.insert(
+                ("associated_context", DecisionReason::UnsupportedUnitKind),
+                vec![item.span.range.clone()],
+            );
+        }
         if let Some(category) = items::category(&item.kind) {
             risks.insert(
                 (category, DecisionReason::UnsupportedUnitKind),

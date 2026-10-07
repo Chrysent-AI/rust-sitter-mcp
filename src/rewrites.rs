@@ -1,4 +1,5 @@
 //! Bounded written-binding repairs. Evidence is syntactic, never symbol resolution.
+mod associated;
 use crate::{
     items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile},
     move_plan::{MoveRequest, RewriteTarget},
@@ -2651,7 +2652,7 @@ pub(crate) fn analyze(
             }
         }
     }
-    let mut remaining = Vec::new();
+    let mut remaining = analyzer.associated()?;
     for mut need in needs {
         items::check(controls.0, controls.1)?;
         if !analyzer.repair(&mut need) {
