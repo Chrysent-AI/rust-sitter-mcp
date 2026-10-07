@@ -119,6 +119,163 @@ fn prelude_only_batch_opt_in_is_lossless_labeled_and_counted() {
 }
 
 #[test]
+fn qualified_prelude_signatures_are_opt_in_lossless_and_nonsemantic() {
+    let selected = "fn selected(input: std::vec::Vec<std::string::String>) -> std::result::Result<std::option::Option<std::boxed::Box<u8>>, u8> { loop {} }";
+    let repo = fixture(selected);
+    for destination in [existing(), new("cases/layout/qualified.rs")] {
+        let args = request(&repo, json!([entry(&repo, selected, destination.clone())]));
+        let default = run(&repo, args.clone());
+        withheld(&default);
+        let mut off = args.clone();
+        off["assume_standard_prelude"] = json!(false);
+        assert_eq!(default, run(&repo, off));
+        let result = run(&repo, enabled(args));
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        assert_eq!(result["coverage"]["standard_prelude"], 5);
+        let proofs = result["plan"]["binding_proofs"].as_array().unwrap();
+        assert_eq!(proofs.len(), 5);
+        for path in [
+            "std::option::Option",
+            "std::result::Result",
+            "std::boxed::Box",
+            "std::vec::Vec",
+            "std::string::String",
+        ] {
+            assert_eq!(proof_count(&result, path), 1, "{result}");
+            let proof = proofs.iter().find(|p| p["standard_path"] == path).unwrap();
+            assert_eq!(proof["class"], "standard_prelude");
+            let anchor = &proof["anchor"];
+            let start = anchor["range"]["start_byte"].as_u64().unwrap() as usize;
+            let end = anchor["range"]["end_byte"].as_u64().unwrap() as usize;
+            assert_eq!(&selected[start..end], path);
+            assert_eq!(anchor["expected_text"], path);
+            let basis = proof["basis"].as_str().unwrap();
+            assert!(basis.contains("caller enabled assume_standard_prelude"));
+            assert!(basis.contains(&format!("fully-qualified type-position {path}")));
+            assert!(basis.contains("no macro hygiene claim"));
+            assert!(basis.contains("semantic checking not performed"));
+        }
+        assert!(
+            result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| { !r["kind"].as_str().unwrap().starts_with("import") })
+        );
+        let copy = apply(&repo, &result);
+        assert!(
+            fs::read_to_string(copy.0.join(destination["path"].as_str().unwrap()))
+                .unwrap()
+                .contains(selected)
+        );
+    }
+}
+
+#[test]
+fn qualified_prelude_keeps_both_overlay_shadow_and_context_vetoes() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for path in ["source.rs", "destination.rs"] {
+        for prefix in [
+            "use unknown as Result;\n",
+            "use std::result::Result;\n",
+            "struct Result;\n",
+            "mod std {}\n",
+            "use unknown as std;\n",
+            "use unknown::*;\n",
+            "#![no_implicit_prelude]\n",
+            "introduce!();\n",
+            "use unknown as Debug;\n#[derive(Debug)] struct Other;\n",
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            repo.write(&file, &format!("{prefix}{old}"));
+            let mut args = enabled(request(&repo, json!([entry(&repo, selected, existing())])));
+            let result = run(&repo, args.clone());
+            withheld(&result);
+            assert_eq!(
+                proof_count(&result, "std::result::Result"),
+                0,
+                "{path}: {prefix}: {result}"
+            );
+            args["assume_standard_prelude"] = json!(false);
+            assert_eq!(refusal_behavior(result), refusal_behavior(run(&repo, args)));
+        }
+    }
+    for selected in [
+        "fn selected() { use unknown as Result; let value: std::result::Result<u8, u8>; }",
+        "fn selected() { introduce!(); let value: std::result::Result<u8, u8>; }",
+        "fn selected() { let value: std::result::Result<u8, u8>; introduce!(); }",
+        "fn selected() { let value: std::result::Result<u8, u8>; #[introduce] struct Other; }",
+    ] {
+        let repo = fixture(selected);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        assert_eq!(proof_count(&result, "std::result::Result"), 0, "{result}");
+    }
+}
+
+#[test]
+fn qualified_prelude_final_batch_arrivals_and_planned_imports_veto() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for other in ["struct Result;", "struct Other { value: Result<u8, u8> }"] {
+        let repo = fixture(selected);
+        repo.write(
+            "cases/layout/other.rs",
+            &format!("use std::result::Result;\n{other}\n"),
+        );
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source;\nmod destination;\nmod other;\n",
+        );
+        let result = run(
+            &repo,
+            enabled(request(
+                &repo,
+                json!([
+                    entry(&repo, selected, existing()),
+                    {"item":anchor(&repo, "cases/layout/other.rs", other), "destination":existing()},
+                ]),
+            )),
+        );
+        withheld(&result);
+        assert_eq!(proof_count(&result, "std::result::Result"), 0, "{result}");
+    }
+}
+
+#[test]
+fn qualified_prelude_does_not_admit_other_paths_or_value_positions() {
+    for selected in [
+        "fn selected() -> std::collections::HashMap<u8, u8> { loop {} }",
+        "fn selected() -> core::result::Result<u8, u8> { loop {} }",
+        "fn selected() -> result::Result<u8, u8> { loop {} }",
+        "fn selected() -> std::result::Other<u8, u8> { loop {} }",
+        "fn selected() -> std::Result<u8, u8> { loop {} }",
+        "fn selected() -> crate::std::result::Result<u8, u8> { loop {} }",
+        "fn selected() -> ::std::result::Result<u8, u8> { loop {} }",
+        "fn selected() -> Other<u8, u8> { loop {} }",
+        "fn selected() { let value = std::vec::Vec::new(); }",
+        "fn selected() { let value = std::option::Option::Some(1); }",
+        "fn selected() { let value = std::string::String; }",
+    ] {
+        let repo = fixture(selected);
+        let mut args = enabled(request(&repo, json!([entry(&repo, selected, existing())])));
+        let result = run(&repo, args.clone());
+        withheld(&result);
+        assert!(
+            result["coverage"].get("standard_prelude").is_none(),
+            "{result}"
+        );
+        args["assume_standard_prelude"] = json!(false);
+        assert_eq!(run(&repo, args), result, "{selected}");
+    }
+}
+
+#[test]
 fn prelude_shadow_refusal_at_source_destination_and_parent() {
     let selected = "struct Record { option: Option<u8> }";
     for (path, prefix) in [
