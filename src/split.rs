@@ -968,6 +968,14 @@ fn build(
         controls.cancelled,
         &mut result.counts.inventory_descriptors,
     )?;
+    source_data.associated_items = items::associated::inventory(
+        source,
+        &source_data.tree,
+        &source_data.trivia,
+        request.limits.text_bytes,
+        (controls.deadline, controls.cancelled),
+        &mut result.counts.inventory_descriptors,
+    )?;
     result.account(descriptor_bytes(&(
         &source_data.items,
         &source_data.associated_items,

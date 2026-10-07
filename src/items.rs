@@ -178,18 +178,10 @@ pub fn parse(
             enclosing_impl: None,
         });
     }
-    let associated_items = associated::inventory(
-        file,
-        &tree,
-        &trivia,
-        text_bytes,
-        (deadline, cancelled),
-        observed,
-    )?;
     Ok(ParsedFile {
         tree,
         items,
-        associated_items,
+        associated_items: Vec::new(),
         trivia,
     })
 }
