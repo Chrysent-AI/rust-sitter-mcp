@@ -480,6 +480,306 @@ fn helper_attributes_on_written_owners_and_shadowed_builtin_derives_refuse() {
     }
 }
 
+const HELPERS: &str = "macro_rules! uuid_id { ($name:ident) => { #[derive(Serialize, Deserialize)] #[serde(transparent)] pub struct $name(Opaque); impl $name { pub fn new() -> Self { loop {} } pub fn read(&self) -> u32 { 1 } } }; }";
+
+fn assumed_request(repo: &Fixture, text: &str) -> Value {
+    let mut args = request(repo, text);
+    args["assume_declared_helpers"] = json!(true);
+    args
+}
+
+#[test]
+fn declared_helpers_are_conditional_identities_with_separate_coverage_and_exact_off_behavior() {
+    for attrs in [
+        "#[derive(Serialize, Deserialize)] #[serde(transparent)]",
+        "#[serde(transparent)] #[derive(Serialize, Deserialize)]",
+        "#[helper]",
+        "#[provider::helper(value)] #[derive(provider::Serialize)]",
+    ] {
+        let definition = HELPERS.replace(
+            "#[derive(Serialize, Deserialize)] #[serde(transparent)]",
+            attrs,
+        );
+        let text = "fn selected(item: ItemId, dispatch: DispatchId) -> ItemId { item }";
+        let repo = fixture(&definition, text);
+        repo.write(
+            "cases/layout/source.rs",
+            &format!("use crate::route::{{ItemId, DispatchId}}; {text}"),
+        );
+        let omitted = run(&repo, request(&repo, text));
+        let mut off = request(&repo, text);
+        off["assume_declared_helpers"] = json!(false);
+        assert_eq!(
+            serde_json::to_string(&omitted).unwrap(),
+            serde_json::to_string(&run(&repo, off)).unwrap()
+        );
+        blocked(&omitted);
+        let value = run(&repo, assumed_request(&repo, text));
+        assert_eq!(value["plan"]["applicable"], true, "{value}");
+        assert_eq!(value["coverage"]["assumed_declared_identity"], 3);
+        assert!(value["coverage"].get("ra_resolved").is_none());
+        assert_eq!(value["plan"]["resolution_coverage"]["decisions"], 3);
+        let proofs = value["plan"]["binding_proofs"].as_array().unwrap();
+        assert_eq!(proofs.len(), 3);
+        for proof in proofs {
+            assert_eq!(proof["class"], "assumed_declared_identity");
+            assert_eq!(proof["classification"], "declaration_identity");
+            let basis = proof["basis"].as_str().unwrap();
+            for statement in [
+                "registered derive helper",
+                "identity assumed with the type",
+                "not engine-classified",
+                "no procedural expansion, macro hygiene",
+                "compilation or equivalence claims",
+            ] {
+                assert!(basis.contains(statement), "{proof}");
+            }
+            for key in ["declaration", "final_declaration"] {
+                assert_eq!(
+                    proof[key]["declarative_macro"]["definition"]["expected_text"],
+                    definition
+                );
+                let name = proof[key]["anchor"]["expected_text"].as_str().unwrap();
+                assert_eq!(
+                    proof[key]["declarative_macro"]["invocation"]["expected_text"],
+                    format!("uuid_id!({name});")
+                );
+            }
+            assert!(proof["original_receiver"].is_null());
+            assert!(proof["final_original_receiver"].is_null());
+        }
+        let evaluations = value["plan"]["resolution_coverage"]["context_evaluations"]
+            .as_array()
+            .unwrap();
+        for revision in ["original", "final"] {
+            assert!(evaluations.iter().any(|e| {
+                e["revision"] == revision
+                    && e["kind"] == "declarative_macro_definition"
+                    && e["reason"] == "assumed_declared_helpers"
+                    && e["basis"]
+                        .as_str()
+                        .unwrap()
+                        .contains("caller-assumed helper")
+            }));
+        }
+        move_artifacts::apply(&repo, &value);
+    }
+}
+
+#[test]
+fn nine_helper_bearing_id_signature_occurrences_discharge_only_with_the_explicit_assumption() {
+    let params = (0..9)
+        .map(|i| {
+            format!(
+                "p{i}: crate::route::{}",
+                if i % 2 == 0 { "ItemId" } else { "DispatchId" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = format!("fn selected({params}) {{}}");
+    let repo = fixture(HELPERS, &text);
+    blocked(&run(&repo, request(&repo, &text)));
+    let value = run(&repo, assumed_request(&repo, &text));
+    assert_eq!(value["plan"]["applicable"], true, "{value}");
+    assert_eq!(value["coverage"]["assumed_declared_identity"], 9);
+    assert!(value["coverage"].get("ra_resolved").is_none());
+    assert!(
+        value["plan"]["binding_proofs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["class"] == "assumed_declared_identity"
+                && p["declaration"]["declarative_macro"].is_object()
+                && p["final_declaration"]["declarative_macro"].is_object())
+    );
+    move_artifacts::apply(&repo, &value);
+}
+
+#[test]
+fn assumption_counts_do_not_inflate_real_proofs_and_survive_diagnostic_omission() {
+    let text = "fn selected(item: crate::route::ItemId, ordinary: crate::Plain) -> crate::route::ItemId { let _ = ordinary.read(); item }";
+    let repo = fixture(HELPERS, text);
+    repo.write(
+        "cases/layout/lib.rs",
+        "mod source; mod model; pub mod route; pub struct Plain; impl Plain { pub fn read(&self) -> u32 { 1 } }",
+    );
+    let value = run(&repo, assumed_request(&repo, text));
+    assert_eq!(value["plan"]["applicable"], true, "{value}");
+    assert_eq!(value["coverage"]["assumed_declared_identity"], 2);
+    assert_eq!(value["coverage"]["ra_resolved"], 1);
+    assert_eq!(value["plan"]["resolution_coverage"]["decisions"], 3);
+    move_artifacts::apply(&repo, &value);
+    let mut capped = assumed_request(&repo, text);
+    capped["limits"]["response_bytes"] = json!(65_536);
+    let capped = run(&repo, capped);
+    assert!(
+        capped["plan"]["binding_proofs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .next()
+            .is_none()
+    );
+    assert_eq!(
+        capped["coverage"]["assumed_declared_identity"], 2,
+        "{capped}"
+    );
+    assert_eq!(capped["coverage"]["ra_resolved"], 1);
+    assert_eq!(capped["counts"]["omissions"]["binding_proofs"], 3);
+
+    // A written nominal identity depending on an assumed sibling namespace audit
+    // is conditional too; it must not leak into the real-resolution counter.
+    repo.write(
+        "cases/layout/model.rs",
+        &format!("{HELPERS} uuid_id!(ItemId); uuid_id!(DispatchId); pub enum Plain {{ Unit }}"),
+    );
+    repo.write(
+        "cases/layout/route.rs",
+        "pub use crate::model::{ItemId, DispatchId, Plain};",
+    );
+    let text = "fn selected() { let _ = crate::route::Plain::Unit; }";
+    repo.write("cases/layout/source.rs", text);
+    let dependent = run(&repo, assumed_request(&repo, text));
+    assert_eq!(dependent["plan"]["applicable"], true, "{dependent}");
+    assert_eq!(dependent["coverage"]["assumed_declared_identity"], 1);
+    assert!(dependent["coverage"].get("ra_resolved").is_none());
+}
+
+#[test]
+fn declared_helper_flag_preserves_all_other_expansion_and_generated_fact_vetoes() {
+    let huge = format!(
+        "macro_rules! uuid_id {{ ($name:ident) => {{ pub struct $name {{ {} }} }}; }}",
+        "pub field: u32,".repeat(1000)
+    );
+    let nested = format!(
+        "macro_rules! uuid_id {{ ($name:ident) => {{ pub struct $name; impl $name {{ fn nesting() {{ let _ = {}0{}; }} }} }}; }}",
+        "(".repeat(33),
+        ")".repeat(33)
+    );
+    for (definition, reason) in [
+        (format!("#[cfg(declared)] {HELPERS}"), "declarative_conditional_context"),
+        (format!("#[cfg_attr(any(), allow(dead_code))] {HELPERS}"), "declarative_conditional_context"),
+        (huge, "declarative_token_limit"),
+        (nested, "declarative_nesting_limit"),
+        ("macro_rules! uuid_id { ($($name:ident),*) => { $(pub struct $name;)* }; }".into(), "declarative_fragment_limit"),
+        ("macro_rules! uuid_id { ($name:ident) => { uuid_id!($name); }; }".into(), "declarative_recursion_limit"),
+        ("macro_rules! uuid_id { ($name:ident) => { pub struct $name; use other::*; }; }".into(), "declarative_output_unproved"),
+        ("macro_rules! uuid_id { ($name:ident) => { #[cfg(declared)] #[helper] pub struct $name; }; }".into(), "declarative_attribute_provider_uncertain"),
+        ("macro_rules! uuid_id { ($name:ident) => { #[derive(Serialize)] pub struct $name; }; }".into(), "declarative_attribute_provider_uncertain"),
+        ("macro_rules! Clone { () => {}; } macro_rules! uuid_id { ($name:ident) => { #[helper] #[derive(Clone, Serialize)] pub struct $name; }; }".into(), "declarative_attribute_provider_uncertain"),
+        ("macro_rules! uuid_id { ($name:ident) => { #[helper] #[derive(Serialize = value)] pub struct $name; }; }".into(), "declarative_attribute_provider_uncertain"),
+        ("macro_rules! uuid_id { ($name:ident) => { #[cfg_attr(any(), helper)] pub struct $name; }; }".into(), "declarative_attribute_provider_uncertain"),
+        ("macro_rules! uuid_id { ($name:ident) => { #[no_implicit_prelude] #[helper] pub struct $name; }; }".into(), "declarative_attribute_provider_uncertain"),
+    ] {
+        let repo = fixture(&definition, SELECTED);
+        let value = run(&repo, assumed_request(&repo, SELECTED));
+        blocked(&value);
+        assert!(value["plan"]["binding_proofs"].as_array().into_iter().flatten().next().is_none(), "{value}");
+        assert!(value["plan"]["resolution_coverage"]["context_evaluations"].as_array().unwrap().iter().any(|e| e["status"] == "skipped" && e["reason"] == reason), "{reason}: {value}");
+    }
+    for text in [
+        "fn selected(value: crate::route::ItemId) -> u32 { value.read() }",
+        "fn selected() { let _ = crate::route::ItemId::new(); }",
+        "fn selected() { let _ = crate::route::ItemId(Opaque); }",
+        "fn selected(value: crate::route::ItemId) { let _ = value.0; }",
+    ] {
+        let repo = fixture(HELPERS, text);
+        blocked(&run(&repo, assumed_request(&repo, text)));
+    }
+    let definition =
+        "macro_rules! uuid_id { ($name:ident) => { #[helper] pub enum $name { Unit } }; }";
+    let text = "fn selected() { let _ = crate::route::ItemId::Unit; }";
+    let repo = fixture(definition, text);
+    blocked(&run(&repo, assumed_request(&repo, text)));
+    for definition in [
+        "",
+        "#[proc_macro] pub fn uuid_id(input: TokenStream) -> TokenStream { input }",
+    ] {
+        let repo = fixture(definition, SELECTED);
+        let value = run(&repo, assumed_request(&repo, SELECTED));
+        blocked(&value);
+        assert!(
+            value["plan"]["binding_proofs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .next()
+                .is_none()
+        );
+    }
+    let repo = fixture(HELPERS, SELECTED);
+    for field in ["resolve_semantic", "semantic_configuration"] {
+        let mut args = assumed_request(&repo, SELECTED);
+        args[field] = if field == "resolve_semantic" {
+            json!(false)
+        } else {
+            Value::Null
+        };
+        blocked(&run(&repo, args));
+    }
+}
+
+#[test]
+fn declared_helper_flag_keeps_helper_free_proofs_real_and_written_owner_attributes_blocked() {
+    let repo = fixture(WRAPPER, SELECTED);
+    let value = run(&repo, assumed_request(&repo, SELECTED));
+    assert_eq!(value["plan"]["applicable"], true, "{value}");
+    assert!(value["coverage"].get("assumed_declared_identity").is_none());
+    assert_eq!(value["coverage"]["ra_resolved"], 3);
+    for owner in [
+        "definition",
+        "invocation",
+        "module",
+        "crate",
+        "shadowed_derive",
+    ] {
+        let repo = fixture(WRAPPER, SELECTED);
+        match owner {
+            "definition" => repo.write("cases/layout/model.rs", &format!("#[helper] {WRAPPER} uuid_id!(ItemId); uuid_id!(DispatchId);")),
+            "invocation" => repo.write("cases/layout/model.rs", &format!("{WRAPPER} #[helper] uuid_id!(ItemId); uuid_id!(DispatchId);")),
+            "module" => repo.write("cases/layout/lib.rs", "mod source; #[helper] mod model; pub mod route;"),
+            "crate" => repo.write("cases/layout/lib.rs", "#![helper] mod source; mod model; pub mod route;"),
+            "shadowed_derive" => repo.write("cases/layout/model.rs", &format!("macro_rules! Clone {{ () => {{}}; }} {WRAPPER} uuid_id!(ItemId); uuid_id!(DispatchId);")),
+            _ => unreachable!(),
+        }
+        blocked(&run(&repo, assumed_request(&repo, SELECTED)));
+    }
+}
+
+#[test]
+fn declared_helper_schema_is_default_false_and_tool_description_discloses_the_assumption() {
+    #[path = "support/stdio_client.rs"]
+    mod stdio_client;
+    let mut client = stdio_client::Client::new();
+    let tools = client.rpc("tools/list", json!({}));
+    let tool = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "move_item")
+        .unwrap();
+    assert_eq!(
+        tool["inputSchema"]["properties"]["assume_declared_helpers"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["assume_declared_helpers"]["default"],
+        false
+    );
+    for term in [
+        "assume_declared_helpers",
+        "assumed_declared_identity",
+        "registered derive helper",
+    ] {
+        assert!(tool["description"].as_str().unwrap().contains(term));
+    }
+    let repo = fixture(HELPERS, SELECTED);
+    let value = client.call("move_item", assumed_request(&repo, SELECTED));
+    assert_eq!(value["plan"]["applicable"], true, "{value}");
+    assert_eq!(value["coverage"]["assumed_declared_identity"], 3);
+}
+
 #[test]
 fn procedural_and_unresolved_macro_generated_names_never_have_identity_evidence() {
     for definition in [

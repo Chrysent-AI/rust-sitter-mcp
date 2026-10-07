@@ -21,7 +21,10 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
     if plan["integrity"]["semantic"] == "resolution_performed" {
         assert_eq!(
             plan["resolution_coverage"]["decisions"],
-            envelope["coverage"]["ra_resolved"]
+            envelope["coverage"]["ra_resolved"].as_u64().unwrap_or(0)
+                + envelope["coverage"]["assumed_declared_identity"]
+                    .as_u64()
+                    .unwrap_or(0)
         );
         assert!(
             plan["resolution_coverage"]["statement"]

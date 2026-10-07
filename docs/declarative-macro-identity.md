@@ -37,7 +37,7 @@ context disclosure, not an approximation or a partially expanded proof.
 Expansion may contain named structs/enums and impls, but no module-level imports,
 modules, constants, functions, macro definitions or other namespace-producing
 items. Generated impls are merely tolerated output: never used as facts.
-Generated type attributes must be the existing inert lint/doc attributes
+By default, generated type attributes must be the existing inert lint/doc attributes
 (`allow`, `warn`, `deny`, `forbid`, `doc`) or unshadowed bare compiler-built-in
 derives. All other attributes, including `#[serde(transparent)]` beside a written
 `Serialize`/`Deserialize` derive, refuse as provider-uncertain. Custom and qualified
@@ -80,8 +80,25 @@ original/final invocation and definition checks, cap/conditional failures and
 the identity-only basis. `declarative_attribute_provider_uncertain` records the
 attribute in its basis and anchors generated attributes to the whole written
 macro definition; written owner attributes have exact original-source anchors.
-The reached invocation also retains the refusal. The opt-in request schema is
-unchanged. Default-off behavior, independent chain/trivia/API/repair gates and
+The reached invocation also retains the refusal.
+
+`assume_declared_helpers` adds a separate default-false caller assertion alongside
+configured `resolve_semantic`: provider-uncertain generated struct/enum attributes
+belong to registered derive helpers, not replacing providers. Well-formed companion
+custom/qualified derive path lists on helper-bearing types are checked syntactically
+only. The engine neither classifies registration nor executes providers. Conditional
+proofs use `assumed_declared_identity` and basis wording that identity is assumed
+with the type, not engine-classified, with no procedural expansion, hygiene or
+compilation claims. Nominal written identities depending on that assumed namespace
+are also labeled conditional. `coverage.assumed_declared_identity` counts these
+separately, including omitted records, without inflating `coverage.ra_resolved`;
+shared `resolution_coverage.decisions` counts their sum. Assumed context admissions
+use `assumed_declared_helpers` and name the reached helper on the written definition.
+All original/final identity anchors and access checks remain mandatory. The flag
+cannot admit cfg/cfg_attr or prelude controls, written-owner/ordinary written helper
+attributes, helper-free custom derives, over-cap definitions, proc-macro construction
+or generated members. Omission/false preserves containment response bytes.
+Independent chain/trivia/API/repair gates and
 read-only byte-exact
 planning are unchanged.
 
@@ -99,8 +116,9 @@ repetition/recursion/token/nesting caps, external definitions, generated
 methods/fields/constructors/variants, arbitrary attributes and generated imports.
 Check identity mismatch and final-only context failure independently. Also replay
 the frozen application signature shapes under their explicit edition/cfg graph;
-helper-bearing declarations must remain blocked rather than preserve earlier
-unsupported proofs. Helper-free wrappers with inert metadata/bare built-in derives
+helper-bearing declarations must remain blocked by default, and prove only as
+labeled caller assumptions when `assume_declared_helpers` is enabled. Check mixed
+real/assumed coverage, omission counters and unchanged default-off response bytes. Helper-free wrappers with inert metadata/bare built-in derives
 still prove only the signature prerequisite, not an applicable associated-method
 move batch. Verify replacement/re-export/alias and cfg-replacement counterexamples
 with identical admitted inputs but differing external providers. Formatting, lint,

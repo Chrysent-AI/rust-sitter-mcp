@@ -140,6 +140,93 @@ fn final_only_helper_attribute_and_generated_enum_helpers_keep_identity_blocked(
 }
 
 #[test]
+fn assumed_helpers_still_require_matching_definition_invocation_and_argument_anchors() {
+    let flag = AtomicBool::new(false);
+    let controls = (Instant::now() + Duration::from_secs(30), &flag);
+    let config = config();
+    let definition = MACRO.replace(
+        "pub struct",
+        "#[derive(Serialize)] #[serde(transparent)] pub struct",
+    );
+    let mut old = Inputs::new(texts(&definition), &config, controls).unwrap();
+    old.assume_declared_helpers = true;
+    for (final_definition, expected) in [
+        (definition.clone(), None),
+        (
+            definition.replace("Opaque", "Opaque2"),
+            Some("semantic_identity_unproved"),
+        ),
+        (format!(" {definition}"), Some("semantic_identity_unproved")),
+        (
+            format!("#[cfg(enabled)] {definition}"),
+            Some("semantic_final_fact_unproved"),
+        ),
+        ("".into(), Some("semantic_final_fact_unproved")),
+    ] {
+        let mut new = Inputs::new(texts(&final_definition), &config, controls).unwrap();
+        new.assume_declared_helpers = true;
+        let mut needs = vec![need()];
+        let proofs = evaluate(&old, &new, &mut needs, &[], &coverage(&config), controls).unwrap();
+        if let Some(class) = expected {
+            assert!(proofs.is_empty(), "{final_definition}");
+            assert_eq!(needs[0].refusal_basis.last().unwrap().class, class);
+        } else {
+            assert_eq!(proofs.len(), 1);
+            assert!(matches!(
+                proofs[0].class,
+                ProofClass::AssumedDeclaredIdentity
+            ));
+            assert_eq!(proofs[0].declaration, proofs[0].final_declaration);
+        }
+    }
+    // A final-only helper assumption cannot conceal changed definition bytes.
+    let plain = Inputs::new(texts(MACRO), &config, controls).unwrap();
+    let mut needs = vec![need()];
+    let proofs = evaluate(&plain, &old, &mut needs, &[], &coverage(&config), controls).unwrap();
+    assert!(proofs.is_empty());
+    assert_eq!(
+        needs[0].refusal_basis.last().unwrap().class,
+        "semantic_identity_unproved"
+    );
+
+    let original = texts(&definition)["model.rs"].clone();
+    let mut shifted = texts(&definition);
+    shifted.insert("model.rs".into(), format!("\n{original}"));
+    let mut new = Inputs::new(shifted, &config, controls).unwrap();
+    new.assume_declared_helpers = true;
+    let origins = [MoveOrigin {
+        id: "gap".into(),
+        source_path: "model.rs".into(),
+        source_range: range(0, original.len()),
+        output_path: "model.rs".into(),
+        output_range: range(1, original.len() + 1),
+        role: "gap".into(),
+    }];
+    let mut needs = vec![need()];
+    let proofs = evaluate(
+        &old,
+        &new,
+        &mut needs,
+        &origins,
+        &coverage(&config),
+        controls,
+    )
+    .unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(
+        normalize(&proofs[0].final_declaration, &origins, &old),
+        Some(proofs[0].declaration.clone())
+    );
+    let mut needs = vec![need()];
+    let proofs = evaluate(&old, &new, &mut needs, &[], &coverage(&config), controls).unwrap();
+    assert!(proofs.is_empty());
+    assert_eq!(
+        needs[0].refusal_basis.last().unwrap().class,
+        "semantic_identity_unproved"
+    );
+}
+
+#[test]
 fn excluded_or_external_macro_definitions_and_conditional_parent_modules_refuse() {
     let flag = AtomicBool::new(false);
     let controls = (Instant::now() + Duration::from_secs(30), &flag);

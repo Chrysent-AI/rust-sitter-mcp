@@ -48,6 +48,9 @@ pub struct MoveCoverage {
     /// Occurrences discharged by pure RA resolution, independent of caller assumptions.
     #[serde(skip_serializing_if = "is_zero")]
     pub ra_resolved: usize,
+    /// Conditional identities relying on the caller's registered-helper assertion.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub assumed_declared_identity: usize,
     /// Residual test-consumer decisions acknowledged as risks, not binding proofs.
     #[serde(skip_serializing_if = "is_zero")]
     pub test_consumers_acknowledged: usize,
