@@ -27,7 +27,9 @@ const STANDARD_PRELUDE: [(&str, &str); 7] = [
     ("None", "std::option::Option::None"),
 ];
 const TYPE_COUNT: usize = 5;
-const SHADOW_COUNT: usize = STANDARD_PRELUDE.len() + items::BUILTIN_DERIVES.len();
+const STD_ROOT: usize = STANDARD_PRELUDE.len() + items::BUILTIN_DERIVES.len();
+const STD_ROOT_NAME: (&str, &str) = ("std", "std");
+const SHADOW_COUNT: usize = STD_ROOT + 1;
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -138,6 +140,8 @@ impl Shadows {
     fn basis_for(&self, index: usize, derive: bool) -> Vec<RefusalBasis> {
         let name = if derive {
             items::BUILTIN_DERIVES[index].0
+        } else if index == STD_ROOT {
+            STD_ROOT_NAME.0
         } else {
             STANDARD_PRELUDE[index].0
         };
@@ -163,6 +167,7 @@ impl Shadows {
         if let Some(index) = STANDARD_PRELUDE
             .iter()
             .chain(items::BUILTIN_DERIVES.iter())
+            .chain([&STD_ROOT_NAME])
             .position(|(name, _)| *name == text.trim_start_matches("r#"))
         {
             self.names[index] = true;
@@ -487,7 +492,9 @@ fn shadows(
 }
 
 fn type_reference(node: Node<'_>) -> bool {
-    if node.kind() != "type_identifier" || !items::reference_role(node) {
+    if !matches!(node.kind(), "type_identifier" | "scoped_type_identifier")
+        || !items::reference_role(node)
+    {
         return false;
     }
     let mut parent = node.parent();
@@ -772,21 +779,25 @@ pub(super) fn discharge(
             .tree
             .root_node()
             .named_descendant_for_byte_range(need.range.start_byte, need.range.end_byte);
+        let spelling = &source[need.range.start_byte..need.range.end_byte];
         let candidate = node.and_then(|node| {
             STANDARD_PRELUDE
                 .iter()
                 .enumerate()
-                .position(|(index, (name, _))| {
-                    *name
-                        == source[need.range.start_byte..need.range.end_byte]
-                            .trim_start_matches("r#")
-                        && if index < TYPE_COUNT {
-                            type_reference(node)
-                        } else {
-                            constructor_reference(node)
-                        }
+                .position(|(index, (name, standard_path))| {
+                    if index < TYPE_COUNT {
+                        type_reference(node)
+                            && ((node.kind() == "type_identifier"
+                                && *name == spelling.trim_start_matches("r#"))
+                                || (node.kind() == "scoped_type_identifier"
+                                    && *standard_path == spelling))
+                    } else {
+                        *name == spelling.trim_start_matches("r#") && constructor_reference(node)
+                    }
                 })
         });
+        let qualified =
+            candidate.is_some() && node.is_some_and(|node| node.kind() == "scoped_type_identifier");
         let selection = selected.iter().find(|(path, item, _)| {
             path == &need.path
                 && need.item_ids.contains(&item.id)
@@ -822,8 +833,16 @@ pub(super) fn discharge(
         {
             // Constructors require both their own spelling and the assumed
             // Option type to be unshadowed in exactly the same lexical context.
-            for audited in std::iter::once(index).chain((index >= TYPE_COUNT).then_some(0)) {
-                let name = STANDARD_PRELUDE[audited].0;
+            // A std-rooted path also requires its root to stay unshadowed.
+            for audited in std::iter::once(index)
+                .chain((index >= TYPE_COUNT).then_some(0))
+                .chain(qualified.then_some(STD_ROOT))
+            {
+                let name = if audited == STD_ROOT {
+                    STD_ROOT_NAME.0
+                } else {
+                    STANDARD_PRELUDE[audited].0
+                };
                 let assessment =
                     items::lexical_assessment(path, node, source, name, controls, false)?;
                 if assessment.binding != items::LexicalBinding::Absent {
@@ -924,6 +943,7 @@ pub(super) fn discharge(
             && let Some(index) = candidate
             && !visible.refuses(index)
             && (index < TYPE_COUNT || !visible.refuses(0))
+            && (!qualified || !visible.refuses(STD_ROOT))
             && !derive_identity_unproved
         {
             record_proof(
@@ -944,7 +964,17 @@ pub(super) fn discharge(
                     basis: if index >= TYPE_COUNT {
                         "caller enabled assume_standard_prelude; bare value-position Option constructor; constructor and Option type spellings unshadowed under the same original/final module, batch, lexical, derive and prelude-control audits as standard-prelude types; constructor identity assumed with the type; derive-generated imports are not modeled; not macro hygiene proved; no import synthesized; semantic checking not performed".into()
                     } else {
-                        "caller enabled assume_standard_prelude; edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; written lexical bindings checked; direct block macro invocations, macro expression-statement wrappers and outer attribute siblings in the reference's block and ancestor blocks up to the nearest module audited regardless of source order, only strict context-independent attributes exempted; signatures outside those blocks ignore body expansion sites; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed".into()
+                        let form = if qualified {
+                            format!(
+                                "fully-qualified type-position {}; type spelling and std root unshadowed; ",
+                                STANDARD_PRELUDE[index].1
+                            )
+                        } else {
+                            String::new()
+                        };
+                        format!(
+                            "caller enabled assume_standard_prelude; {form}edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; written lexical bindings checked; direct block macro invocations, macro expression-statement wrappers and outer attribute siblings in the reference's block and ancestor blocks up to the nearest module audited regardless of source order, only strict context-independent attributes exempted; signatures outside those blocks ignore body expansion sites; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed"
+                        )
                     },
                 },
                 &mut proofs,
@@ -961,6 +991,10 @@ pub(super) fn discharge(
                 need.refusal_basis.extend(visible.basis_for(index, false));
                 if index >= TYPE_COUNT {
                     need.refusal_basis.extend(visible.basis_for(0, false));
+                }
+                if qualified {
+                    need.refusal_basis
+                        .extend(visible.basis_for(STD_ROOT, false));
                 }
             }
             if let Some(attribute) = need.attribute_range.as_ref().and_then(|range| {

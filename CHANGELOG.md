@@ -7,6 +7,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+* Extend `assume_standard_prelude` type proofs to `std::option::Option`,
+  `std::result::Result`, `std::boxed::Box`, `std::vec::Vec` and
+  `std::string::String`, preserving original/final shadow and context audits
+  and caller-assumption labeling without semantic configuration.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

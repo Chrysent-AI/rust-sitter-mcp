@@ -210,6 +210,14 @@ conditional-context blocker, not permission to bypass it with an override.
 **type-position** `Option`, `Result`, `Box`, `Vec` and `String` references using a
 hand-authored, edition-independent subset of the standard prelude:
 https://doc.rust-lang.org/std/prelude/v1/index.html
+The same type proof covers exactly the written `std::`-rooted paths
+`std::option::Option`, `std::result::Result`, `std::boxed::Box`, `std::vec::Vec`
+and `std::string::String` in type position. Their basis names the qualified form;
+all the same original/final shadow and context audits apply, including competing
+explicit imports of the terminal type name, and the `std` root must also remain
+unshadowed. Other qualified paths, relative paths, associated calls and qualified
+constructors do not qualify. No semantic configuration is required for this
+caller-assumed coverage.
 
 This is a caller assumption, not written-import or semantic proof. Each discharged
 occurrence appears separately in `plan.binding_proofs` with `class:"standard_prelude"`,
