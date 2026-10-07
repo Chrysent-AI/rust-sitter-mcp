@@ -12,6 +12,7 @@ use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 
 pub(super) const BASIS: &str = "declaration identity established through bounded declarative-macro expansion of written tokens; resolved ADT and written argument provenance checked at both overlays; original/final invocation and in-crate macro_rules definition anchors match; provider-uncertain attributes refused, helper registration not inferred from derive spelling; no generated impl, method, field, constructor or variant facts; no proc-macro execution, compilation or equivalence checking";
+pub(super) const ASSUMED_BASIS: &str = "caller enabled assume_declared_helpers and asserts each provider-uncertain generated type attribute belongs to a registered derive helper; declaration identity assumed with the type, not engine-classified; bounded written-token and resolved ADT/argument provenance checks at both overlays still required, with matching original/final invocation and definition anchors for generated declarations; companion derive paths checked syntactically only; no procedural expansion, macro hygiene, generated impl/member/constructor/variant, compilation or equivalence claims";
 const CONTEXT_BASIS: &str = "bounded declarative-macro written-token admission only; declaration identity additionally requires matching original/final invocation and definition anchors; provider-uncertain attributes refused, helper registration not inferred from derive spelling; generated members and proc macros are not admitted";
 const TOKEN_CAP: usize = 4096;
 const NESTING_CAP: usize = 32;
@@ -28,6 +29,7 @@ struct Expansion {
     definition: Declaration,
     argument: String,
     syntax: SyntaxNode,
+    assumed_helpers: bool,
 }
 
 fn tokens(node: &SyntaxNode) -> Result<Vec<SyntaxToken>, &'static str> {
@@ -271,6 +273,15 @@ fn builtin_derives(inputs: &Inputs, sema: &Semantics<'_, RootDatabase>, attr: &a
             return false;
         }
     }
+    builtin_names_unshadowed(inputs, sema, attr, &names)
+}
+
+fn builtin_names_unshadowed(
+    inputs: &Inputs,
+    sema: &Semantics<'_, RootDatabase>,
+    attr: &ast::Attr,
+    names: &[&str],
+) -> bool {
     let Some(scope) = sema.scope(attr.syntax()) else {
         return false;
     };
@@ -285,16 +296,17 @@ fn builtin_derives(inputs: &Inputs, sema: &Semantics<'_, RootDatabase>, attr: &a
     !shadowed
 }
 
-/// Only existing inert metadata and unshadowed bare built-in derives are exempt.
-/// A written declarative macro cannot supply an attribute or derive provider.
+/// Default admission exempts only inert metadata and unshadowed built-in derives.
+/// The opt-in asserts helper registration on generated types, never written owners.
 fn type_attributes(
     inputs: &Inputs,
     sema: &Semantics<'_, RootDatabase>,
     module: Module,
     definition: &Declaration,
     item: &ast::Item,
-) -> Result<(), &'static str> {
+) -> Result<bool, &'static str> {
     let attrs: Vec<_> = item.attrs().collect();
+    let mut assumed = false;
     // Check helpers before derives so a familiar derive spelling cannot hide the
     // specific replacement-capable attribute in the anchored disclosure.
     for attr in attrs
@@ -305,13 +317,37 @@ fn type_attributes(
             attr.simple_name().as_deref(),
             Some("allow" | "warn" | "deny" | "forbid" | "doc")
         ) {
-            return Err(provider_uncertain(
-                inputs,
-                sema,
-                module,
-                attr,
-                Some(definition),
-            ));
+            // Control attributes cannot become helpers by caller assertion.
+            if !inputs.assume_declared_helpers
+                || attr.meta().is_none()
+                || matches!(
+                    attr.simple_name().as_deref(),
+                    Some("cfg" | "cfg_attr" | "no_implicit_prelude" | "no_std" | "no_core")
+                )
+            {
+                return Err(provider_uncertain(
+                    inputs,
+                    sema,
+                    module,
+                    attr,
+                    Some(definition),
+                ));
+            }
+            assumed = true;
+            record_definition(inputs, definition, Ok(()));
+            let key = (
+                definition.anchor.path.clone(),
+                definition.anchor.range.start_byte,
+                definition.anchor.range.end_byte,
+                FactClass::NominalIdentity.name(),
+            );
+            if let Some(evaluation) = inputs.context.borrow_mut().get_mut(&key) {
+                evaluation.reason = "assumed_declared_helpers".into();
+                evaluation.basis = format!(
+                    "{ASSUMED_BASIS}; caller-assumed helper {}",
+                    attr.syntax().text()
+                );
+            }
         }
     }
     for attr in attrs
@@ -319,6 +355,34 @@ fn type_attributes(
         .filter(|a| a.simple_name().as_deref() == Some("derive"))
     {
         if !builtin_derives(inputs, sema, attr) {
+            // A helper-bearing type may carry custom derives, but only the
+            // written path list is admitted: no derive provider is executed.
+            let paths_valid = assumed
+                && attr
+                    .meta()
+                    .and_then(|m| m.as_simple_call())
+                    .is_some_and(|(_, tree)| {
+                        tokens(tree.syntax()).is_ok_and(|ts| {
+                            let builtins: Vec<_> = ts
+                                .iter()
+                                .filter_map(|t| {
+                                    let name = t.text().trim_start_matches("r#");
+                                    crate::items::BUILTIN_DERIVES
+                                        .iter()
+                                        .any(|(n, _)| *n == name)
+                                        .then_some(name)
+                                })
+                                .collect();
+                            ts.len() >= 3
+                                && ts[0].text() == "("
+                                && ts[ts.len() - 1].text() == ")"
+                                && context::nominal_derive_paths(&ts[1..ts.len() - 1]).is_ok()
+                                && builtin_names_unshadowed(inputs, sema, attr, &builtins)
+                        })
+                    });
+            if paths_valid {
+                continue;
+            }
             return Err(provider_uncertain(
                 inputs,
                 sema,
@@ -328,7 +392,7 @@ fn type_attributes(
             ));
         }
     }
-    Ok(())
+    Ok(assumed)
 }
 
 fn inspect(
@@ -387,13 +451,14 @@ fn inspect(
     {
         return Err("declarative_recursion_limit");
     }
+    let mut assumed_helpers = false;
     for item in syntax.children().filter_map(ast::Item::cast) {
         match &item {
             ast::Item::Struct(s) if s.generic_param_list().is_none() => {
-                type_attributes(inputs, sema, module, &definition, &item)?;
+                assumed_helpers |= type_attributes(inputs, sema, module, &definition, &item)?;
             }
             ast::Item::Enum(e) if e.generic_param_list().is_none() => {
-                type_attributes(inputs, sema, module, &definition, &item)?;
+                assumed_helpers |= type_attributes(inputs, sema, module, &definition, &item)?;
             }
             ast::Item::Impl(_) => {}
             _ => return Err("declarative_output_unproved"),
@@ -404,6 +469,7 @@ fn inspect(
         definition,
         argument,
         syntax,
+        assumed_helpers,
     })
 }
 
@@ -414,6 +480,10 @@ pub(super) fn context_admitted(
     call: &ast::MacroCall,
 ) -> bool {
     let outcome = inspect(inputs, sema, module, call);
+    let assumed = outcome.as_ref().is_ok_and(|e| e.assumed_helpers);
+    if assumed {
+        inputs.assumed_declared_helpers.set(true);
+    }
     context::record(
         inputs,
         sema,
@@ -446,7 +516,15 @@ pub(super) fn context_admitted(
             FactClass::NominalIdentity.name(),
         );
         if let Some(evaluation) = inputs.context.borrow_mut().get_mut(&key) {
-            evaluation.basis = CONTEXT_BASIS.into();
+            evaluation.basis = if assumed {
+                ASSUMED_BASIS
+            } else {
+                CONTEXT_BASIS
+            }
+            .into();
+            if assumed {
+                evaluation.reason = "assumed_declared_helpers".into();
+            }
         }
     }
     outcome.is_ok()

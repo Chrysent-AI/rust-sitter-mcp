@@ -442,7 +442,7 @@ or enum name maps exactly to the written argument, not a coincidentally matching
 literal or a fallback call-site range. Output may contain structs/enums and
 impls, but no imports, modules or other namespace-producing items. Generated
 type attributes permit only the existing inert `allow`/`warn`/`deny`/`forbid`/`doc`
-metadata and unshadowed bare compiler-built-in derives. Other attributes, including
+metadata and unshadowed bare compiler-built-in derives by default. Other attributes, including
 `#[serde(transparent)]` even beside `Serialize`/`Deserialize`, refuse as
 provider-uncertain. A derive token spelling does not establish helper registration:
 the same admitted tokens can denote an inert helper or an attribute macro that
@@ -468,7 +468,37 @@ anchors normalize through the assembler's origin map and must match at both
 overlays, with the same crate origin and positive access. Receiver fields are
 null: unadmitted field types are irrelevant to this identity-only fact, not
 inferred or assumed. These proofs count in `coverage.ra_resolved` as part of the
-same configured RA tier; no request fields or schema-version change is added.
+same configured RA tier. The schema version is unchanged.
+
+`assume_declared_helpers` is a request-level boolean, default `false`, requiring
+`resolve_semantic:true` and the same explicit `semantic_configuration`. It is an
+assertion by the caller that each provider-uncertain attribute on a generated
+struct/enum belongs to a **registered derive helper**, not a replacing attribute
+provider. The engine does not classify or verify that assertion, infer registration
+from a derive spelling, or execute any provider. Well-formed companion custom or
+qualified derive paths on that helper-bearing type are admitted syntactically only;
+helper-free custom/qualified derives retain their refusal. Control attributes
+(`cfg`, `cfg_attr`, prelude controls) and attributes on written definitions,
+invocations or enclosing owners cannot be turned into helpers by this flag.
+
+A discharged occurrence relying on this assumption uses the distinct
+`class:"assumed_declared_identity"`, never `declarative_macro_identity` or
+`ra_resolved`. Its basis states **"declaration identity assumed with the type,
+not engine-classified"**, names the caller assertion, and disclaims procedural
+expansion, macro hygiene, generated-member, compilation and equivalence claims.
+Generated declarations keep `classification:"declaration_identity"`, null receivers
+and all three original/final identity anchors. Nominal facts about written types
+that depend on an assumed sibling macro's namespace admission are also conditional
+and carry this class, preserving their own declaration/receiver anchors.
+`coverage.assumed_declared_identity` counts these occurrences separately, including
+omitted records; they do **not** inflate `coverage.ra_resolved`.
+`resolution_coverage.decisions` counts the sum of real and assumed resolution
+occurrences, not just real proofs. No counter is emitted when its count is zero.
+Omission or `false` preserves the containment response bytes. Both-overlay
+identity/access, cfg, shape/token/nesting caps, procedural-macro construction and
+all generated impl/member/field/constructor/variant vetoes remain in force.
+This flag does not enable ordinary written derive-helper attributes or method
+partitioning.
 
 A bare type imported through an existing accessible written public named facade
 can carry that same facade import provisionally into a sibling. The rewrite
@@ -481,7 +511,7 @@ original/final identities. Independent API/chain/trivia/repair gates still apply
 `kind:"declarative_macro_definition"` definition records, retaining the
 `nominal_identity` fact class. Their basis describes bounded admission, not an
 already-matched identity. Reasons include `bounded_declarative_namespace`,
-`bounded_declarative_definition`, `declarative_definition_unproved`,
+`bounded_declarative_definition`, `assumed_declared_helpers`, `declarative_definition_unproved`,
 `declarative_external_definition`, `declarative_invocation_unproved`,
 `declarative_conditional_context`, `declarative_attribute_provider_uncertain`,
 `declarative_fragment_limit`, `declarative_recursion_limit`,
@@ -491,7 +521,10 @@ already-matched identity. Reasons include `bounded_declarative_namespace`,
 skipped evaluation's basis; generated attributes anchor the whole written macro
 definition, never invented generated-file coordinates. Written owner attributes
 have their own exact anchors, with the reached invocation also marked skipped.
-Unsupported expansion retains
+An assumed admission records `reason:"assumed_declared_helpers"` with an explicit
+caller-assumption basis; definition records name the reached generated helper
+attribute, anchored to the whole written definition. Admission is still not a
+matched-identity claim. Unsupported expansion retains
 `semantic_source_fact_unproved` or `semantic_final_fact_unproved`; changed or
 unmappable pairs retain the identity/mapping refusal. Missing RA resolution may
 follow bounded written named routes solely to disclose a reached macro refusal;

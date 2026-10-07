@@ -176,6 +176,10 @@ pub struct MoveRequest {
     /// Assume stable prelude types and unshadowed compiler-built-in derives.
     #[serde(default)]
     pub assume_standard_prelude: bool,
+    /// Assert generated type attributes are registered derive helpers, not replacing providers.
+    /// Requires resolve_semantic and explicit configuration; identity only, never expansion proof.
+    #[serde(default)]
+    pub assume_declared_helpers: bool,
     /// Disclose exact same-file cfg(test) consumer risks instead of blocking on them.
     #[serde(default)]
     pub acknowledge_test_consumers: bool,

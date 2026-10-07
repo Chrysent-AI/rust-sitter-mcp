@@ -37,7 +37,7 @@ mod declarative;
 mod identity;
 pub use context::ContextEvaluation;
 use context::{FactClass, safe_attr};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 const ANALYZER: &str = "ra_ap@0.0.357";
 
@@ -100,6 +100,7 @@ pub struct ResolutionCoverage {
 pub enum ProofClass {
     RaResolved,
     DeclarativeMacroIdentity,
+    AssumedDeclaredIdentity,
 }
 /// Stable written identities, not revision-local RA IDs or pretty-printed types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -162,6 +163,9 @@ struct Inputs {
     texts: BTreeMap<String, String>,
     roots: BTreeMap<FileId, String>,
     configuration: Configuration,
+    assume_declared_helpers: bool,
+    // Per-fact dependency on conditional namespace admission, not a resolver cache.
+    assumed_declared_helpers: Cell<bool>,
     context: RefCell<BTreeMap<ContextKey, ContextEvaluation>>,
 }
 impl Inputs {
@@ -275,6 +279,8 @@ impl Inputs {
             texts,
             roots,
             configuration: config.clone(),
+            assume_declared_helpers: false,
+            assumed_declared_helpers: Cell::new(false),
             context: RefCell::new(BTreeMap::new()),
         })
     }
@@ -335,16 +341,18 @@ pub fn discharge(
     let root = std::path::Path::new(result.root.as_deref().expect("admitted root"));
     let digest = crate::scope::hash_serialized(root, &(&snapshot, config, ANALYZER), controls)?;
     let final_digest = crate::scope::hash_serialized(root, &(&digest, &overlay), controls)?;
-    let Some(old) = Inputs::new(original, config, controls) else {
+    let Some(mut old) = Inputs::new(original, config, controls) else {
         items::check(deadline, cancelled)?;
         configuration_refusal(needs);
         return Ok(());
     };
-    let Some(new) = Inputs::new(overlay, config, controls) else {
+    let Some(mut new) = Inputs::new(overlay, config, controls) else {
         items::check(deadline, cancelled)?;
         configuration_refusal(needs);
         return Ok(());
     };
+    old.assume_declared_helpers = request.assume_declared_helpers;
+    new.assume_declared_helpers = request.assume_declared_helpers;
     let coverage = ResolutionCoverage {
         decisions: 0, configuration: config.clone(), snapshot_id: snapshot,
         semantic_input_digest: digest, final_overlay_digest: final_digest,
@@ -374,7 +382,11 @@ pub fn discharge(
     for proof in &mut proofs {
         proof.coverage = coverage.clone();
     }
-    result.coverage.ra_resolved = proofs.len();
+    result.coverage.assumed_declared_identity = proofs
+        .iter()
+        .filter(|proof| matches!(proof.class, ProofClass::AssumedDeclaredIdentity))
+        .count();
+    result.coverage.ra_resolved = proofs.len() - result.coverage.assumed_declared_identity;
     result.plan.integrity.semantic = "resolution_performed".into();
     result.plan.resolution_coverage = Some(coverage);
     result.plan.binding_proofs.extend(
@@ -556,8 +568,10 @@ fn evaluate(
             let final_anchor = mapped(&anchor, origins, new)?;
             refusal_class = "semantic_source_fact_unproved";
             let before = fact(old, &anchor)?;
+            let before_assumed = old.assumed_declared_helpers.get();
             refusal_class = "semantic_final_fact_unproved";
             let after = fact(new, &final_anchor)?;
+            let assumed = before_assumed || new.assumed_declared_helpers.get();
             refusal_class = "semantic_identity_unproved";
             if before.classification != after.classification
                 || before.fact_class != after.fact_class
@@ -576,7 +590,9 @@ fn evaluate(
                 }
             }
             Some(Proof {
-                class: if before.declaration.declarative_macro.is_some() {
+                class: if assumed {
+                    ProofClass::AssumedDeclaredIdentity
+                } else if before.declaration.declarative_macro.is_some() {
                     ProofClass::DeclarativeMacroIdentity
                 } else {
                     ProofClass::RaResolved
@@ -589,7 +605,9 @@ fn evaluate(
                 adjusted_receiver: before.adjusted,
                 final_original_receiver: after.original,
                 final_adjusted_receiver: after.adjusted,
-                basis: if before.declaration.declarative_macro.is_some() {
+                basis: if assumed {
+                    declarative::ASSUMED_BASIS
+                } else if before.declaration.declarative_macro.is_some() {
                     declarative::BASIS
                 } else {
                     before.fact_class.basis()
@@ -855,6 +873,7 @@ fn exact_path(root: &SyntaxNode, span: &ByteRange) -> Option<ast::Path> {
 fn fact(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
     // The next solver requires its own TLS attachment in addition to Salsa's.
     // Return only owned evidence before attaching the other database revision.
+    inputs.assumed_declared_helpers.set(false);
     ra_ap_hir::attach_db(&inputs.db, || fact_attached(inputs, anchor))
 }
 fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {

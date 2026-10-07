@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add default-off `assume_declared_helpers` for caller-asserted registered helpers
+  on bounded declarative generated types, with distinct `assumed_declared_identity`
+  proofs and coverage, unchanged both-overlay anchors and independent vetoes;
+  never classify helper registration or claim procedural expansion, hygiene or
+  compilation.
 * Add `declarative_macro_identity` signature-type proofs through bounded in-crate
   written `macro_rules!` expansion, with matching invocation/definition anchors
   at both overlays and provisional preservation of accessible public facade
