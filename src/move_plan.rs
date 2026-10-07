@@ -1359,13 +1359,30 @@ fn build(
     let mut parsed = BTreeMap::new();
     for (path, file) in &files {
         items::check(deadline, cancelled)?;
-        let data = items::parse(
+        let mut data = items::parse(
             file,
             request.limits.text_bytes,
             deadline,
             cancelled,
             &mut result.counts.inventory_items,
         )?;
+        // Preserve the top-level/default-off response and work counters. Only
+        // associated selections require the additional member descriptors.
+        if request
+            .moves
+            .iter()
+            .any(|entry| entry.enclosing_impl.is_some())
+        {
+            data.associated_items = items::associated::inventory(
+                file,
+                &data.tree,
+                &data.trivia,
+                request.limits.text_bytes,
+                (deadline, cancelled),
+                &mut result.counts.inventory_items,
+            )?;
+            result.account(descriptor_bytes(&data.associated_items)?)?;
+        }
         result.account(
             descriptor_bytes(&(&data.items, &data.trivia))?
                 + data
