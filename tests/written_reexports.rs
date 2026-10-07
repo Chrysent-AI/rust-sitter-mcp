@@ -260,51 +260,206 @@ fn reexport_evidence_does_not_discharge_terminal_attribute_or_constructor_vetoes
 
 #[test]
 fn relative_named_reexport_in_a_declaring_parent_matches_the_probe_shape() {
+    for outside_parent in [false, true] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod scheduler;\nmod target;\n");
+        repo.write("cases/layout/target.rs", "");
+        let hop = "pub use claim_review::{ClaimReviewOutcome};";
+        repo.write(
+            "cases/layout/scheduler/mod.rs",
+            &format!("mod claim_review;\nmod operations;\n{hop}\n"),
+        );
+        let declaration = "pub enum ClaimReviewOutcome { Pass, Fail }";
+        repo.write(
+            "cases/layout/scheduler/claim_review.rs",
+            &format!("{declaration}\n"),
+        );
+        let selected =
+            "fn claim_review_status(outcome: ClaimReviewOutcome) -> ClaimReviewOutcome { outcome }";
+        repo.write(
+            "cases/layout/scheduler/operations.rs",
+            &format!("use super::ClaimReviewOutcome;\n{selected}\n"),
+        );
+        compile(&repo);
+        let mut args = request(&repo, "cases/layout/scheduler/operations.rs", selected);
+        args["moves"][0]["destination"] = if outside_parent {
+            json!({"kind":"existing","path":"cases/layout/target.rs"})
+        } else {
+            json!({"kind":"new_sibling","path":"cases/layout/scheduler/projections.rs","parent_path":"cases/layout/scheduler/mod.rs"})
+        };
+        let result = run(&repo, args);
+        compile(&apply(&repo, &result));
+        let rewrites = written(&result);
+        // Private children are visible to descendants of their declaring parent.
+        // Moving outside that parent requires its public re-export instead.
+        assert_eq!(
+            rewrites[0]["after_text"],
+            if outside_parent {
+                "use crate::scheduler::ClaimReviewOutcome;"
+            } else {
+                "use crate::scheduler::claim_review::ClaimReviewOutcome;"
+            }
+        );
+        assert_anchor(&repo, rewrites[0], "cases/layout/scheduler/mod.rs", hop);
+        assert_anchor(
+            &repo,
+            rewrites[0],
+            "cases/layout/scheduler/claim_review.rs",
+            declaration,
+        );
+        if outside_parent {
+            assert_anchor(
+                &repo,
+                rewrites[0],
+                "cases/layout/scheduler/mod.rs",
+                "mod claim_review;",
+            );
+            assert!(
+                rewrites[0]["rationale"]
+                    .as_str()
+                    .unwrap()
+                    .contains("inaccessible_route:claim_review")
+            );
+        }
+        assert!(
+            !result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "public_path_change")
+        );
+        assert!(
+            !result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "visibility")
+        );
+    }
+}
+
+#[test]
+fn direct_canonical_import_uses_public_fallback_without_widening_hidden_modules() {
+    for canonical_visible in [false, true] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod source;\nmod target;\n");
+        repo.write("cases/layout/target.rs", "");
+        let module = if canonical_visible {
+            "pub(crate) mod private;"
+        } else {
+            "mod private;"
+        };
+        let hop = "pub use private::Value;";
+        repo.write(
+            "cases/layout/source.rs",
+            &format!("{module}\nmod operations;\n{hop}\n"),
+        );
+        let declaration = "pub enum Value { Pass }";
+        repo.write(
+            "cases/layout/source/private.rs",
+            &format!("{declaration}\n"),
+        );
+        let source = "cases/layout/source/operations.rs";
+        let import = "use super::private::Value;";
+        let selected = "fn selected(value: Value) -> Value { value }";
+        repo.write(source, &format!("{import}\n{selected}\n"));
+        compile(&repo);
+        let mut args = request(&repo, source, selected);
+        args["moves"][0]["destination"] =
+            json!({"kind":"existing","path":"cases/layout/target.rs"});
+        let result = run(&repo, args);
+        let expected = if canonical_visible {
+            "use crate::source::private::Value;"
+        } else {
+            "use crate::source::Value;"
+        };
+        let rewrites = result["plan"]["rewrites"].as_array().unwrap();
+        let rewrite = rewrites
+            .iter()
+            .find(|r| r["kind"] == "import_insert")
+            .unwrap();
+        assert_eq!(rewrite["after_text"], expected, "{result}");
+        assert!(
+            !rewrites.iter().any(|r| r["kind"] == "visibility"),
+            "direct imports must not widen canonical module visibility: {result}"
+        );
+        if !canonical_visible {
+            assert_eq!(written(&result).len(), 1, "{result}");
+            assert_anchor(&repo, rewrite, source, import);
+            assert_anchor(&repo, rewrite, "cases/layout/lib.rs", "mod source;");
+            assert_anchor(&repo, rewrite, "cases/layout/source.rs", module);
+            assert_anchor(&repo, rewrite, "cases/layout/source.rs", hop);
+            assert_anchor(
+                &repo,
+                rewrite,
+                "cases/layout/source/private.rs",
+                declaration,
+            );
+            assert!(
+                rewrite["rationale"]
+                    .as_str()
+                    .unwrap()
+                    .contains("written_reexport_route_fallback"),
+                "{rewrite}"
+            );
+        }
+        let copy = apply(&repo, &result);
+        compile(&copy);
+        assert_eq!(
+            fs::read_to_string(copy.0.join("cases/layout/source.rs")).unwrap(),
+            fs::read_to_string(repo.0.join("cases/layout/source.rs")).unwrap()
+        );
+        assert!(
+            fs::read_to_string(copy.0.join("cases/layout/target.rs"))
+                .unwrap()
+                .contains(expected)
+        );
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    }
+}
+
+#[test]
+fn direct_canonical_import_without_public_route_refuses_instead_of_widening() {
     let repo = Fixture::generate();
-    repo.write("cases/layout/lib.rs", "mod scheduler;\n");
-    let hop = "pub use claim_review::{ClaimReviewOutcome};";
+    repo.write("cases/layout/lib.rs", "mod source;\nmod target;\n");
+    repo.write("cases/layout/target.rs", "");
+    repo.write("cases/layout/source.rs", "mod private;\nmod operations;\n");
     repo.write(
-        "cases/layout/scheduler/mod.rs",
-        &format!("mod claim_review;\nmod operations;\n{hop}\n"),
+        "cases/layout/source/private.rs",
+        "pub enum Value { Pass }\n",
     );
-    let declaration = "pub enum ClaimReviewOutcome { Pass, Fail }";
-    repo.write(
-        "cases/layout/scheduler/claim_review.rs",
-        &format!("{declaration}\n"),
-    );
-    let selected =
-        "fn claim_review_status(outcome: ClaimReviewOutcome) -> ClaimReviewOutcome { outcome }";
-    repo.write(
-        "cases/layout/scheduler/operations.rs",
-        &format!("use super::ClaimReviewOutcome;\n{selected}\n"),
-    );
-    let mut args = request(&repo, "cases/layout/scheduler/operations.rs", selected);
-    args["moves"][0]["destination"] = json!({"kind":"new_sibling","path":"cases/layout/scheduler/projections.rs","parent_path":"cases/layout/scheduler/mod.rs"});
+    let source = "cases/layout/source/operations.rs";
+    let selected = "fn selected(value: Value) -> Value { value }";
+    repo.write(source, &format!("use super::private::Value;\n{selected}\n"));
+    compile(&repo);
+    let mut args = request(&repo, source, selected);
+    args["moves"][0]["destination"] = json!({"kind":"existing","path":"cases/layout/target.rs"});
     let result = run(&repo, args);
-    compile(&apply(&repo, &result));
-    let rewrites = written(&result);
-    assert_eq!(
-        rewrites[0]["after_text"],
-        "use crate::scheduler::claim_review::ClaimReviewOutcome;"
-    );
-    assert_anchor(&repo, rewrites[0], "cases/layout/scheduler/mod.rs", hop);
-    assert_anchor(
-        &repo,
-        rewrites[0],
-        "cases/layout/scheduler/claim_review.rs",
-        declaration,
-    );
+    withheld(&result);
+    let expected = anchor(&repo, "cases/layout/source.rs", "mod private;");
     assert!(
-        !result["plan"]["decisions"]
+        result["plan"]["decisions"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|d| d["reason"] == "public_path_change")
+            .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+            .any(|b| b["class"] == "inaccessible_route:private"
+                && b["anchor"]["path"] == expected["path"]
+                && b["anchor"]["range"] == expected["range"]),
+        "{result}"
+    );
+    assert!(
+        !result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "visibility"),
+        "{result}"
     );
 }
 
 #[test]
-fn canonical_reexport_route_checks_module_visibility_from_the_destination() {
+fn canonical_reexport_route_checks_visibility_or_uses_the_public_fallback() {
     for (visibility, accessible) in [
         ("", false),
         ("pub ", true),
@@ -382,8 +537,8 @@ fn canonical_reexport_route_checks_module_visibility_from_the_destination() {
                     json!({"kind":"new_sibling","path":"cases/layout/scheduler/runtime/projections.rs","parent_path":"cases/layout/scheduler/runtime/mod.rs"})
                 };
                 let result = run(&repo, args);
+                compile(&apply(&repo, &result));
                 if accessible {
-                    compile(&apply(&repo, &result));
                     assert!(!written(&result).is_empty(), "{result}");
                     assert!(
                         written(&result).iter().any(|r| r["after_text"]
@@ -393,8 +548,8 @@ fn canonical_reexport_route_checks_module_visibility_from_the_destination() {
                         "{result}"
                     );
                 } else {
-                    withheld(&result);
-                    assert!(written(&result).is_empty(), "{result}");
+                    // The original public route already works at the destination.
+                    // Scoped/path uses may need no textual repair at all.
                     assert!(
                         !result["plan"]["rewrites"]
                             .as_array()
@@ -406,27 +561,46 @@ fn canonical_reexport_route_checks_module_visibility_from_the_destination() {
                                 .contains("foundation_types")),
                         "{result}"
                     );
-                    let expected =
-                        anchor(&repo, "cases/layout/scheduler/persistence/mod.rs", &module);
-                    assert!(
-                        result["plan"]["decisions"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .any(|d| {
-                                d["blocks_applicability"] == true
-                                    && d["reason"] == "visibility_scope_unproved"
-                                    && d["refusal_basis"].as_array().is_some_and(|bases| {
-                                        bases.iter().any(|b| {
-                                            b["class"] == "inaccessible_route:foundation_types"
-                                                && b["name"] == "foundation_types"
-                                                && b["anchor"]["path"] == expected["path"]
-                                                && b["anchor"]["range"] == expected["range"]
-                                        })
-                                    })
-                            }),
-                        "{result}"
-                    );
+                    for rewrite in written(&result) {
+                        assert_anchor(
+                            &repo,
+                            rewrite,
+                            "cases/layout/scheduler/persistence/mod.rs",
+                            &module,
+                        );
+                        assert_anchor(
+                            &repo,
+                            rewrite,
+                            "cases/layout/scheduler/persistence/mod.rs",
+                            hop,
+                        );
+                        assert_anchor(
+                            &repo,
+                            rewrite,
+                            "cases/layout/scheduler/persistence/foundation_types.rs",
+                            "pub enum VerificationStatus { Passed }",
+                        );
+                        assert!(
+                            rewrite["rationale"]
+                                .as_str()
+                                .unwrap()
+                                .contains("written_reexport_route_fallback"),
+                            "{rewrite}"
+                        );
+                        assert!(
+                            rewrite["rationale"]
+                                .as_str()
+                                .unwrap()
+                                .contains("inaccessible_route:foundation_types"),
+                            "{rewrite}"
+                        );
+                    }
+                    if form == "bare" {
+                        assert_eq!(
+                            written(&result)[0]["after_text"],
+                            "use crate::scheduler::persistence::VerificationStatus;"
+                        );
+                    }
                 }
                 assert!(
                     !result["plan"]["rewrites"]
@@ -445,7 +619,7 @@ fn canonical_reexport_route_checks_module_visibility_from_the_destination() {
 #[test]
 fn canonical_route_checks_every_edge_and_private_parent_descendants() {
     for (visibility, destination, accessible) in [
-        ("", "runtime", false),
+        ("", "runtime", true),
         ("", "store", true),
         ("pub(in crate::unrelated) ", "store", false),
     ] {
@@ -513,7 +687,7 @@ fn canonical_route_checks_every_edge_and_private_parent_descendants() {
 }
 
 #[test]
-fn inaccessible_route_precedes_terminal_attribute_veto_and_emits_no_preview_import() {
+fn fallback_route_does_not_discharge_terminal_attribute_veto() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\nmod persistence;\n");
     repo.write(
@@ -532,16 +706,159 @@ fn inaccessible_route_precedes_terminal_attribute_veto_and_emits_no_preview_impo
     compile(&repo);
     let result = run(&repo, request(&repo, "cases/layout/source.rs", selected));
     withheld(&result);
-    assert!(written(&result).is_empty(), "{result}");
+    assert_eq!(
+        written(&result)[0]["after_text"],
+        "use crate::persistence::VerificationStatus;"
+    );
+    assert!(
+        !result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "visibility")
+    );
     assert!(
         result["plan"]["decisions"]
             .as_array()
             .unwrap()
             .iter()
             .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
-            .any(|b| b["class"] == "inaccessible_route:foundation_types"),
+            .any(|b| b["class"] == "derive_veto"),
         "{result}"
     );
+}
+
+#[test]
+fn inaccessible_facade_with_no_public_route_keeps_anchored_refusal() {
+    for terminal_visibility in ["pub ", ""] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod scheduler;\n");
+        repo.write(
+            "cases/layout/scheduler/mod.rs",
+            "mod store;\nmod runtime;\n",
+        );
+        repo.write("cases/layout/scheduler/store/mod.rs", "mod private;\n");
+        repo.write(
+            "cases/layout/scheduler/store/private/mod.rs",
+            "mod inner;\npub use inner::Value;\nmod operations;\n",
+        );
+        repo.write(
+            "cases/layout/scheduler/store/private/inner.rs",
+            &format!("{terminal_visibility}enum Value {{ Pass }}\n"),
+        );
+        repo.write(
+            "cases/layout/scheduler/runtime/mod.rs",
+            "mod projections;\n",
+        );
+        repo.write("cases/layout/scheduler/runtime/projections.rs", "");
+        let source = "cases/layout/scheduler/store/private/operations.rs";
+        let selected = "fn selected(value: Value) -> Value { value }";
+        repo.write(source, &format!("use super::Value;\n{selected}\n"));
+        if !terminal_visibility.is_empty() {
+            compile(&repo);
+        }
+        let mut args = request(&repo, source, selected);
+        args["moves"][0]["destination"] =
+            json!({"kind":"existing","path":"cases/layout/scheduler/runtime/projections.rs"});
+        let result = run(&repo, args);
+        withheld(&result);
+        assert!(written(&result).is_empty(), "{result}");
+        let expected = anchor(&repo, "cases/layout/scheduler/store/mod.rs", "mod private;");
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|d| d["refusal_basis"].as_array().into_iter().flatten())
+                .any(|b| b["class"] == "inaccessible_route:private"
+                    && b["anchor"]["path"] == expected["path"]
+                    && b["anchor"]["range"] == expected["range"]),
+            "{result}"
+        );
+        assert!(
+            !result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "visibility")
+        );
+    }
+}
+
+#[test]
+fn fallback_route_choice_is_shortest_then_lexicographic_with_all_anchors() {
+    for reverse in [false, true] {
+        let repo = Fixture::generate();
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source;\nmod facade;\nmod a_long;\n",
+        );
+        let terminal = "pub enum Value { Pass }";
+        repo.write("cases/layout/facade/inner.rs", &format!("{terminal}\n"));
+        // The implementation is hidden from the consumer, but visible to its
+        // exporting parent. A lexically earlier two-hop route must lose.
+        let facade = if reverse {
+            "mod inner;\npub use inner::Value as Z;\npub use inner::Value as B;\npub use inner::Value as Original;\n"
+        } else {
+            "mod inner;\npub use inner::Value as Original;\npub use inner::Value as B;\npub use inner::Value as Z;\n"
+        };
+        repo.write("cases/layout/facade/mod.rs", facade);
+        repo.write(
+            "cases/layout/a_long.rs",
+            "pub use crate::facade::Original as A;\n",
+        );
+        let selected = "fn selected(value: Alias) -> Alias { value }";
+        repo.write(
+            "cases/layout/source.rs",
+            &format!("use crate::a_long::A as Alias;\n{selected}\n"),
+        );
+        compile(&repo);
+        let args = request(&repo, "cases/layout/source.rs", selected);
+        let result = run(&repo, args.clone());
+        compile(&apply(&repo, &result));
+        let rewrites = written(&result);
+        assert_eq!(rewrites.len(), 1, "{result}");
+        let rewrite = rewrites[0];
+        assert_eq!(rewrite["after_text"], "use crate::facade::B as Alias;");
+        assert_anchor(&repo, rewrite, "cases/layout/facade/mod.rs", "mod inner;");
+        assert_anchor(
+            &repo,
+            rewrite,
+            "cases/layout/facade/mod.rs",
+            "pub use inner::Value as B;",
+        );
+        assert_anchor(
+            &repo,
+            rewrite,
+            "cases/layout/facade/mod.rs",
+            "pub use inner::Value as Original;",
+        );
+        assert_anchor(
+            &repo,
+            rewrite,
+            "cases/layout/a_long.rs",
+            "pub use crate::facade::Original as A;",
+        );
+        assert_anchor(&repo, rewrite, "cases/layout/facade/inner.rs", terminal);
+        let rationale = rewrite["rationale"].as_str().unwrap();
+        assert!(
+            rationale.contains("from 4 accessible written routes"),
+            "{rewrite}"
+        );
+        assert!(
+            rationale
+                .contains("shortest re-export hops, then lexicographic absolute path (1 hops)"),
+            "{rewrite}"
+        );
+        assert_eq!(result["plan"], run(&repo, args)["plan"]);
+        assert!(
+            !result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"] == "visibility")
+        );
+    }
 }
 
 #[test]
