@@ -368,24 +368,20 @@ fn safe_meta(
                 Ok(())
             }
         }
-        _ if matches!(
-            meta.simple_name().as_deref(),
-            Some(
-                "allow"
-                    | "warn"
-                    | "deny"
-                    | "forbid"
-                    | "doc"
-                    | "inline"
-                    | "cold"
-                    | "must_use"
-                    | "proc_macro"
-                    | "proc_macro_attribute"
-                    | "proc_macro_derive"
-                    | "no_std"
-                    | "no_core"
-            )
-        ) =>
+        _ if crate::items::identity_inert_metadata(meta.simple_name().as_deref())
+            || matches!(
+                meta.simple_name().as_deref(),
+                Some(
+                    "inline"
+                        | "cold"
+                        | "must_use"
+                        | "proc_macro"
+                        | "proc_macro_attribute"
+                        | "proc_macro_derive"
+                        | "no_std"
+                        | "no_core"
+                )
+            ) =>
         {
             Ok(())
         }

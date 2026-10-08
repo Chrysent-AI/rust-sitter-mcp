@@ -49,7 +49,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 * Prove ordinary workspace-member module chains through inert lint/doc metadata
   and configured positive cfg edges, without Cargo discovery or executing doc
   expressions; retain unknown, inactive, competing, unadmitted and recovered
-  chain refusals with anchored evidence.
+  chain refusals with anchored evidence. Share lint/doc identity classification
+  across context checks, keeping root and non-root controls and unknown attribute
+  providers refused with exact anchors.
 * Refuse provider-uncertain attributes in declarative declaration-identity proofs,
   including `serde(transparent)` beside familiar derive spellings; disclose the
   attribute and written owner anchors instead of treating unproved helper

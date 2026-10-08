@@ -79,10 +79,9 @@ fn unconditional(
             }) {
                 return Err("declarative_conditional_context");
             }
-            if !matches!(
-                attr.simple_name().as_deref(),
-                Some("allow" | "warn" | "deny" | "forbid" | "doc" | "macro_export")
-            ) {
+            if !crate::items::identity_inert_metadata(attr.simple_name().as_deref())
+                && attr.simple_name().as_deref() != Some("macro_export")
+            {
                 return Err(provider_uncertain(inputs, sema, module, &attr, None));
             }
         }
@@ -313,10 +312,7 @@ fn type_attributes(
         .iter()
         .filter(|a| a.simple_name().as_deref() != Some("derive"))
     {
-        if !matches!(
-            attr.simple_name().as_deref(),
-            Some("allow" | "warn" | "deny" | "forbid" | "doc")
-        ) {
+        if !crate::items::identity_inert_metadata(attr.simple_name().as_deref()) {
             // Control attributes cannot become helpers by caller assertion.
             if !inputs.assume_declared_helpers
                 || attr.meta().is_none()

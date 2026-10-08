@@ -4,6 +4,7 @@ use super::attributes::{DeclaredCfg, admits};
 fn inert_chain_metadata_needs_no_configuration_or_file_reads() {
     for text in [
         "#![doc = include_str!(\"missing.md\")]",
+        "#![doc = \"plain documentation\"]",
         "#[doc(hidden)]",
         "#![ forbid (unsafe_code) ]",
         "#[allow(dead_code)]",
@@ -19,6 +20,12 @@ fn inert_chain_metadata_needs_no_configuration_or_file_reads() {
     for text in [
         "#![no_implicit_prelude]",
         "#![no_std]",
+        "#![no_core]",
+        "#![feature(arbitrary_gate)]",
+        "#![recursion_limit = \"256\"]",
+        "#![macro_use]",
+        "#![provider(doc = \"not builtin\")]",
+        "#![custom::doc(include_str!(\"missing.md\"))]",
         "#[path = \"other.rs\"]",
         "#[custom::doc]",
         "#[unexamined(cfg, path)]",

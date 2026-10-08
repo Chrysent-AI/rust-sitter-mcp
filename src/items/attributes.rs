@@ -2,6 +2,13 @@
 use crate::result::ByteRange;
 use tree_sitter::Node;
 
+/// Bare compiler metadata that cannot introduce or replace written identities.
+/// Callers must parse the attribute first; qualified providers never qualify.
+/// This does not evaluate doc payloads or admit cfg, derives or prelude controls.
+pub(crate) fn identity_inert_metadata(name: Option<&str>) -> bool {
+    matches!(name, Some("allow" | "warn" | "deny" | "forbid" | "doc"))
+}
+
 /// These existing forms require no relaxed proof. Derives deliberately remain
 /// outside this predicate: macro identity needs scoped, opt-in evidence.
 pub(crate) fn context_independent_attribute(text: &str) -> bool {
