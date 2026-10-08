@@ -3487,7 +3487,7 @@ fn assemble(
             "rewrite_overrides",
         ));
     }
-    // Only explicitly accepted removal gaps fold deletions; no arbitrary folding.
+    // Only audited removal-gap choices fold deletions; no arbitrary folding.
     if edit::sort_validate(&mut edits).is_err() {
         result.blocker("OVERLAPPING_EDITS", "consumed runs overlap", None, None);
         return Ok(());

@@ -36,6 +36,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `std::string::String`, preserving original/final shadow and context audits
   and caller-assumption labeling without semantic configuration.
 
+### Changed
+
+* Collapse oversized pure removal-boundary blank-line runs by default in multi-item
+  `move_item` batches through anchored, audited rewrites; preserve explicit `retain`
+  replay, single-item defaults, single/double newlines and unrelated whitespace.
+
 ### Fixed
 
 * Emit narrow ancestor-scoped visibility repairs (`pub(super)` or

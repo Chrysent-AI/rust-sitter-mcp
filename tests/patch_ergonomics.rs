@@ -270,7 +270,7 @@ fn gap_choices_are_bounded_stale_safe_and_cannot_inject_or_touch_unrelated_gaps(
 }
 
 #[test]
-fn adjacent_removals_bof_and_crlf_gaps_collapse_without_losing_comment_bytes() {
+fn adjacent_removals_bof_and_crlf_gaps_default_collapse_without_losing_comment_bytes() {
     for source in [
         "fn first() {}\n\nfn selected() {}\n\nfn another() {}\n\nfn last() {}\n",
         "\nfn selected() {}\n\nfn another() {}\n\nfn last() {}\n",
@@ -286,8 +286,27 @@ fn adjacent_removals_bof_and_crlf_gaps_collapse_without_losing_comment_bytes() {
             .push(args(&repo, "cases/layout/source.rs", "fn another() {}")["moves"][0].clone());
         let base = run(&repo, request.clone());
         let choice = gap(&base["plan"]);
-        request["rewrite_overrides"] = json!([{"target":choice["action"]["target"],"action":"replace","replacement_text":choice["removal_gap"]["after_text"]}]);
-        let copy = apply(&repo, &run(&repo, request));
+        assert_eq!(choice["removal_gap"]["default_disposition"], "collapse");
+        assert_eq!(choice["removal_gap"]["selected_disposition"], "collapse");
+        let mut explicit = request.clone();
+        explicit["rewrite_overrides"] =
+            json!([{"target":choice["action"]["target"],"action":"accept_default"}]);
+        assert_eq!(run(&repo, explicit)["plan"], base["plan"]);
+        request["rewrite_overrides"] =
+            json!([{"target":choice["action"]["target"],"action":"retain"}]);
+        let retained = run(&repo, request);
+        assert_eq!(
+            gap(&retained["plan"])["removal_gap"]["selected_disposition"],
+            "keep_in_place"
+        );
+        let kept_copy = apply(&repo, &retained);
+        assert_eq!(
+            text(&kept_copy, "cases/layout/source.rs"),
+            source
+                .replace("fn selected() {}", "")
+                .replace("fn another() {}", "")
+        );
+        let copy = apply(&repo, &base);
         compile(&copy);
         let output = text(&copy, "cases/layout/source.rs");
         assert!(!output.contains("\n\n\n") && !output.contains("\r\n\r\n\r\n"));
