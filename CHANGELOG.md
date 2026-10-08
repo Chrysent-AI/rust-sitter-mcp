@@ -34,6 +34,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Classify all written impl members as `context_sensitive` in `suggest_split`,
+  retaining their enclosing header anchors and excluding them from top-level-only
+  batches and automatic partitions without changing associated-item move validation.
 * Prove ordinary workspace-member module chains through inert lint/doc metadata
   and configured positive cfg edges, without Cargo discovery or executing doc
   expressions; retain unknown, inactive, competing, unadmitted and recovered

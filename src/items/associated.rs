@@ -168,12 +168,9 @@ pub(crate) fn inventory(
                     subtree_has_recovery: node.has_error(),
                     enclosing_has_recovery: implementation.has_error(),
                 },
-                eligibility: if reasons.is_empty() {
-                    "supported_unit"
-                } else {
-                    "context_sensitive"
-                }
-                .into(),
+                // Even an otherwise supported member needs its enclosing header, so it
+                // must not enter top-level-only advice selections or automatic partitions.
+                eligibility: "context_sensitive".into(),
                 reasons,
                 signal_ids: Vec::new(),
                 enclosing_impl: Some(identity.clone()),
