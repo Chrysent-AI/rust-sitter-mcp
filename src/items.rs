@@ -3,7 +3,9 @@ pub(crate) mod associated;
 mod attributes;
 pub(crate) mod cfg;
 mod chain;
-pub(crate) use attributes::{BUILTIN_DERIVES, context_independent_attribute, derive_names};
+pub(crate) use attributes::{
+    BUILTIN_DERIVES, context_independent_attribute, derive_names, identity_inert_metadata,
+};
 mod globs;
 mod lexical;
 mod refusal;

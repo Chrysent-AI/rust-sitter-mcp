@@ -68,10 +68,11 @@ fn conditional_meta(
         }
         // Metadata does not introduce bindings. Derives and prelude controls
         // still need the owning written/semantic fact-class audit.
-        _ if matches!(
-            meta.simple_name().as_deref(),
-            Some("allow" | "warn" | "deny" | "forbid" | "doc" | "inline" | "cold" | "must_use")
-        ) =>
+        _ if super::identity_inert_metadata(meta.simple_name().as_deref())
+            || matches!(
+                meta.simple_name().as_deref(),
+                Some("inline" | "cold" | "must_use")
+            ) =>
         {
             Ok(())
         }

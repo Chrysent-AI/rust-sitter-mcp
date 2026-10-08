@@ -33,10 +33,7 @@ fn inert(meta: &ast::Meta, depth: usize) -> bool {
         }) && !metas.is_empty()
             && metas.iter().all(|m| inert(m, depth + 1));
     }
-    if matches!(
-        meta.simple_name().as_deref(),
-        Some("allow" | "warn" | "deny" | "forbid" | "doc")
-    ) {
+    if super::super::identity_inert_metadata(meta.simple_name().as_deref()) {
         return true;
     }
     // This compiler feature only enables documentation metadata. Other feature

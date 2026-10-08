@@ -149,6 +149,100 @@ fn workspace_member_layouts_and_metadata_bearing_dangling_edges_are_proved() {
 }
 
 #[test]
+fn root_and_module_metadata_preserve_identity_without_executing_doc_payloads() {
+    let repo = Fixture::generate();
+    let root = "cases/metadata/lib.rs";
+    let parent = "cases/metadata/branch.rs";
+    let source = "cases/metadata/branch/leaf.rs";
+    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    let args = json!({"repo_path":repo.0,"crate_root":root,"paths":["cases/metadata"],"moves":[{"item":anchor(&repo,source,"fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/metadata/branch/moved.rs","parent_path":parent}}]});
+    for attribute in [
+        "#![doc = include_str!(\"missing.md\")]",
+        "#![doc = \"plain documentation\"]",
+        "#![allow(dead_code)]",
+        "#![deny(warnings)]",
+        "#![warn(missing_docs)]",
+        "#![forbid(unsafe_code)]",
+    ] {
+        for at in [root, parent] {
+            repo.write(root, "mod branch;\n");
+            repo.write(parent, "mod leaf;\n");
+            let declaration = if at == root { "branch" } else { "leaf" };
+            repo.write(at, &format!("{attribute}\nmod {declaration};\n"));
+            let before = observe(&repo.0);
+            let result = run(&repo, args.clone());
+            assert_eq!(
+                result["plan"]["applicable"], true,
+                "{attribute} at {at}: {result}"
+            );
+            assert_eq!(result["plan"]["chain_diagnostics"], json!([]));
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            assert_eq!(observe(&repo.0), before);
+            let copy = apply(&repo, &result);
+            // The parent can gain a sibling declaration; the scope prologue
+            // itself must remain byte-identical at its original location.
+            assert!(
+                fs::read(copy.0.join(at))
+                    .unwrap()
+                    .starts_with(format!("{attribute}\n").as_bytes())
+            );
+        }
+    }
+}
+
+#[test]
+fn root_and_module_controls_and_attribute_providers_keep_anchored_chain_refusals() {
+    let repo = Fixture::generate();
+    let root = "cases/metadata/lib.rs";
+    let parent = "cases/metadata/branch.rs";
+    let source = "cases/metadata/branch/leaf.rs";
+    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    let args = json!({"repo_path":repo.0,"crate_root":root,"paths":["cases/metadata"],"moves":[{"item":anchor(&repo,source,"fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/metadata/branch/moved.rs","parent_path":parent}}],"limits":{"diagnostic_count":1000}});
+    for attribute in [
+        "#![no_std]",
+        "#![no_core]",
+        "#![feature(arbitrary_gate)]",
+        "#![recursion_limit = \"256\"]",
+        "#![macro_use]",
+        "#![provider(doc = \"not builtin\")]",
+        "#![custom::doc(include_str!(\"missing.md\"))]",
+    ] {
+        for at in [root, parent] {
+            repo.write(root, "mod branch;\n");
+            repo.write(parent, "mod leaf;\n");
+            let declaration = if at == root { "branch" } else { "leaf" };
+            repo.write(at, &format!("{attribute}\nmod {declaration};\n"));
+            let before = observe(&repo.0);
+            let result = run(&repo, args.clone());
+            withheld(&result);
+            code(&result, "CRATE_IDENTITY_UNCERTAIN");
+            let diagnostic = result["plan"]["chain_diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| {
+                    d["reason"] == "root_attribute_chain_uncertainty" && d["at_file_path"] == at
+                })
+                .unwrap_or_else(|| panic!("{attribute} at {at}: {result}"));
+            assert_eq!(diagnostic["declaration"]["path"], at);
+            assert_eq!(
+                diagnostic["declaration"]["range"],
+                json!({"start_byte":0,"end_byte":attribute.len()})
+            );
+            assert!(
+                result["plan"]["chain_diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["reason"] == "inherited_uncertainty")
+            );
+            linked_move(&result);
+            assert_eq!(observe(&repo.0), before);
+        }
+    }
+}
+
+#[test]
 fn macro_root_move_refuses_with_named_actionable_cause() {
     let repo = Fixture::generate();
     let root = "cases/refusals/lib.rs";
