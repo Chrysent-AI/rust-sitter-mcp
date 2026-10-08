@@ -820,6 +820,39 @@ Moves carry internal bytes, associated outer attributes/docs, contiguous owned l
 
 Every path/use change, import insertion or leaf extraction, visibility repair, synthesized module declaration and separator is an itemized `rewrites[]` record with exact before/after bytes, syntactic confidence, contributing items and precise edit/create-content linkage. Boundary separators use nearest LF/CRLF without changing copied bytes. Created files receive an audited EOF separator and end with one newline by default. An EOF line comment is terminated with synthesized LF: if its copied CST bytes already include CR, that completes CRLF without adding a second CR; otherwise LF avoids altering the copied comment span. Separator targets expose `boundary_role:"before_payload"|"after_payload"`; their optional `binding` is an opaque original-run/declaration/insertion boundary identity, not a Rust binding. Fragmented runs have distinct identities. Replay the **entire published `target`**, not the display rewrite ID. Entries in `rewrite_overrides` are `{target:<published object>,action:"accept_default"|"retain"|"replace",replacement_text?:string}`. Only replace accepts text (≤64 KiB). Supported alternatives are complete simple paths to the same evidenced final target, explicit private non-glob imports (including evidenced alias/reference repairs), private, `pub(self)`, `pub(super)`, `pub(in ...)` or `pub(crate)` visibility with ancestor scope and all required access rechecked, safe newline separators, or the unchanged ordinary module declaration. A synthesized binding can also be replaced by a supported explicit path at its anchored written references. No arbitrary code, comments, header, wildcard, public API shim or new `pub` exposure may be injected. Source `retain` preserves the exact original span; synthesis `retain` emits no bytes. Rejecting a required repair leaves a linked unresolved binding/access/declaration decision and blocks every artifact. Every choice is reparsed and attachment/byte safety is rechecked. Unknown, stale, duplicate or conflicting targets fail; no server-side plan handle is required.
 
+### Post-move import review
+
+After assembling the simultaneous source overlay (removals, incoming items and
+binding repairs included), the planner scans surviving private `use` declarations
+in files supplying moves. A binding with zero remaining written-name occurrences
+outside its own declaration receives a nonblocking `post_move_import_review`
+decision in category `post_move_import`. Counts use Rust CST identifier tokens,
+normalize raw identifier spelling, and exclude strings, character literals and
+comments; names in other imports, macro token trees, binders and unrelated scopes
+count conservatively. This is a whole-file spelling scan, not binding resolution.
+
+Each advisory anchors the complete **original** import first, followed by the
+source selections, and names the zero-reference bindings in
+`unresolved_consequence`. `resolution:"advisory"`, `selected_choice:"retain"`,
+`blocks_applicability:false`, empty `supported_choices` and
+`action.route:"unsupported_in_engine"` mean review externally, **not** change
+selection or submit an override. All import bytes remain unchanged by this scan,
+including single names, renamed/grouped imports and partially unused groups.
+Globs receive an explicit `glob bindings unenumerated: true` advisory rather than
+invented imported names. Public/restricted `pub use` re-exports are excluded.
+Entirely synthesized imports have no original declaration and are not cleanup
+targets; destination-only files are not scanned, nor are recovered overlays.
+Other applicable-plan decisions and blocked-preview limits still apply.
+
+Token absence cannot prove an import unused: traits can enable method lookup
+without a written trait name, and cfg/macro expansion is not modeled here. Imports
+mentioned only in comments/strings are therefore flagged but retained. This scan
+never deletes a binding, claims semantic unused-import proof, or guarantees a
+warning-free build, including under configured semantic resolution. After applying
+a reviewed plan externally, run the caller's compiler, remove only confirmed unused
+bindings, preserve surviving group leaves, then run `cargo check` again. Review of
+the advisory does not clear independent blockers or weaken lossless byte splicing.
+
 ### Written-binding repairs: repaired versus blocked
 
 New private `mod name;` declarations are inserted after the last sibling file-module declaration, otherwise before the first `#[cfg(test)]` item and its attached docs/attributes, otherwise at EOF. Placement includes attached trailing comments and existing line endings, with the item/boundary recorded in the rewrite anchors. Required imports go after the last whole top-level `use` and its trailing attachments, or before the first item's leading attachments when there are no imports. Existing use groups stay adjacent and no existing code is reordered.
