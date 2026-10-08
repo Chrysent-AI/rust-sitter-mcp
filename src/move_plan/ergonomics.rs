@@ -197,9 +197,10 @@ pub(super) fn removal_gaps(
         let target = RewriteTarget::Source {
             anchor: anchor(path, source, &range(start, end)),
         };
-        // Batch removals can accumulate many blank lines. Single-item plans retain
-        // their existing byte-identical default; either default can be overridden.
-        let default = if request.moves.len() > 1 && newlines.len() > 2 {
+        // Pure components join every whitespace-adjacent removal, so non-edge
+        // boundaries are retained syntax/trivia. Never default-shape a file edge.
+        let interior = start > 0 && end < source.len();
+        let default = if request.moves.len() > 1 && interior && newlines.len() > 2 {
             "collapse"
         } else {
             "keep_in_place"
@@ -268,15 +269,43 @@ pub(super) fn removal_gaps(
             *purpose = DecisionPurpose::ReviewDefault;
         }
         let decision_id = format!("d/{}", result.plan.decisions.len());
+        let (next_action, unresolved_consequence) = if default == "collapse" {
+            (
+                "review the selected gap disposition; replay the target with retain to preserve residual bytes or replace with removal_gap.after_text to collapse",
+                "oversized interior removal-boundary gaps collapse by default in multi-item batches; retain preserves residual whitespace bytes",
+            )
+        } else {
+            (
+                "keep the gap unchanged, or replay the target with action replace and removal_gap.after_text",
+                "removal-boundary blank lines stay byte-identical unless explicitly collapsed",
+            )
+        };
         let decision = Decision {
-            reason: DecisionReason::RemovalGapChoice, next_action: "review the selected gap disposition; replay the target with retain to preserve residual bytes or replace with removal_gap.after_text to collapse".into(),
-            action, id: decision_id.clone(), category: "removal_gap".into(),
-            anchors: match &target { RewriteTarget::Source { anchor } => vec![anchor.clone()], _ => unreachable!() },
-            item_ids: ids.clone(), evidence: Vec::new(), unresolved_consequence: "oversized removal-boundary gaps collapse by default in multi-item batches; retain preserves residual whitespace bytes".into(),
-            resolution: "choice_available".into(), supported_choices: vec!["accept_default".into(), "retain".into(), "replace".into()],
+            reason: DecisionReason::RemovalGapChoice,
+            next_action: next_action.into(),
+            action,
+            id: decision_id.clone(),
+            category: "removal_gap".into(),
+            anchors: match &target {
+                RewriteTarget::Source { anchor } => vec![anchor.clone()],
+                _ => unreachable!(),
+            },
+            item_ids: ids.clone(),
+            evidence: Vec::new(),
+            unresolved_consequence: unresolved_consequence.into(),
+            resolution: "choice_available".into(),
+            supported_choices: vec!["accept_default".into(), "retain".into(), "replace".into()],
             selected_choice: Some(selected_action.into()),
-            blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None, refusal_basis: Vec::new(),
-            removal_gap: Some(RemovalGapChoice { before_text: before.clone(), after_text: after.clone(), default_disposition: default.into(), selected_disposition: selected.into() }),
+            blocks_applicability: false,
+            chain_diagnostic_ids: Vec::new(),
+            lexical_uncertainty: None,
+            refusal_basis: Vec::new(),
+            removal_gap: Some(RemovalGapChoice {
+                before_text: before.clone(),
+                after_text: after.clone(),
+                default_disposition: default.into(),
+                selected_disposition: selected.into(),
+            }),
         };
         if result.plan.decisions.len() >= 100_000 {
             return Err(DomainError::new(
@@ -315,11 +344,15 @@ pub(super) fn removal_gaps(
             .into();
             if selected_action == "accept_default" {
                 audit.origin = "synthesized".into();
+                audit.evidence = vec![
+                    "exact selected removals and adjacent whitespace; accept_default collapse"
+                        .into(),
+                ];
+                audit.rationale = "collapse only whitespace left by these engine-owned removals; no retained syntax is changed".into();
+            } else {
+                audit.evidence = vec!["exact selected removals and adjacent whitespace; explicit caller-selected collapse".into()];
+                audit.rationale = "explicitly collapse only whitespace left by these engine-owned removals; no retained syntax is changed".into();
             }
-            audit.evidence = vec![format!(
-                "exact selected removals and adjacent whitespace; {selected_action} collapse"
-            )];
-            audit.rationale = "collapse only whitespace left by these engine-owned removals; no retained syntax is changed".into();
             let mut edit = Edit::new(path, source, start, end, text, "");
             edit.match_ids.clear();
             edit.item_ids = ids;

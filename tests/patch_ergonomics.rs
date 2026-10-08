@@ -270,10 +270,9 @@ fn gap_choices_are_bounded_stale_safe_and_cannot_inject_or_touch_unrelated_gaps(
 }
 
 #[test]
-fn adjacent_removals_bof_and_crlf_gaps_default_collapse_without_losing_comment_bytes() {
+fn adjacent_interior_removals_and_crlf_gaps_default_collapse_without_losing_comment_bytes() {
     for source in [
         "fn first() {}\n\nfn selected() {}\n\nfn another() {}\n\nfn last() {}\n",
-        "\nfn selected() {}\n\nfn another() {}\n\nfn last() {}\n",
         "fn first() {} // retained\r\n\r\nfn selected() {}\r\n\r\nfn another() {}\r\n\r\nfn last() {}\r\n",
     ] {
         let repo = Fixture::generate();
@@ -312,9 +311,6 @@ fn adjacent_removals_bof_and_crlf_gaps_default_collapse_without_losing_comment_b
         assert!(!output.contains("\n\n\n") && !output.contains("\r\n\r\n\r\n"));
         if source.contains("retained") {
             assert!(output.contains("// retained\r\n"));
-        }
-        if source.starts_with('\n') {
-            assert!(output.starts_with("\nfn last()"));
         }
     }
 }

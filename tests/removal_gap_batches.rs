@@ -121,6 +121,130 @@ fn nineteen_method_batch_collapses_only_created_gaps_with_audited_keep_replay() 
 }
 
 #[test]
+fn boundary_batches_keep_oversized_gaps_and_offer_explicit_collapse() {
+    for eol in ["\n", "\r\n"] {
+        for original in [
+            format!("fn first() {{}}{eol}{eol}fn second() {{}}{eol}{eol}{eol}fn keep() {{}}"),
+            format!(
+                "{eol}fn first() {{}}{eol}{eol}fn second() {{}}{eol}{eol}{eol}fn keep() {{}}{eol}"
+            ),
+            format!(
+                "fn keep() {{}}{eol}{eol}fn first() {{}}{eol}{eol}fn second() {{}}{eol}{eol}{eol}"
+            ),
+        ] {
+            let repo = Fixture::generate();
+            repo.write("cases/layout/lib.rs", "mod source;\n");
+            repo.write("cases/layout/source.rs", &original);
+            let request = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves": (["fn first() {}","fn second() {}"]).iter().map(|item| json!({
+                "item":anchor(&repo,"cases/layout/source.rs",item),
+                "destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}
+            })).collect::<Vec<_>>()});
+            let result = run(&repo, request.clone());
+            let choices = gaps(&result);
+            assert_eq!(choices.len(), 1);
+            let choice = choices[0];
+            let boundary = &choice["action"]["target"]["anchor"]["range"];
+            assert!(boundary["start_byte"] == 0 || boundary["end_byte"] == original.len());
+            assert_eq!(
+                choice["removal_gap"]["default_disposition"],
+                "keep_in_place"
+            );
+            assert_eq!(
+                choice["removal_gap"]["selected_disposition"],
+                "keep_in_place"
+            );
+            assert!(
+                !result["plan"]["rewrites"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["kind"] == "removal_gap")
+            );
+            let expected = original
+                .replace("fn first() {}", "")
+                .replace("fn second() {}", "");
+            assert_eq!(source(&apply(&repo, &result)), expected);
+            for action in ["accept_default", "retain", "replace"] {
+                let mut replay = request.clone();
+                let mut override_choice =
+                    json!({"target":choice["action"]["target"],"action":action});
+                if action == "replace" {
+                    override_choice["replacement_text"] =
+                        choice["removal_gap"]["after_text"].clone();
+                }
+                replay["rewrite_overrides"] = json!([override_choice]);
+                let replayed = run(&repo, replay);
+                let output = source(&apply(&repo, &replayed));
+                if action == "replace" {
+                    let anchor = &choice["action"]["target"]["anchor"];
+                    assert_eq!(
+                        output,
+                        original.replace(
+                            anchor["expected_text"].as_str().unwrap(),
+                            choice["removal_gap"]["after_text"].as_str().unwrap()
+                        )
+                    );
+                    let audit = replayed["plan"]["rewrites"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r["kind"] == "removal_gap")
+                        .unwrap();
+                    assert_eq!(audit["origin"], "caller_override");
+                    assert_eq!(
+                        audit["evidence"],
+                        json!([
+                            "exact selected removals and adjacent whitespace; explicit caller-selected collapse"
+                        ])
+                    );
+                    assert_eq!(
+                        audit["rationale"],
+                        "explicitly collapse only whitespace left by these engine-owned removals; no retained syntax is changed"
+                    );
+                } else {
+                    assert_eq!(output, expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn single_item_serialized_plans_match_legacy_default_and_replay_bytes() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "fn before() {}\n\nfn selected() {}\n\nfn after() {}\n",
+    );
+    let request = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{
+        "item":anchor(&repo,"cases/layout/source.rs","fn selected() {}"),
+        "destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}
+    }]});
+    let result = run(&repo, request.clone());
+    apply(&repo, &result);
+    let choice = gaps(&result)[0];
+    let mut plans = vec![result["plan"].clone()];
+    for action in ["retain", "accept_default", "replace"] {
+        let mut replay = request.clone();
+        let mut override_choice = json!({"target":choice["action"]["target"],"action":action});
+        if action == "replace" {
+            override_choice["replacement_text"] = choice["removal_gap"]["after_text"].clone();
+        }
+        replay["rewrite_overrides"] = json!([override_choice]);
+        let replayed = run(&repo, replay);
+        apply(&repo, &replayed);
+        plans.push(replayed["plan"].clone());
+    }
+    // Captured from the parent of the batch-collapse change (85f14c7), not rebuilt
+    // from the current response: compare complete serialized plans, including audits.
+    assert_eq!(
+        serde_json::to_string(&plans).unwrap(),
+        include_str!("fixtures/removal-gap-plans/single-item.json")
+    );
+}
+
+#[test]
 fn gap_endpoint_visibility_repair_remains_separate_and_applicable() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\n");
