@@ -387,8 +387,8 @@ atom away. Unsupported predicates, malformed attributes and unknown atoms retain
 the veto. A known-OFF sibling is configuration information, not proof an inactive
 selected occurrence resolves. No new false-atom request field is introduced.
 
-Attached attributes on selected top-level items also reach this gate under
-`resolve_semantic`: `context_attribute` proofs compare the exact attribute bytes
+Attached `cfg`/`cfg_attr` attributes on selected top-level items also reach this
+gate under `resolve_semantic`: `context_attribute` proofs compare the exact attribute bytes
 at original and final anchors, including attributes carried with the move outside
 the item's syntax range. Feature atoms can be supplied either in `features` or as
 `cfg` entries with `key:"feature"` and a string `value`; the encodings agree.
@@ -396,8 +396,12 @@ A context-only proof requires an active selected item or required binding:
 known-OFF `cfg`, including active `cfg_attr` payloads that disable the item,
 retains `inactive_written_binding`. Unknown predicates retain an anchored
 `conditional_context` refusal and reached `undeclared_cfg_atom` disclosure.
-This clears only that attribute need, not independent prelude/lexical, macro,
-inline-module, access, API or repair vetoes, and is not compilation evidence.
+Selected predicate checks use the strict `generated_items` context gate even on
+types: active custom/qualified derive payloads retain their veto. Direct derives
+and other non-predicate attributes do not enter this selected-item route; existing
+derive/macro-binding audits remain responsible for them. This clears only that
+predicate need, not independent prelude/lexical, macro, inline-module, access, API
+or repair vetoes, and is not compilation evidence.
 
 The derive guard is scoped by the fact being proved:
 

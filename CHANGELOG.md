@@ -34,9 +34,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-* Route selected top-level item attributes through configured original/final
-  context checks, discharging active declared feature predicates with exact
+* Route selected top-level `cfg`/`cfg_attr` predicates through configured
+  original/final context checks, discharging active declared features with exact
   attribute proofs while retaining anchored unknown and inactive-item refusals.
+  Keep direct derives on their binding audit path and active custom-derive
+  payloads blocked; predicate context cannot erase a `derive_veto`.
 * Prove ordinary workspace-member module chains through inert lint/doc metadata
   and configured positive cfg edges, without Cargo discovery or executing doc
   expressions; retain unknown, inactive, competing, unadmitted and recovered

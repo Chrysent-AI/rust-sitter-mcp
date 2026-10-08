@@ -2070,8 +2070,9 @@ fn build(
     }
     let mut semantic_needs = Vec::new();
     if request.resolve_semantic {
-        let (candidates, other): (Vec<_>, Vec<_>) =
-            analysis.needs.into_iter().partition(semantic::candidate);
+        let (candidates, other): (Vec<_>, Vec<_>) = analysis.needs.into_iter().partition(|need| {
+            semantic::candidate(need, &parsed[&need.path], &files[&need.path].source)
+        });
         semantic_needs = candidates;
         analysis.needs = other;
     }

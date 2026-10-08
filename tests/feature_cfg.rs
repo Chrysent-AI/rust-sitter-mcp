@@ -10,9 +10,24 @@ use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
 fn run(attribute: &str, features_as_atoms: bool, resolve: bool) -> (Fixture, Value) {
+    run_item(
+        attribute,
+        "fn selected() -> u32 { 1 }",
+        features_as_atoms,
+        resolve,
+        false,
+    )
+}
+
+fn run_item(
+    attribute: &str,
+    selected: &str,
+    features_as_atoms: bool,
+    resolve: bool,
+    assume_standard_prelude: bool,
+) -> (Fixture, Value) {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\n");
-    let selected = "fn selected() -> u32 { 1 }";
     repo.write(
         "cases/layout/source.rs",
         &format!("{attribute}\n{selected}\n"),
@@ -27,6 +42,7 @@ fn run(attribute: &str, features_as_atoms: bool, resolve: bool) -> (Fixture, Val
     }]});
     let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs",
         "paths":["cases/layout"],"resolve_semantic":resolve,"semantic_configuration":config,
+        "assume_standard_prelude":assume_standard_prelude,
         "moves":[{"item":move_artifacts::anchor(&repo,"cases/layout/source.rs",selected),
             "destination":{"kind":"new_sibling","path":"cases/layout/moved.rs","parent_path":"cases/layout/lib.rs"}}]});
     let before = observe(&repo.0);
@@ -144,6 +160,75 @@ fn undeclared_inactive_malformed_and_provider_contexts_remain_anchored() {
                         && b["anchor"]["range"]["start_byte"] == 0))
         );
     }
+}
+
+#[test]
+fn selected_custom_derives_cannot_be_discharged_by_predicate_context() {
+    for prelude in [false, true] {
+        for attr in [
+            "#[derive(external::Serialize)]",
+            "#[cfg_attr(feature = \"tokio\", derive(external::Serialize))]",
+            "#[cfg_attr(feature = \"tokio\", cfg_attr(all(), derive(external::Serialize)))]",
+        ] {
+            let (_, result) = run_item(attr, "pub struct Selected;", true, true, prelude);
+            assert_eq!(result["plan"]["applicable"], false, "{result}");
+            assert!(result["plan"]["patch"].is_null(), "{result}");
+            assert!(
+                !result["plan"]["binding_proofs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|p| p["classification"] == "context_attribute"
+                        && p["anchor"]["expected_text"] == attr),
+                "{result}"
+            );
+            if prelude && attr.starts_with("#[derive(") {
+                assert!(
+                    result["plan"]["decisions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|d| d["refusal_basis"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|b| b["class"] == "derive_veto")),
+                    "{result}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_builtin_derives_keep_the_prelude_audit_route() {
+    let (_, result) = run_item("#[derive(Clone)]", "pub struct Selected;", true, true, true);
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    let proofs = result["plan"]["binding_proofs"].as_array().unwrap();
+    assert!(
+        proofs
+            .iter()
+            .any(|p| p["class"] == "standard_builtin_derive")
+    );
+    assert!(
+        !proofs
+            .iter()
+            .any(|p| p["classification"] == "context_attribute")
+    );
+}
+
+#[test]
+fn selected_non_predicate_attributes_do_not_gain_context_only_proofs() {
+    let (_, result) = run_item("#[must_use]", "pub struct Selected;", true, true, false);
+    assert_eq!(result["plan"]["applicable"], false, "{result}");
+    assert!(result["plan"]["patch"].is_null());
+    assert!(
+        !result["plan"]["binding_proofs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|p| p["classification"] == "context_attribute")
+    );
 }
 
 #[test]
