@@ -1,6 +1,149 @@
 use super::*;
 
 #[test]
+fn workspace_member_chains_admit_metadata_and_declared_cfg_without_guessing() {
+    let repo = Fixture::generate();
+    let root = "cases/workspace/member/src/lib.rs";
+    let parent = "cases/workspace/member/src/branch/mod.rs";
+    let source = "cases/workspace/member/src/branch/leaf.rs";
+    repo.write(
+        "cases/workspace/Cargo.toml",
+        "[workspace]\nmembers = [\"member\"]\n",
+    );
+    repo.write(root, "#![doc = include_str!(\"missing.md\")]\n#![cfg_attr(docsrs, feature(doc_cfg))]\n#[cfg(feature = \"enabled\")]\nmod branch;\n");
+    repo.write(parent, "#![forbid(unsafe_code)]\n#[cfg_attr(docsrs, doc(cfg(feature = \"enabled\")))]\nmod leaf;\n");
+    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    let mut args = json!({"repo_path":repo.0,"crate_root":root,"paths":["cases/workspace/member/src"],"resolve_semantic":true,"semantic_configuration":{"crates":[{"name":"member","root_file":root,"edition":"2021","features":["enabled"],"cfg":[],"dependencies":[]}]},"moves":[{"item":anchor(&repo,source,"fn selected() {}"),"destination":{"kind":"new_sibling","path":"cases/workspace/member/src/branch/moved.rs","parent_path":parent}}]});
+    let before = observe(&repo.0);
+    let good = run(&repo, args.clone());
+    assert_eq!(good["plan"]["applicable"], true, "{good}");
+    assert_eq!(good["plan"]["chain_diagnostics"], json!([]));
+    assert_eq!(observe(&repo.0), before);
+    args["resolve_semantic"] = json!(false);
+    let default = run(&repo, args.clone());
+    code(&default, "CRATE_IDENTITY_UNCERTAIN");
+    assert!(
+        default["plan"]["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "conditional_declaration" && d["at_file_path"] == root)
+    );
+    args["resolve_semantic"] = json!(true);
+    let configuration = args["semantic_configuration"].clone();
+    args["semantic_configuration"]["crates"][0]["edition"] = json!("invalid");
+    code(&run(&repo, args.clone()), "CRATE_IDENTITY_UNCERTAIN");
+    args["semantic_configuration"] = configuration.clone();
+    let duplicate = args["semantic_configuration"]["crates"][0].clone();
+    args["semantic_configuration"]["crates"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    code(&run(&repo, args.clone()), "CRATE_IDENTITY_UNCERTAIN");
+    args["semantic_configuration"] = configuration;
+    for (written, reason) in [
+        (
+            "#[cfg(any(feature = \"enabled\", missing))] mod branch;\n",
+            "conditional_declaration",
+        ),
+        (
+            "#[cfg(not(feature = \"enabled\"))] mod branch;\n",
+            "conditional_declaration",
+        ),
+        (
+            "#[cfg(feature = \"enabled\")] mod branch;\nmod branch;\n",
+            "competing_declarations",
+        ),
+        ("#[path = \"other.rs\"] mod branch;\n", "path_attribute"),
+        ("@\nmod branch;\n", "inherited_uncertainty"),
+    ] {
+        repo.write(root, written);
+        let blocked = run(&repo, args.clone());
+        withheld(&blocked);
+        code(&blocked, "CRATE_IDENTITY_UNCERTAIN");
+        assert!(
+            blocked["plan"]["chain_diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == reason && d["at_file_path"] == root),
+            "{blocked}"
+        );
+        linked_move(&blocked);
+    }
+    repo.write(root, "mod branch;\n");
+    args["globs"] = json!([root, source]);
+    args["moves"][0]["destination"] = json!({"kind":"existing","path":root});
+    let unadmitted = run(&repo, args);
+    code(&unadmitted, "CRATE_IDENTITY_UNCERTAIN");
+    assert!(
+        unadmitted["plan"]["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "chain_file_unadmitted"
+                && d["candidate_paths"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(parent)))
+    );
+}
+
+#[test]
+fn workspace_member_layouts_and_metadata_bearing_dangling_edges_are_proved() {
+    for (member, branch, leaf, root_metadata) in [
+        (
+            "web_member",
+            "routing",
+            "method_routing",
+            "#![doc = include_str!(\"missing.md\")]\n#![cfg_attr(docsrs, feature(doc_cfg))]\n#![cfg_attr(test, allow(clippy::float_cmp))]\n#![cfg_attr(not(test), warn(clippy::print_stdout))]\n",
+        ),
+        (
+            "cli_member",
+            "builder",
+            "command",
+            "#![doc = include_str!(\"../README.md\")]\n#![cfg_attr(docsrs, feature(doc_cfg))]\n#![forbid(unsafe_code)]\n#![warn(missing_docs)]\n",
+        ),
+    ] {
+        let repo = Fixture::generate();
+        repo.write(
+            "cases/members/Cargo.toml",
+            "[workspace]\nmembers = [\"web_member\", \"cli_member\"]\n",
+        );
+        let base = format!("cases/members/{member}/src");
+        let root = format!("{base}/lib.rs");
+        let parent = format!("{base}/{branch}/mod.rs");
+        let source = format!("{base}/{branch}/{leaf}.rs");
+        let destination = format!("{base}/{branch}/moved.rs");
+        repo.write(&root, &format!("{root_metadata}pub mod {branch};\n"));
+        repo.write(
+            &parent,
+            &format!("#[doc(hidden)]\nmod {leaf};\n#[doc(hidden)]\nmod moved;\n"),
+        );
+        repo.write(&source, "fn selected() {}\nfn retained() {}\n");
+        let args = json!({"repo_path":repo.0,"crate_root":root,"paths":[base],"moves":[{"item":anchor(&repo,&source,"fn selected() {}"),"destination":{"kind":"new_sibling","path":destination,"parent_path":parent}}]});
+        let result = run(&repo, args);
+        assert_eq!(result["status"], "complete", "{result}");
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["chain_diagnostics"], json!([]));
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        let copy = apply(&repo, &result);
+        assert_eq!(
+            fs::read_to_string(copy.0.join(destination)).unwrap(),
+            "fn selected() {}\n"
+        );
+        assert_eq!(
+            fs::read(copy.0.join(&parent)).unwrap(),
+            fs::read(repo.0.join(&parent)).unwrap()
+        );
+        assert_eq!(
+            fs::read(copy.0.join(&root)).unwrap(),
+            fs::read(repo.0.join(&root)).unwrap()
+        );
+    }
+}
+
+#[test]
 fn macro_root_move_refuses_with_named_actionable_cause() {
     let repo = Fixture::generate();
     let root = "cases/refusals/lib.rs";
@@ -216,7 +359,7 @@ fn chain_failure_decisions_survive_capped_blockers_and_preserve_error_boundaries
         ("mod target; mod target;", "competing_declarations"),
         ("mod target {}", "inline_module_layout"),
         (
-            "#[allow(dead_code)] mod target;",
+            "#[unexamined] mod target;",
             "unexamined_declaration_attributes",
         ),
     ] {

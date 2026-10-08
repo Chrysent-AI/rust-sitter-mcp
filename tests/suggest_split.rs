@@ -87,6 +87,36 @@ fn decision_fields(decisions: &Value) {
 }
 
 #[test]
+fn workspace_member_metadata_allows_advice_but_cfg_edges_remain_unknown() {
+    let repo = Fixture::generate();
+    let root = "cases/member/src/lib.rs";
+    let source = "cases/member/src/leaf.rs";
+    repo.write(root, "#![doc = include_str!(\"missing.md\")]\n#![cfg_attr(docsrs, feature(doc_cfg))]\n#![forbid(unsafe_code)]\n#[cfg_attr(unknown, doc(hidden))]\nmod leaf;\n");
+    repo.write(source, "fn one() {}\nfn two() {}\nfn three() {}\n");
+    let args = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/member/src"]});
+    let before = observe(&repo.0);
+    let result = run(&repo, args.clone());
+    assert_eq!(result["status"], "complete", "{result}");
+    assert_eq!(result["chain_diagnostics"], json!([]));
+    assert!(!result["drafts"].as_array().unwrap().is_empty(), "{result}");
+    assert_eq!(observe(&repo.0), before);
+    repo.write(root, "#[cfg(feature = \"enabled\")] mod leaf;\n");
+    let blocked = run(&repo, args);
+    assert!(
+        blocked["drafts"].as_array().unwrap().is_empty(),
+        "{blocked}"
+    );
+    assert!(
+        blocked["chain_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "conditional_declaration" && d["at_file_path"] == root),
+        "{blocked}"
+    );
+}
+
+#[test]
 fn all_written_units_and_display_omission_preserve_complete_drafts() {
     let repo = Fixture::generate();
     let before = observe(&repo.0);
@@ -1145,13 +1175,13 @@ fn failed_declaration_taxonomy_retains_original_coordinates() {
         ),
         ("mod leaf {}\n", "mod leaf {}", "inline_module_layout"),
         (
-            "#[allow(dead_code)]\nmod leaf;\n",
+            "#[unexamined]\nmod leaf;\n",
             "mod leaf;",
             "unexamined_declaration_attributes",
         ),
         // Attribute payload names must not be mistaken for the attribute itself.
         (
-            "#[allow(cfg, path)]\nmod leaf;\n",
+            "#[unexamined(cfg, path)]\nmod leaf;\n",
             "mod leaf;",
             "unexamined_declaration_attributes",
         ),
@@ -1294,7 +1324,7 @@ fn mandatory_chain_evidence_overflow_is_incomplete_with_no_dangling_links() {
     repo.write(source, "fn one() {}\nfn two() {}\n");
     repo.write(
         root,
-        "#[cfg(any())]\n#[path = \"elsewhere.rs\"]\n#[allow(dead_code)]\nmod leaf {}\nmod leaf;\n",
+        "#[cfg(any())]\n#[path = \"elsewhere.rs\"]\n#[unexamined]\nmod leaf {}\nmod leaf;\n",
     );
     let request = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":100000}});
     let full = run(&repo, request.clone());

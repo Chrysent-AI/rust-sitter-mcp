@@ -1399,13 +1399,49 @@ fn build(
         }
         parsed.insert(path.clone(), data);
     }
+    // Only one explicit configuration for the selected root can supply positive
+    // cfg evidence. Workspace manifests and absent atoms are never inferred.
+    let cfg = request
+        .resolve_semantic
+        .then_some(())
+        .and(request.semantic_configuration.as_ref())
+        .and_then(|config| {
+            let mut roots = config
+                .crates
+                .iter()
+                .filter(|c| c.root_file == request.crate_root);
+            let root = roots.next()?;
+            if roots.next().is_some()
+                || root.edition.parse::<ra_ap_syntax::Edition>().is_err()
+                || root.cfg.len() + root.features.len() > 1024
+                || root.cfg.iter().any(|c| {
+                    c.key.is_empty()
+                        || c.key.len() > 256
+                        || c.value.as_ref().is_some_and(|v| v.len() > 256)
+                })
+                || root.features.iter().any(|f| f.len() > 256)
+            {
+                return None;
+            }
+            Some(
+                root.cfg
+                    .iter()
+                    .map(|c| (c.key.clone(), c.value.clone()))
+                    .chain(
+                        root.features
+                            .iter()
+                            .map(|f| ("feature".into(), Some(f.clone()))),
+                    )
+                    .collect::<items::DeclaredCfg>(),
+            )
+        });
     let module_analysis = items::modules(
         &scope,
         &request.crate_root,
         &files,
         &parsed,
-        deadline,
-        cancelled,
+        (deadline, cancelled),
+        cfg.as_ref(),
         &mut result.counts.analysis_descriptor_bytes,
     )?;
     let contexts = &module_analysis.contexts;
@@ -1794,16 +1830,16 @@ fn build(
                     declaration.span.range.end_byte,
                 )
                 .expect("item");
-            if matches.len() != 1
-                || declaration.kind != "mod_item"
-                || !declaration.attributes.is_empty()
-                || node.child_by_field_name("body").is_some()
-            {
-                let mut reasons =
-                    items::declaration_reasons(parent, &files[&creation.parent], declaration);
-                if matches.len() != 1 || declaration.kind != "mod_item" {
-                    reasons.push(items::ChainReason::CompetingDeclarations);
-                }
+            let mut reasons = items::declaration_reasons(
+                parent,
+                &files[&creation.parent],
+                declaration,
+                cfg.as_ref(),
+            );
+            if matches.len() != 1 || declaration.kind != "mod_item" {
+                reasons.push(items::ChainReason::CompetingDeclarations);
+            }
+            if !reasons.is_empty() {
                 let diagnostics = reasons
                     .into_iter()
                     .map(|reason| {

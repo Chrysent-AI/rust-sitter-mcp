@@ -284,7 +284,7 @@ fn configuration_changes_fingerprint_and_missing_graph_keeps_blockers() {
 }
 
 #[test]
-fn frozen_serde_helper_bodies_keep_root_attribute_and_inherited_chain_refusals() {
+fn frozen_serde_helper_bodies_stay_blocked_after_inert_chain_metadata_admission() {
     let frozen: Value =
         serde_json::from_str(include_str!("fixtures/replay-corpus/serde-attr-lit-2.json")).unwrap();
     let repo = Fixture::generate();
@@ -317,16 +317,7 @@ fn frozen_serde_helper_bodies_keep_root_attribute_and_inherited_chain_refusals()
     }
     let value = run(&repo, args);
     assert_eq!(value["plan"]["applicable"], false, "{value}");
-    for expected in ["root_attribute_chain_uncertainty", "inherited_uncertainty"] {
-        assert!(
-            value["plan"]["chain_diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|d| d["reason"] == expected),
-            "{value}"
-        );
-    }
+    assert_eq!(value["plan"]["chain_diagnostics"], json!([]), "{value}");
     assert!(reason(&value, "macro_context_unexamined"));
     assert!(reason(&value, "member_or_constructor_unproved"));
     assert!(value["plan"]["patch"].is_null());

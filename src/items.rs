@@ -1,6 +1,7 @@
 //! Written top-level inventory and ordinary module evidence. No manifest or semantic resolver.
 pub(crate) mod associated;
 mod attributes;
+pub(crate) mod cfg;
 mod chain;
 pub(crate) use attributes::{BUILTIN_DERIVES, context_independent_attribute, derive_names};
 mod globs;
@@ -17,7 +18,7 @@ use crate::{
 pub use chain::{
     ChainDiagnostic, ChainLocation, ChainOrigin, ChainReason, ChainRole, ModuleAnalysis,
 };
-pub(crate) use chain::{declaration_reasons, finalize_chain};
+pub(crate) use chain::{DeclaredCfg, declaration_reasons, finalize_chain};
 pub(crate) use globs::GlobRoutes;
 pub use lexical::LexicalUncertainty;
 pub(crate) use lexical::{
@@ -329,17 +330,18 @@ pub fn present(scope: &Scope, path: &str) -> Result<bool, DomainError> {
         )),
     }
 }
-/// Follow only exact unconditioned declarations. A dangling declaration is recorded at its parent;
+/// Follow unique written declarations with admitted chain attributes. A dangling declaration is recorded at its parent;
 /// it does not manufacture a file/context and can be reused by an explicit creation.
 pub fn modules(
     scope: &Scope,
     root: &str,
     files: &BTreeMap<String, FileSnapshot>,
     parsed: &BTreeMap<String, ParsedFile>,
-    deadline: Instant,
-    cancelled: &AtomicBool,
+    controls: (Instant, &AtomicBool),
+    cfg: Option<&DeclaredCfg>,
     descriptor_bytes: &mut usize,
 ) -> Result<ModuleAnalysis, DomainError> {
+    let (deadline, cancelled) = controls;
     let mut analysis = ModuleAnalysis::default();
     let mut queue = vec![(root.to_owned(), ModuleEvidence {
         crate_root: root.into(), module_segments: Vec::new(), declaration_anchors: Vec::new(), filesystem_paths: vec![root.into()],
@@ -374,6 +376,13 @@ pub fn modules(
             continue;
         };
         let file = &files[&path];
+        if let Some(cfg) = cfg
+            && path == root
+        {
+            evidence.assumptions.push(format!(
+                "ordinary chain attributes evaluated under caller-declared positive cfg atoms: {cfg:?}; undeclared atoms remain unknown; compilation not performed"
+            ));
+        }
         let mut origins = Vec::new();
         if data.tree.root_node().has_error() {
             evidence
@@ -384,7 +393,7 @@ pub fn modules(
         if let Some(attribute) = data.trivia.iter().find(|t| {
             t.is_attribute()
                 && t.classification == "scope"
-                && !file.source[t.range.clone()].starts_with("#![allow(")
+                && !chain::attributes::admits(&file.source[t.range.clone()], cfg)
         }) {
             evidence
                 .unresolved
@@ -444,7 +453,7 @@ pub fn modules(
             let item = declarations[0];
             let flat = child_path(&path, root, name.trim_start_matches("r#"));
             let legacy = format!("{}/mod.rs", flat.trim_end_matches(".rs"));
-            let mut reasons = declaration_reasons(data, file, item);
+            let mut reasons = declaration_reasons(data, file, item, cfg);
             if declarations.len() != 1 {
                 reasons.push(ChainReason::CompetingDeclarations);
             }
