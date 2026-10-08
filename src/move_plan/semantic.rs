@@ -146,11 +146,12 @@ pub fn candidate(need: &Need) -> bool {
         DecisionReason::MemberOrConstructorUnproved | DecisionReason::ExternalOrMissingBinding
     ) || (need.reason == DecisionReason::ConditionalOrInheritedContext
         && need.category == "scope_dependency"
-        && need.refusal_basis.iter().any(|basis| {
-            matches!(basis.class.as_str(), "derive_veto" | "conditional_context")
-                && basis.anchor.path == need.path
-                && basis.anchor.range.as_ref() == Some(&need.range)
-        }))
+        && (need.attribute_range.is_some()
+            || need.refusal_basis.iter().any(|basis| {
+                matches!(basis.class.as_str(), "derive_veto" | "conditional_context")
+                    && basis.anchor.path == need.path
+                    && basis.anchor.range.as_ref() == Some(&need.range)
+            })))
 }
 
 // One attribute may be admitted for nominal identity and refused for method facts.
@@ -568,10 +569,13 @@ fn evaluate(
     let mut retained = Vec::new();
     for mut need in needs.drain(..) {
         items::check(controls.0, controls.1)?;
+        // Selected-item context needs retain the whole item as their diagnostic
+        // range; the attached attribute is the evidence to compare across overlays.
+        let span = need.attribute_range.as_ref().unwrap_or(&need.range);
         let anchor = SourceAnchor {
             path: need.path.clone(),
-            range: need.range.clone(),
-            expected_text: old.texts[&need.path][need.range.start_byte..need.range.end_byte].into(),
+            range: span.clone(),
+            expected_text: old.texts[&need.path][span.start_byte..span.end_byte].into(),
         };
         let mut refusal_class = "semantic_mapping_unproved";
         let proof = (|| {
@@ -634,6 +638,13 @@ fn evaluate(
         if let Some(proof) = proof {
             proofs.push(proof);
         } else {
+            if let Some(span) = &need.attribute_range {
+                need.refusal_basis.push(items::RefusalBasis::new(
+                    "conditional_context",
+                    &need.path,
+                    Some(span.clone()),
+                ));
+            }
             need.refuse_at_occurrence(refusal_class);
             retained.push(need);
         }
@@ -911,7 +922,9 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
                 FactClass::GeneratedItems
             };
             let module = scoped_context(inputs, &sema, attr.syntax(), fact_class)?;
-            if !safe_attr(inputs, &sema, module, &attr, fact_class) {
+            // A context-only proof must not authorize moving an inactive item
+            // or importing an inactive required binding under this configuration.
+            if !context::active_binding_attr(inputs, &sema, module, &attr, fact_class) {
                 return None;
             }
             return Some(Fact {
