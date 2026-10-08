@@ -96,7 +96,7 @@ Add to the **original request** (extra members, not a stand-alone call):
 
 - `accept_default`: accept the proposed repair (no replacement text)
 - `retain`: keep original bytes; blocks the batch if the repair was required
-- `replace`: substitute supported same-target alternative text (≤64 KiB) — simple paths, private non-glob imports/aliases, private/`pub(crate)` visibility, safe separators, unchanged ordinary module declaration
+- `replace`: substitute supported same-target alternative text (≤64 KiB) — simple paths, private non-glob imports/aliases, private/`pub(self)`/`pub(super)`/`pub(in ...)`/`pub(crate)` visibility (ancestor and all-caller access rechecked), safe separators, unchanged ordinary module declaration
 
 **Copy the published target object verbatim** — a source target contains a full anchor; a synthesis target contains `path`, `slot`, contributor `items`, `binding`, etc. Never reconstruct from display indices.
 

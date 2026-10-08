@@ -34,6 +34,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Emit narrow ancestor-scoped visibility repairs (`pub(super)` or
+  `pub(in crate::path)`) instead of blanket `pub(crate)` widening; merge all proven
+  caller regions and reject insufficient visibility overrides while preserving
+  existing access boundaries.
 * Include non-excluded written inherent methods/consts in `suggest_split` drafts
   while preserving `context_sensitive` eligibility, exact enclosing anchors,
   retained impls and per-group blocker forecasts; avoid scanning impl bodies
