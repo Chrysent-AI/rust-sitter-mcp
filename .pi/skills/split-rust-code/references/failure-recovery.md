@@ -50,7 +50,7 @@ Each decision carries `action.route`, `action.field`, `action.purpose`, and ofte
 - `review_default` → a nonblocking default (usually trivia); adjust only with supported dispositions.
 - `submit_for_analysis` → change `crate_root`, `paths`, or `moves` and rerun; applicability is not promised.
 - `selection_change_required` → the selected items/destinations themselves must change.
-- `unsupported_in_engine` → no override can resolve it; remove the affected items or handle separately.
+- `unsupported_in_engine` → no override can resolve it; for blocking decisions, remove the affected items or handle separately. Nonblocking `post_move_import_review` advisories instead retain imports and require external compiler-backed cleanup after applying an otherwise applicable move. Never change selection or invent an override solely for these advisories.
 
 Note: `request_field` route means "a request field or choice is actionable per `action.purpose`" — it is not synonymous with "add an override". Chain diagnostics, for example, route to `crate_root`/`paths` corrections.
 

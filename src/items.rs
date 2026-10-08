@@ -781,6 +781,7 @@ pub enum DecisionReason {
     RequiredRewriteRetained,
     OrdinaryTriviaChoice,
     RemovalGapChoice,
+    PostMoveImportReview,
     CrossGroupReferenceReview,
     DestinationBindingConflict,
     SourceBindingAmbiguous,

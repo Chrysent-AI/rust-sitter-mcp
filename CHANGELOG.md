@@ -9,6 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Flag retained source imports with zero post-move written-name references through
+  anchored nonblocking `post_move_import_review` advisories; exclude strings/comments
+  and public re-exports, retain all import bytes, and disclose unenumerable globs
+  without claiming semantic unused-import proof or warning-free compilation.
 * Add whole written inherent method/const partitioning with header-only enclosing
   anchors, unchanged generic/where headers, audited verbatim impl wrappers and
   same-type existing-impl destinations; retain trait, cfg and generated-member vetoes.

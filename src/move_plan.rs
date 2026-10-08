@@ -1,5 +1,6 @@
 //! One simultaneous, read-only relocation plan with itemized written-binding repairs.
 mod actions;
+mod dead_imports;
 pub(crate) mod ergonomics;
 mod prelude;
 mod semantic;
@@ -3707,6 +3708,7 @@ fn assemble(
             origins: Vec::new(),
         });
     }
+    dead_imports::review(files, parsed, &outputs, controls, result)?;
     items::check(deadline, cancelled)?;
     if !trivia::verify_move(
         &originals,

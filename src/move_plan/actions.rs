@@ -38,6 +38,10 @@ impl DecisionAction {
                 fields: vec!["moves".into()],
                 instruction: "change the selected move to preserve the anchored glob consumer; third-file glob consumer repair and acknowledgment are not supported".into(),
             },
+            DecisionReason::PostMoveImportReview => Self::UnsupportedInEngine {
+                construct: "post_move_import_review".into(),
+                instruction: "review the retained import with the caller's compiler after applying the move; remove only compiler-confirmed unused bindings externally, then run cargo check again. This nonblocking advisory has no request override".into(),
+            },
             DecisionReason::CrossGroupReferenceReview => Self::field("move_item", "moves", DecisionPurpose::SubmitForAnalysis),
             DecisionReason::TestConsumerAcknowledged => Self::field("move_item", "acknowledge_test_consumers", DecisionPurpose::ReviewDefault),
             DecisionReason::OrdinaryTriviaChoice => Self::RequestField {
