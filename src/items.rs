@@ -22,7 +22,7 @@ pub(crate) use chain::{DeclaredCfg, declaration_reasons, finalize_chain};
 pub(crate) use globs::GlobRoutes;
 pub use lexical::LexicalUncertainty;
 pub(crate) use lexical::{
-    LexicalBinding, lexical_assessment, lexical_binding, lexical_with_import_proof,
+    LexicalBinding, LexicalReason, lexical_assessment, lexical_assessment_with_cfg,
 };
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
@@ -377,6 +377,7 @@ pub fn modules(
         };
         let file = &files[&path];
         if let Some(cfg) = cfg
+            && !cfg.is_empty()
             && path == root
         {
             evidence.assumptions.push(format!(

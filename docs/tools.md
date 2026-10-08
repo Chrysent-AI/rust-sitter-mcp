@@ -152,15 +152,16 @@ These are independent calls against the initial files, not sequential applicatio
 
 ### Written re-export routes
 
-Consumer-side repairs can follow unique, unconditioned named `pub use` and
-`pub(crate) use` leaves to a directly inventoried declaration in an admitted
+Consumer-side repairs can follow unique named `pub use` and
+`pub(crate) use` leaves that are unconditioned or active under the declared
+configuration to a directly inventoried declaration in an admitted
 ordinary module. Renamed leaves preserve the consumer's binding spelling:
 `pub use crate::implementation::B as C` produces a destination import such as
 `use crate::implementation::B as C;` when that canonical path is accessible. Relative
 paths use the declaring module's written context. Transitive routes are bounded
 to **eight re-export hops** and reject cycles, competing leaves, missing terminal
-declarations, globs and attributed/conditional leaves (including `cfg` and
-`cfg_attr`). Terminal attribute, constructor, visibility and collision checks
+declarations, globs and unproved/inactive attributed leaves (including unknown
+`cfg` and `cfg_attr`). Terminal attribute, constructor, visibility and collision checks
 still apply; following a route does not prove type/member behavior. Before
 rewriting a canonical route, every intermediate module must have written visibility
 from the final destination: `pub`/`pub(crate)` permit crate access; private and
@@ -267,10 +268,11 @@ blocks also veto, even on a later, differently named local item: an attribute
 macro can emit a competing hoisted item. The refusal discloses the attribute's
 original range as `lexical_uncertainty` with `conditional_local_context`; it is
 not a standalone-macro witness eligible for test-consumer risk acknowledgment.
-Only the existing strict context-independent predicate exempts written attributes
+The existing strict context-independent predicate exempts written attributes
 (`allow(...)`, `inline`, `inline(always)`, `inline(never)`, `repr(...)`); doc comments
-are inert comment syntax. Explicit `doc`/`expect`, conditional/custom attributes
-and local derives remain unexamined: bare derive spelling alone does not prove
+are inert comment syntax. Declared configuration can additionally discharge
+conditional wrappers as described below. Explicit `doc`/`expect`, unknown
+conditional/custom attributes and local derives remain unexamined: bare derive spelling alone does not prove
 compiler-built-in macro identity in that block. Expansion sites confined to sibling
 blocks do not veto, and body attributes do not veto a signature outside their blocks.
 This audits direct block macro invocations, macro expression-statement wrappers
@@ -305,8 +307,10 @@ Path forms such as `#[derive(foo::Debug)]` or `#[derive(serde::Serialize)]` neve
 qualify. In `#[derive(Debug, Args)]`, an unshadowed `Debug` is separately discharged,
 but `Args` retains the attribute veto and the whole batch remains blocked.
 `#[serde(...)]`, `#[expect(...)]` and all other non-allowlisted attributes still
-retain their own move/context needs. Unexamined companion attributes, including
-`cfg_attr`, veto an unconditional built-in derive proof on that declaration.
+retain their own move/context needs. Unexamined companion attributes, including unknown or unsupported
+`cfg_attr` payloads, veto an unconditional built-in derive proof on that declaration.
+Known conditional wrappers can discharge only their context veto under the
+same declared configuration; derive identity still needs its scoped audit.
 Advice remains strict because it has no prelude flag; advice, move guards and
 required-binding repairs share the existing context-independent attribute predicate.
 Required-binding repairs still refuse inherited inner attribute context and
@@ -332,11 +336,40 @@ entire batch. Original bytes remain lossless, no `Cargo.toml` is read, and
 `semantic:"not_performed"` is unchanged. This option does not make idiomatic Rust
 relocation generally executable.
 
+### Declared configuration in written audits
+
+`semantic_configuration` also supplies positive cfg evidence to written
+module-chain, inline-module, import, required-binding, selected-item, lexical and
+standard-prelude context audits, without requiring `resolve_semantic:true`.
+One uniquely configured entry must match `crate_root`, with a valid edition and
+bounded cfg/features. Listed features can use `features` or exact
+`cfg` entries `{key:"feature",value:"name"}`; both encodings agree. No configuration
+means no new admission, and advice has no configuration opt-in.
+
+Written and resolution audits share the same predicate evaluator: `all`, `any`
+and single-operand `not` check every operand, including unknown atoms behind a
+Boolean determining operand. Unlisted features, keys and values remain unknown,
+not OFF. Active `cfg` can discharge a conditional veto; selected items, required
+bindings and module edges must remain active. Retained context may be known-OFF,
+but its written shadow names are kept conservatively rather than erased.
+`cfg_attr` recurses through active cfg/metadata payloads up to the existing depth
+limit; a provably inactive condition skips its payload. Unknown conditions,
+malformed predicates and arbitrary providers still refuse. Active derive payloads
+and prelude controls retain their independent identity/control audits.
+
+This is written configuration evidence, not symbol resolution or compilation.
+`integrity.semantic` stays `"not_performed"` on written-only calls; no RA proof or
+`resolution_coverage` is synthesized. Module-evidence assumptions and prelude
+proof bases disclose the declared atoms. Remaining conditional refusals keep
+original anchors and state in their consequence that the declared configuration
+was consulted; expand `diagnostic_count` to see full decision prose. Independent
+macro, access, collision, API, chain and repair blockers remain.
+
 ### Opt-in bounded resolution
 
-`resolve_semantic` defaults to **false**. Omission or false preserves the existing
-response bytes, including `semantic:"not_performed"`, even when a configuration
-is supplied. To request resolution, include an explicit `semantic_configuration`
+`resolve_semantic` defaults to **false**. Omission or false leaves
+`semantic:"not_performed"`; a supplied configuration can still affect the written
+audits above. To request resolution, include an explicit `semantic_configuration`
 in the same `move_item` request, for example:
 
 ```json
@@ -701,7 +734,7 @@ with an empty context array.
 
 The ordinary chain audit admits built-in `allow`/`warn`/`deny`/`forbid` and `doc` metadata, including `doc = include_str!(...)`, without executing expressions or reading documentation files. Nested `cfg_attr` with only those payloads or the exact documentation feature `feature(doc_cfg)` is harmless to module identity even with an unknown condition. This exemption is **chain evidence only**: semantic fact, prelude, selected-item and binding audits remain independent.
 
-For `move_item` with `resolve_semantic:true`, one uniquely configured entry matching `crate_root` can also admit active `cfg`/`cfg_attr` chain attributes under its explicitly listed ON features/cfg atoms. All operands must be known; unlisted atoms remain unknown, not OFF, even in a Boolean expression with a determining operand. Known-OFF declarations do not supply edges. Invalid matching edition/cfg data or duplicate matching roots, unknown/unsupported payloads, path remapping, prelude controls, parser recovery and competing declarations/layouts retain their vetoes. The root's `ModuleEvidence.assumptions` discloses positive cfg use; this is not Cargo discovery or compilation. `suggest_split` has no configuration opt-in and still refuses condition-dependent edges.
+For `move_item`, one uniquely configured `semantic_configuration` entry matching `crate_root` can also admit active `cfg`/`cfg_attr` chain attributes, without requiring semantic resolution, under its explicitly listed ON features/cfg atoms. All operands must be known; unlisted atoms remain unknown, not OFF, even in a Boolean expression with a determining operand. Known-OFF declarations do not supply edges. Invalid matching edition/cfg data or duplicate matching roots, unknown/unsupported payloads, path remapping, prelude controls, parser recovery and competing declarations/layouts retain their vetoes. The root's `ModuleEvidence.assumptions` discloses positive cfg use; this is not Cargo discovery or compilation. `suggest_split` has no configuration opt-in and still refuses condition-dependent edges.
 
 A new destination must be an absent literal `.rs` sibling of every assigned source, in an existing directory. Its basename is an ASCII identifier, not `_`, `mod`, a raw identifier, or any Rust strict/reserved/contextual keyword (including `gen`, `raw`, `safe`, `union` and `macro_rules`). No directory creation or same-file reordering is supported. Symlinks, hard exclusions, nested repositories, ignores, caller filters, existing entries, case-folded aliases, competing `name/mod.rs` layouts and declaration conflicts fail closed. Use an admitted existing directory in `paths`, not an absent path.
 

@@ -20,7 +20,12 @@ fn workspace_member_chains_admit_metadata_and_declared_cfg_without_guessing() {
     assert_eq!(good["plan"]["chain_diagnostics"], json!([]));
     assert_eq!(observe(&repo.0), before);
     args["resolve_semantic"] = json!(false);
-    let default = run(&repo, args.clone());
+    let written = run(&repo, args.clone());
+    assert_eq!(written["plan"]["applicable"], true, "{written}");
+    assert_eq!(written["plan"]["integrity"]["semantic"], "not_performed");
+    let mut without_configuration = args.clone();
+    without_configuration["semantic_configuration"] = Value::Null;
+    let default = run(&repo, without_configuration);
     code(&default, "CRATE_IDENTITY_UNCERTAIN");
     assert!(
         default["plan"]["chain_diagnostics"]

@@ -144,6 +144,7 @@ struct ImportBinding {
     module: Vec<String>,
     leaf: items::UseLeaf,
     conditioned: bool,
+    written_attributes: bool,
     scope_range: Option<ByteRange>,
 }
 #[derive(Default, Clone)]
@@ -182,6 +183,7 @@ struct WrittenTarget {
 }
 struct Analyzer<'a> {
     request: &'a MoveRequest,
+    cfg: Option<items::DeclaredCfg>,
     files: &'a BTreeMap<String, FileSnapshot>,
     parsed: &'a BTreeMap<String, ParsedFile>,
     selected: &'a [(String, Item, String)],
@@ -195,6 +197,25 @@ struct Analyzer<'a> {
     controls: (Instant, &'a AtomicBool),
 }
 impl Analyzer<'_> {
+    fn lexical_binding(
+        &self,
+        node: Node<'_>,
+        source: &str,
+        name: &str,
+        proven_import: bool,
+    ) -> items::LexicalBinding {
+        items::lexical_assessment_with_cfg(
+            "",
+            node,
+            source,
+            name,
+            self.controls,
+            proven_import,
+            self.cfg.as_ref(),
+        )
+        .map(|a| a.binding)
+        .unwrap_or(items::LexicalBinding::Uncertain)
+    }
     fn account_lexical(&mut self, witness: &Option<items::LexicalUncertainty>) {
         if let Some(witness) = witness {
             self.descriptor_bytes += serde_json::to_vec(witness)
@@ -297,9 +318,7 @@ impl Analyzer<'_> {
         let mut parent = node.parent();
         while let Some(p) = parent {
             if p.kind() == "mod_item" && p.child_by_field_name("body").is_some() {
-                if p.prev_named_sibling()
-                    .is_some_and(|n| n.kind() == "attribute_item")
-                {
+                if items::cfg::attributed(p, &self.files[path].source, self.cfg.as_ref()) {
                     return None;
                 }
                 inline.push(
@@ -787,7 +806,9 @@ impl Analyzer<'_> {
                 &self.files[path].source[attribute.range.start_byte..attribute.range.end_byte];
             // Inner attributes on a required binding remain an inherited-scope
             // boundary. Sharing the outer allowlist must not relax that guard.
-            if text.starts_with("#![") || !items::context_independent_attribute(text) {
+            if (text.starts_with("#![") || !items::context_independent_attribute(text))
+                && items::cfg::attribute(text, self.cfg.as_ref(), true).is_err()
+            {
                 need.reason = DecisionReason::ConditionalOrInheritedContext;
                 need.category = "scope_dependency";
                 need.path = path.into();
@@ -1225,7 +1246,7 @@ impl Analyzer<'_> {
                 }) {
                     return None;
                 }
-                match items::lexical_with_import_proof(node, source, binding, self.controls) {
+                match self.lexical_binding(node, source, binding, true) {
                     items::LexicalBinding::Independent => {}
                     items::LexicalBinding::Uncertain => return None,
                     items::LexicalBinding::Absent => references.push(anchor(
@@ -1266,12 +1287,8 @@ impl Analyzer<'_> {
             && aliases[0].leaf.public
             && !aliases[0].conditioned
             && text == first
-            && items::lexical_with_import_proof(
-                node,
-                &self.files[path].source,
-                first,
-                self.controls,
-            ) == items::LexicalBinding::Absent
+            && self.lexical_binding(node, &self.files[path].source, first, true)
+                == items::LexicalBinding::Absent
         {
             return self.resolve_in(path, module, text, false);
         }
@@ -1279,12 +1296,8 @@ impl Analyzer<'_> {
             if aliases.len() != 1
                 || aliases[0].conditioned
                 || aliases[0].leaf.public
-                || items::lexical_with_import_proof(
-                    node,
-                    &self.files[path].source,
-                    first,
-                    self.controls,
-                ) != items::LexicalBinding::Absent
+                || self.lexical_binding(node, &self.files[path].source, first, true)
+                    != items::LexicalBinding::Absent
             {
                 return None;
             }
@@ -1298,7 +1311,7 @@ impl Analyzer<'_> {
             }
             return Some(format!("{base}{}", text.strip_prefix(first)?));
         }
-        if items::lexical_binding(node, &self.files[path].source, first, self.controls)
+        if self.lexical_binding(node, &self.files[path].source, first, false)
             != items::LexicalBinding::Absent
         {
             return None;
@@ -1307,7 +1320,7 @@ impl Analyzer<'_> {
     }
     fn use_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
         let source = &self.files[&need.path].source;
-        if attributed_use(node) {
+        if items::cfg::attributed(node, source, self.cfg.as_ref()) {
             need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "scope_dependency";
             need.message = "affected import has unexamined attribute/conditional context".into();
@@ -1336,13 +1349,14 @@ impl Analyzer<'_> {
             let Some(old) = self.resolve_use(&need.path, &module, node, &leaf.path) else {
                 let first = leaf.path.split("::").next().unwrap_or("");
                 if !matches!(first, "crate" | "self" | "super")
-                    && let Ok(assessment) = items::lexical_assessment(
+                    && let Ok(assessment) = items::lexical_assessment_with_cfg(
                         &need.path,
                         node,
                         source,
                         first,
                         self.controls,
                         true,
+                        self.cfg.as_ref(),
                     )
                     && assessment.binding == items::LexicalBinding::Uncertain
                 {
@@ -1417,12 +1431,8 @@ impl Analyzer<'_> {
                     if matches!(candidate.kind(), "macro_invocation" | "macro_definition") {
                         if self.lexical_module(&need.path, candidate, false).as_deref()
                             == Some(module.as_slice())
-                            && items::lexical_binding(
-                                candidate,
-                                source,
-                                &leaf.binding,
-                                self.controls,
-                            ) != items::LexicalBinding::Independent
+                            && self.lexical_binding(candidate, source, &leaf.binding, false)
+                                != items::LexicalBinding::Independent
                             && items::token_candidate(
                                 candidate,
                                 source,
@@ -1680,13 +1690,14 @@ impl Analyzer<'_> {
         let first = text.split("::").next().unwrap_or("");
         let local_aliases = self.scoped_imports(&need.path, &old_module, node, first);
         if !matches!(first, "crate" | "self" | "super") {
-            let Ok(assessment) = items::lexical_assessment(
+            let Ok(assessment) = items::lexical_assessment_with_cfg(
                 &need.path,
                 node,
                 &self.files[&need.path].source,
                 first,
                 self.controls,
                 local_aliases.len() == 1,
+                self.cfg.as_ref(),
             ) else {
                 return false;
             };
@@ -1838,12 +1849,8 @@ impl Analyzer<'_> {
             RewriteTarget::Source { .. } => self.consumer(&repair.path, node?),
         };
         if let Some(node) = node
-            && items::lexical_with_import_proof(
-                node,
-                &self.files[&repair.path].source,
-                first,
-                self.controls,
-            ) != items::LexicalBinding::Absent
+            && self.lexical_binding(node, &self.files[&repair.path].source, first, true)
+                != items::LexicalBinding::Absent
         {
             return None;
         }
@@ -2139,13 +2146,14 @@ impl Analyzer<'_> {
                                 )
                                 .expect("reference");
                             if !new_binding.is_empty() {
-                                let assessment = items::lexical_assessment(
+                                let assessment = items::lexical_assessment_with_cfg(
                                     &reference.path,
                                     node,
                                     &self.files[&reference.path].source,
                                     &new_binding,
                                     self.controls,
                                     false,
+                                    self.cfg.as_ref(),
                                 )?;
                                 if assessment.binding != items::LexicalBinding::Absent {
                                     self.account_lexical(&assessment.uncertainty);
@@ -2259,6 +2267,20 @@ impl Analyzer<'_> {
         Ok(failures)
     }
     fn repair(&mut self, need: &mut Need) -> bool {
+        // Preserve the semantic tier's original/final attribute evidence when
+        // requested; written-only calls need no resolver to evaluate predicates.
+        if !self.request.resolve_semantic
+            && need.reason == DecisionReason::ConditionalOrInheritedContext
+            && let Some(range) = &need.attribute_range
+            && items::cfg::attribute(
+                &self.files[&need.path].source[range.start_byte..range.end_byte],
+                self.cfg.as_ref(),
+                true,
+            )
+            .is_ok()
+        {
+            return true;
+        }
         if matches!(need.category, "reexport_dependency" | "glob_dependency") {
             let node = self.parsed[&need.path]
                 .tree
@@ -2370,13 +2392,14 @@ impl Analyzer<'_> {
             })
             .cloned()
             .collect();
-        let Ok(assessment) = items::lexical_assessment(
+        let Ok(assessment) = items::lexical_assessment_with_cfg(
             &need.path,
             node,
             source,
             name,
             self.controls,
             !local_imports.is_empty(),
+            self.cfg.as_ref(),
         ) else {
             return false;
         };
@@ -2479,6 +2502,9 @@ impl Analyzer<'_> {
                 && !imports[0].leaf.public
                 && leaves.len() == 1
                 && !leaves[0].conditioned
+                // Configured ordinary bindings do not relax the separate
+                // provisional facade route for generated declarations.
+                && !leaves[0].written_attributes
                 && let Some(item) = self.parsed[&leaves[0].path]
                     .items
                     .iter()
@@ -2579,6 +2605,7 @@ pub(crate) fn analyze(
 ) -> Result<Analysis, DomainError> {
     let mut analyzer = Analyzer {
         request,
+        cfg: request.declared_cfg(),
         files,
         parsed,
         selected,
@@ -2620,7 +2647,16 @@ pub(crate) fn analyze(
                             path: path.clone(),
                             module: module.clone(),
                             leaf,
-                            conditioned: attributed_use(node),
+                            written_attributes: attributed_use(node),
+                            conditioned: if analyzer.cfg.is_some() {
+                                items::cfg::attributed(
+                                    node,
+                                    &files[path].source,
+                                    analyzer.cfg.as_ref(),
+                                )
+                            } else {
+                                attributed_use(node)
+                            },
                             scope_range: {
                                 let mut parent = node.parent();
                                 let mut scope = None;
@@ -2656,6 +2692,15 @@ pub(crate) fn analyze(
     for mut need in needs {
         items::check(controls.0, controls.1)?;
         if !analyzer.repair(&mut need) {
+            if analyzer.cfg.is_some()
+                && (need.reason == DecisionReason::ConditionalOrInheritedContext
+                    || need
+                        .lexical_uncertainty
+                        .as_ref()
+                        .is_some_and(|w| w.reason == items::LexicalReason::ConditionalLocalContext))
+            {
+                need.message.push_str("; caller-declared configuration consulted; unknown atoms and unsupported context retain their veto");
+            }
             analyzer.account_lexical(&need.lexical_uncertainty);
             if !analyzer.exceeded {
                 remaining.push(need);

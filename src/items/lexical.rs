@@ -132,9 +132,13 @@ fn value_binding(
 fn matches(node: Node<'_>, source: &str, name: &str) -> bool {
     source[node.byte_range()].trim_start_matches("r#") == name
 }
-fn attributed(node: Node<'_>) -> bool {
-    node.prev_named_sibling()
-        .is_some_and(|p| p.kind() == "attribute_item")
+fn attributed(node: Node<'_>, source: &str, cfg: Option<&super::DeclaredCfg>) -> bool {
+    if cfg.is_some() {
+        super::cfg::attributed(node, source, cfg)
+    } else {
+        node.prev_named_sibling()
+            .is_some_and(|p| p.kind() == "attribute_item")
+    }
 }
 #[derive(Clone, Copy)]
 enum IdentifierPosition {
@@ -362,6 +366,7 @@ pub(crate) fn pattern_uncertainty(
     }
     Ok(None)
 }
+#[allow(clippy::too_many_arguments)] // The cfg evidence belongs to the same lexical audit.
 fn assess_pattern(
     path: &str,
     scope: Node<'_>,
@@ -370,8 +375,9 @@ fn assess_pattern(
     name: &str,
     reference: Node<'_>,
     controls: (Instant, &AtomicBool),
+    cfg: Option<&super::DeclaredCfg>,
 ) -> Result<Option<LexicalAssessment>, DomainError> {
-    if attributed(scope) || attributed(pattern) {
+    if attributed(scope, source, cfg) || attributed(pattern, source, cfg) {
         return Ok(Some(uncertain(
             path,
             name,
@@ -406,6 +412,17 @@ pub(crate) fn lexical_assessment(
     controls: (Instant, &AtomicBool),
     proven_import: bool,
 ) -> Result<LexicalAssessment, DomainError> {
+    lexical_assessment_with_cfg(path, node, source, name, controls, proven_import, None)
+}
+pub(crate) fn lexical_assessment_with_cfg(
+    path: &str,
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+    proven_import: bool,
+    cfg: Option<&super::DeclaredCfg>,
+) -> Result<LexicalAssessment, DomainError> {
     lexical_context(
         path,
         node,
@@ -415,6 +432,7 @@ pub(crate) fn lexical_assessment(
         proven_import,
         None,
         true,
+        cfg,
     )
 }
 /// Audit written bindings only for test-risk acknowledgment, never as a binding proof.
@@ -435,6 +453,7 @@ pub(crate) fn test_consumer_binding(
         false,
         None,
         false,
+        None,
     )
     .map(|a| a.binding)
 }
@@ -448,6 +467,7 @@ fn lexical_context(
     proven_import: bool,
     boundary: Option<Node<'_>>,
     statement_macros: bool,
+    cfg: Option<&super::DeclaredCfg>,
 ) -> Result<LexicalAssessment, DomainError> {
     // Direct invocations, macro expression statements and unexamined outer
     // attributes can introduce block items, visible even before the expansion.
@@ -466,7 +486,9 @@ fn lexical_context(
                 if statement.kind() == "attribute_item"
                     && (statement.has_error()
                         || statement.is_missing()
-                        || !super::context_independent_attribute(&source[statement.byte_range()]))
+                        || (!super::context_independent_attribute(&source[statement.byte_range()])
+                            && super::cfg::attribute(&source[statement.byte_range()], cfg, false)
+                                .is_err()))
                 {
                     // Doc comments are inert comment nodes; derive spellings alone
                     // do not establish built-in macro identity in this lexical scope.
@@ -581,6 +603,7 @@ fn lexical_context(
                     check(controls.0, controls.1)?;
                     if parent.named_child(i as u32).is_some_and(|n| {
                         matches!(n.kind(), "attribute_item" | "inner_attribute_item")
+                            && super::cfg::attribute(&source[n.byte_range()], cfg, true).is_err()
                     }) {
                         return Ok(uncertain(
                             path,
@@ -593,7 +616,7 @@ fn lexical_context(
                 }
             }
             if let Some(proof) =
-                assess_pattern(path, parent, pattern, source, name, node, controls)?
+                assess_pattern(path, parent, pattern, source, name, node, controls, cfg)?
             {
                 return Ok(proof);
             }
@@ -614,7 +637,7 @@ fn lexical_context(
                     .child_by_field_name("pattern")
                     .or_else(|| (parent.kind() == "closure_expression").then_some(parameter))
                     && let Some(proof) =
-                        assess_pattern(path, parent, pattern, source, name, node, controls)?
+                        assess_pattern(path, parent, pattern, source, name, node, controls, cfg)?
                 {
                     return Ok(proof);
                 }
@@ -649,7 +672,7 @@ fn lexical_context(
                 if statement.kind() == "let_declaration"
                     && let Some(pattern) = statement.child_by_field_name("pattern")
                     && let Some(proof) =
-                        assess_pattern(path, statement, pattern, source, name, node, controls)?
+                        assess_pattern(path, statement, pattern, source, name, node, controls, cfg)?
                 {
                     return Ok(proof);
                 }
@@ -689,7 +712,7 @@ fn lexical_context(
                     .child_by_field_name("name")
                     .is_some_and(|n| matches(n, source, name))
                 {
-                    if attributed(statement) {
+                    if attributed(statement, source, cfg) {
                         return Ok(uncertain(
                             path,
                             name,
@@ -751,26 +774,7 @@ pub(crate) fn local(
         false,
         Some(item),
         true,
+        None,
     )
     .is_ok_and(|a| a.binding == LexicalBinding::Independent)
-}
-pub(crate) fn lexical_binding(
-    node: Node<'_>,
-    source: &str,
-    name: &str,
-    controls: (Instant, &AtomicBool),
-) -> LexicalBinding {
-    lexical_assessment("", node, source, name, controls, false)
-        .map(|a| a.binding)
-        .unwrap_or(LexicalBinding::Uncertain)
-}
-pub(crate) fn lexical_with_import_proof(
-    node: Node<'_>,
-    source: &str,
-    name: &str,
-    controls: (Instant, &AtomicBool),
-) -> LexicalBinding {
-    lexical_assessment("", node, source, name, controls, true)
-        .map(|a| a.binding)
-        .unwrap_or(LexicalBinding::Uncertain)
 }

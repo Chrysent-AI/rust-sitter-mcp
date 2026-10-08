@@ -19,7 +19,7 @@ fn veto_provenance_names_each_class_at_original_coordinates() {
         let tree = crate::trivia::parse(source, controls.0, controls.1)
             .unwrap()
             .unwrap();
-        let found = shadows("probe.rs", tree.root_node(), source, controls).unwrap();
+        let found = shadows("probe.rs", tree.root_node(), source, controls, None).unwrap();
         assert!(found.refuses(0), "{source}");
         let basis = found
             .basis_for(0, false)
@@ -43,7 +43,7 @@ fn unknown_derive_keeps_its_own_witness_without_vetoing_unrelated_type_names() {
     let tree = crate::trivia::parse(source, controls.0, controls.1)
         .unwrap()
         .unwrap();
-    let found = shadows("probe.rs", tree.root_node(), source, controls).unwrap();
+    let found = shadows("probe.rs", tree.root_node(), source, controls, None).unwrap();
     assert!(!found.refuses(0));
     assert!(found.basis_for(0, false).is_empty());
     let basis = found
@@ -62,7 +62,8 @@ fn scoped_prelude_controls_do_not_escape_to_parent_or_sibling() {
     let tree = crate::trivia::parse(source, controls.0, controls.1)
         .unwrap()
         .unwrap();
-    let scoped = ScopedShadows::collect("probe.rs", tree.root_node(), source, controls).unwrap();
+    let scoped =
+        ScopedShadows::collect("probe.rs", tree.root_node(), source, controls, None).unwrap();
     for ((at, _), refuses) in source
         .match_indices("Option")
         .zip([false, true, true, false])
@@ -93,7 +94,7 @@ fn scoped_prelude_controls_do_not_escape_to_parent_or_sibling() {
         let tree = crate::trivia::parse(source, controls.0, controls.1)
             .unwrap()
             .unwrap();
-        let found = shadows("probe.rs", tree.root_node(), source, controls).unwrap();
+        let found = shadows("probe.rs", tree.root_node(), source, controls, None).unwrap();
         assert!(found.chain_context(true).refuses(0), "{source}");
         assert_eq!(
             found.chain_context(false).refuses(0),
@@ -202,6 +203,7 @@ fn retained_local_need_discloses_the_definite_declaration_not_the_use() {
             &[],
             &mut needs,
             controls,
+            None,
         )
         .unwrap();
         assert!(proofs.is_empty());

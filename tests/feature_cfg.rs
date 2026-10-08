@@ -232,8 +232,8 @@ fn selected_non_predicate_attributes_do_not_gain_context_only_proofs() {
 }
 
 #[test]
-fn feature_context_admission_requires_the_resolution_opt_in() {
+fn feature_context_admission_does_not_require_the_resolution_opt_in() {
     let (_, result) = run("#[cfg(feature = \"http1\")]", true, false);
-    assert_eq!(result["plan"]["applicable"], false);
+    assert_eq!(result["plan"]["applicable"], true);
     assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
 }

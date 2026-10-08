@@ -34,6 +34,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Consult declared features/cfg in written conditional context audits without
+  requiring semantic resolution, sharing positive-only predicate evaluation
+  across module chains, imports, required bindings, lexical and prelude scopes;
+  retain anchored unknown-atom, inactive-binding and independent expansion vetoes.
 * Route selected top-level `cfg`/`cfg_attr` predicates through configured
   original/final context checks, discharging active declared features with exact
   attribute proofs while retaining anchored unknown and inactive-item refusals.
