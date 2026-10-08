@@ -681,11 +681,15 @@ Associated-item batches publish reached context evaluations once in
 `plan.resolution_coverage.context_evaluations`; per-proof coverage retains metadata
 with an empty context array.
 
-`crate_root` is an admitted existing Rust file chosen as the analysis root, **not** an inferred Cargo target. Source/destination identities require unique, ordinary written `mod name;` chains within admitted scope. Missing/conditional/competing/`#[path]` mappings and inherited context uncertainty block. References are scoped to the admitted corpus; no absence claim covers generated code or unexamined build targets.
+`crate_root` is an admitted existing Rust file chosen as the analysis root, **not** an inferred Cargo target. Workspace members use their Git-root-relative source root (for example `member/src/lib.rs`), with every required chain file admitted; workspace manifests are not loaded. Source/destination identities require unique, ordinary written `mod name;` chains within admitted scope. Missing/competing/`#[path]` mappings and inherited context uncertainty block. References are scoped to the admitted corpus; no absence claim covers generated code or unexamined build targets.
+
+The ordinary chain audit admits built-in `allow`/`warn`/`deny`/`forbid` and `doc` metadata, including `doc = include_str!(...)`, without executing expressions or reading documentation files. Nested `cfg_attr` with only those payloads or the exact documentation feature `feature(doc_cfg)` is harmless to module identity even with an unknown condition. This exemption is **chain evidence only**: semantic fact, prelude, selected-item and binding audits remain independent.
+
+For `move_item` with `resolve_semantic:true`, one uniquely configured entry matching `crate_root` can also admit active `cfg`/`cfg_attr` chain attributes under its explicitly listed ON features/cfg atoms. All operands must be known; unlisted atoms remain unknown, not OFF, even in a Boolean expression with a determining operand. Known-OFF declarations do not supply edges. Invalid matching edition/cfg data or duplicate matching roots, unknown/unsupported payloads, path remapping, prelude controls, parser recovery and competing declarations/layouts retain their vetoes. The root's `ModuleEvidence.assumptions` discloses positive cfg use; this is not Cargo discovery or compilation. `suggest_split` has no configuration opt-in and still refuses condition-dependent edges.
 
 A new destination must be an absent literal `.rs` sibling of every assigned source, in an existing directory. Its basename is an ASCII identifier, not `_`, `mod`, a raw identifier, or any Rust strict/reserved/contextual keyword (including `gen`, `raw`, `safe`, `union` and `macro_rules`). No directory creation or same-file reordering is supported. Symlinks, hard exclusions, nested repositories, ignores, caller filters, existing entries, case-folded aliases, competing `name/mod.rs` layouts and declaration conflicts fail closed. Use an admitted existing directory in `paths`, not an absent path.
 
-Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching unconditioned declaration is reused without a parent edit unless a necessary visibility repair is separately linked. Relative/re-scoped restrictions, unverified access and public exposure requiring an API decision remain blockers. Incompatible layouts cannot be acknowledged away.
+Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching declaration with admitted chain attributes is reused without a parent edit unless a necessary visibility repair is separately linked. Relative/re-scoped restrictions, unverified access and public exposure requiring an API decision remain blockers. Incompatible layouts cannot be acknowledged away.
 
 ### Known structural limitations
 
@@ -722,7 +726,7 @@ The snake_case `reason` distinguishes:
 - `conditional_declaration`, `path_attribute`, `competing_declarations`,
   `competing_file_layout`, `inline_module_layout` or
   `unexamined_declaration_attributes`: the evidenced declaration/layout is not an
-  ordinary unique unconditioned edge.
+  ordinary unique edge under the admitted chain attributes and any explicit positive cfg declaration.
 - `inherited_uncertainty`: recovery, scope attributes or competing inclusion at a
   named origin also affects the traversed descendant (the existing veto is unchanged).
 - `macro_generated_module_tree`: literal module declaration-shaped tokens occur
@@ -748,7 +752,7 @@ edge is evidenced. For example, a binary `main.rs` that only imports its library
 cannot prove the library's scheduler tree: the boundary is `main.rs`, not an
 invented scheduler declaration. Repeating the request with an admitted library
 root that actually declares that tree can produce drafts or an applicable move.
-No alternate Cargo target, cfg outcome or root recommendation is inferred.
+No alternate Cargo target, undeclared cfg outcome or root recommendation is inferred.
 
 An unadmitted root still fails `STALE_SELECTION`; invalid new-file parents and
 conflicting declarations still fail with their existing error and field. A

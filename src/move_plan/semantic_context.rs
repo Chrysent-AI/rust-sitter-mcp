@@ -3,7 +3,7 @@ use super::{CrateInput, Inputs};
 use crate::{items, plan::SourceAnchor};
 use ra_ap_hir::{Module, Semantics};
 use ra_ap_ide_db::RootDatabase;
-use ra_ap_syntax::{AstNode, AstToken, SyntaxKind, SyntaxNode, ast};
+use ra_ap_syntax::{AstNode, SyntaxKind, SyntaxNode, ast};
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 
@@ -455,76 +455,31 @@ fn predicate(
     fact_class: FactClass,
     depth: usize,
 ) -> Result<bool, &'static str> {
-    let outcome = (|| {
-        if depth > 32 {
-            return Err("cfg_depth_limit");
-        }
-        match pred {
-            ast::CfgPredicate::CfgAtom(atom) => {
-                if atom.true_token().is_some() {
-                    return Ok(true);
-                }
-                if atom.false_token().is_some() {
-                    return Ok(false);
-                }
-                let key = atom.ident_token().ok_or("unparseable_cfg")?;
-                let key = key.text().trim_start_matches("r#");
-                let value = if atom.eq_token().is_some() {
-                    Some(
-                        ast::String::cast(atom.string_token().ok_or("unparseable_cfg")?)
-                            .ok_or("unparseable_cfg")?
-                            .value()
-                            .map_err(|_| "unparseable_cfg")?
-                            .into_owned(),
-                    )
-                } else {
-                    None
-                };
-                if config.cfg.iter().any(|c| c.key == key && c.value == value)
-                    || (key == "feature"
-                        && value.as_ref().is_some_and(|v| config.features.contains(v)))
-                {
-                    Ok(true)
-                } else {
-                    Err("undeclared_cfg_atom")
-                }
-            }
-            ast::CfgPredicate::CfgComposite(composite) => {
-                let keyword = composite.keyword().ok_or("unparseable_cfg")?;
-                if !matches!(keyword.text(), "all" | "any" | "not") {
-                    return Err("unsupported_cfg_predicate");
-                }
-                // Deliberately evaluate every operand: short-circuiting cannot hide unknown atoms.
-                let values: Vec<_> = composite
-                    .cfg_predicates()
-                    .map(|p| predicate(inputs, sema, module, config, &p, fact_class, depth + 1))
-                    .collect();
-                let values = values.into_iter().collect::<Result<Vec<_>, _>>()?;
-                match keyword.text() {
-                    "all" => Ok(values.iter().all(|v| *v)),
-                    "any" => Ok(values.iter().any(|v| *v)),
-                    "not" if values.len() == 1 => Ok(!values[0]),
-                    _ => Err("unsupported_cfg_predicate"),
-                }
-            }
-        }
-    })();
-    record(
-        inputs,
-        sema,
-        module,
-        pred.syntax(),
-        fact_class,
-        (
-            "cfg_predicate",
-            if outcome.is_ok() {
-                "evaluated"
-            } else {
-                "skipped"
-            },
-            outcome.ok(),
-            outcome.err().unwrap_or("declared_configuration"),
-        ),
-    );
-    outcome
+    items::cfg::predicate(
+        pred,
+        &|key, value| {
+            config.cfg.iter().any(|c| c.key == key && &c.value == value)
+                || (key == "feature" && value.as_ref().is_some_and(|v| config.features.contains(v)))
+        },
+        &mut |pred, outcome| {
+            record(
+                inputs,
+                sema,
+                module,
+                pred.syntax(),
+                fact_class,
+                (
+                    "cfg_predicate",
+                    if outcome.is_ok() {
+                        "evaluated"
+                    } else {
+                        "skipped"
+                    },
+                    outcome.ok(),
+                    outcome.err().unwrap_or("declared_configuration"),
+                ),
+            );
+        },
+        depth,
+    )
 }
