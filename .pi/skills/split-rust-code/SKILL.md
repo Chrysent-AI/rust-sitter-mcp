@@ -44,11 +44,13 @@ Use `paths` to keep discovery to the smallest useful scope; include `crate_root`
 
 Before choosing a draft, inspect `status`, `coverage`, `counts.omissions`, `truncation_reasons`, and `draft_eligibility`. Failed or incomplete advice requires recovery or explicit acknowledgment of its limits — do not treat it as a complete partition.
 
-- `inventory[]`: every top-level unit with `id`, `kind`, `name`, `span.range` (byte offsets). Unnamed impls have `name: null` — handle them by ID.
+- `inventory[]`: every top-level unit and direct written impl member with `id`, `kind`, `name`, `span.range` (byte offsets). Unnamed impls have `name: null` — handle them by ID. Associated members stay `context_sensitive`; empty `reasons` admits them to drafts, not move safety. Nonempty exclusions and overlapping enclosing impls remain retained. `counts.eligible_items` includes non-excluded associated members.
 - `drafts[]`: up to two proposals. Inspect `groups[].rationale`, `groups[].confidence` (confidence is per group, not per draft), sizes, and warnings.
 - `decisions[]`: items needing attention (cross-references, visibility, ambiguity).
 
 With no drafts, read `draft_eligibility.reasons` and `chain_diagnostics`: `response_bytes` means raise the response budget (above); a `no_admitted_nonconflicting_name…` reason usually means the file is already modularized or has too few movable units — a no-draft result there is a legitimate "nothing to do". A `destination: null` group in a draft is the **retain set** — those items stay; omit them from `moves`.
+
+Ordinary mixed flat-file/`mod.rs` chains can produce drafts; conditional edges still require a design report because advice has no cfg opt-in. Impl-heavy files can propose whole non-excluded methods/consts, with local blocker forecasts; a single impl containing only excluded members remains a legitimate no-draft shape. Enclosing impl bodies are not scanned again when member descriptors cover them, so risks are attributed to members without duplicate body observations.
 
 Drafts are advisory; you choose the final grouping:
 - Join `drafts[].groups[].item_ids` to `inventory[].id` (IDs, not names, are keys)
@@ -72,10 +74,13 @@ for item_id, destination in chosen_groups:
     r = item["span"]["range"]
     raw = (root / item["path"]).read_bytes()
     text = raw[r["start_byte"]:r["end_byte"]].decode("utf-8")
-    moves.append({
+    movement = {
         "item": {"path": item["path"], "range": r, "expected_text": text},
         "destination": destination
-    })
+    }
+    if "enclosing_impl" in item:
+        movement["enclosing_impl"] = item["enclosing_impl"]["anchor"]
+    moves.append(movement)
 ```
 
 Run the extraction as a script — **never transcribe `expected_text` from display output**; truncation and multibyte characters will corrupt it (`STALE_SELECTION`).

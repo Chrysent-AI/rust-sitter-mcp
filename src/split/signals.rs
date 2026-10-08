@@ -376,10 +376,12 @@ fn references(
             (controls.deadline, controls.cancelled),
             routes,
         )?;
-        if matches!(
-            item.kind.as_str(),
-            "use_declaration" | "extern_crate_declaration" | "macro_definition"
-        ) || (item.kind == "mod_item" && tests.is_none())
+        if partitioned_impl(item)
+            || matches!(
+                item.kind.as_str(),
+                "use_declaration" | "extern_crate_declaration" | "macro_definition"
+            )
+            || (item.kind == "mod_item" && tests.is_none())
         {
             continue;
         }
@@ -886,7 +888,13 @@ pub(super) fn risks(
                     .push(attribute.range.clone());
             }
         }
-        let mut stack = vec![node];
+        // Every written member has its own descriptor and risk walk. Scanning its
+        // retained enclosing body too would duplicate risks and candidate occurrences.
+        let mut stack = if partitioned_impl(&item) {
+            Vec::new()
+        } else {
+            vec![node]
+        };
         while let Some(node) = stack.pop() {
             controls.check()?;
             result.account(128)?;

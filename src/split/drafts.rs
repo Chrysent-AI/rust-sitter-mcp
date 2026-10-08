@@ -58,11 +58,7 @@ fn cluster_signals(
         .enumerate()
         .map(|(i, item)| (item.id.as_str(), i))
         .collect();
-    let eligible: Vec<_> = result
-        .inventory
-        .iter()
-        .map(|i| i.eligibility == "supported_unit")
-        .collect();
+    let eligible: Vec<_> = result.inventory.iter().map(draftable).collect();
     let mut union = Union::new(result.inventory.len());
     let mut graph = vec![Vec::new(); result.inventory.len()];
     let mut reverse = graph.clone();
@@ -207,7 +203,7 @@ fn balanced(
     let mut eligible = Vec::new();
     for (i, item) in result.inventory.iter().enumerate() {
         controls.check()?;
-        if item.eligibility == "supported_unit" {
+        if draftable(item) {
             eligible.push(i);
         } else {
             groups[0].push(i);

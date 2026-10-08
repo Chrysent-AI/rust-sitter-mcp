@@ -265,6 +265,103 @@ fn advice_groups_separate_consequences_and_actions_with_exact_interleaved_runs()
 }
 
 #[test]
+fn impl_heavy_mixed_layout_drafts_members_without_duplicate_body_observations() {
+    let repo = Fixture::new();
+    fs::write(repo.0.join("lib.rs"), "mod flat;\n").unwrap();
+    fs::write(repo.0.join("flat.rs"), "mod legacy;\n").unwrap();
+    fs::create_dir_all(repo.0.join("flat/legacy")).unwrap();
+    fs::write(repo.0.join("flat/legacy/mod.rs"), "mod heavy;\n").unwrap();
+    fs::write(repo.0.join("flat/legacy/heavy.rs"),
+        "struct Recorder;\nimpl Recorder {\nfn record_start() { missing(); }\nfn record_stop() {}\nfn other() {}\n#[cfg(unknown)] fn record_hidden() {}\n}\n").unwrap();
+    let mut request = repo.request();
+    request.source_path = "flat/legacy/heavy.rs".into();
+    request.limits.diagnostic_count = 100_000;
+    let result = run(&repo.0, request, &AtomicBool::new(false));
+    assert_eq!(result.status, "complete");
+    assert!(!result.drafts.is_empty(), "{result:?}");
+    assert_eq!(result.counts.eligible_items, 4);
+    let member = result
+        .inventory
+        .iter()
+        .find(|i| i.name.as_deref() == Some("record_start"))
+        .unwrap();
+    assert_eq!(member.eligibility, "context_sensitive");
+    let missing: Vec<_> = result
+        .decisions
+        .iter()
+        .filter(|d| d.reason == DecisionReason::ExternalOrMissingBinding)
+        .collect();
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].item_ids, vec![member.id.clone()]);
+    for draft in &result.drafts {
+        let mut ids: Vec<_> = draft.groups.iter().flat_map(|g| &g.item_ids).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), result.inventory.len());
+        for group in draft.groups.iter().skip(1) {
+            assert_eq!(
+                group.destination.as_ref().unwrap().parent_path,
+                "flat/legacy/mod.rs"
+            );
+            assert!(
+                group
+                    .item_ids
+                    .iter()
+                    .all(|id| draftable(result.inventory.iter().find(|i| &i.id == id).unwrap()))
+            );
+        }
+        assert!(
+            draft
+                .groups
+                .iter()
+                .skip(1)
+                .any(|g| g.item_ids.contains(&member.id))
+        );
+        let group = draft
+            .groups
+            .iter()
+            .find(|g| g.item_ids.contains(&member.id))
+            .unwrap();
+        assert_eq!(group.expected_to_block.counts.external_binding, 1);
+        for item in result
+            .inventory
+            .iter()
+            .filter(|i| partitioned_impl(i) || !draftable(i))
+        {
+            assert!(draft.groups[0].item_ids.contains(&item.id));
+        }
+    }
+}
+
+#[test]
+fn excluded_giant_impl_has_no_draft_and_keeps_its_member_reasons() {
+    let repo = Fixture::new();
+    let source = format!(
+        "#[cfg(unknown)] impl Missing {{ fn one() {{ {} }} fn two() {{}} }}\n",
+        "call();".repeat(500)
+    );
+    fs::write(repo.0.join("lib.rs"), source).unwrap();
+    let result = run(&repo.0, repo.request(), &AtomicBool::new(false));
+    assert_eq!(result.status, "complete");
+    assert!(result.drafts.is_empty());
+    assert_eq!(result.counts.eligible_items, 0);
+    assert!(
+        result
+            .inventory
+            .iter()
+            .filter(|i| i.enclosing_impl.is_some())
+            .all(|i| !i.reasons.is_empty())
+    );
+    assert!(
+        result
+            .draft_eligibility
+            .reasons
+            .iter()
+            .any(|r| r == "fewer_than_two_eligible_items")
+    );
+}
+
+#[test]
 fn descriptor_and_expired_work_checks_are_not_passing_evidence() {
     let mut result = SuggestSplitEnvelope::empty(Limits::default());
     assert!(result.account(128 * 1024 * 1024 + 1).is_err());
