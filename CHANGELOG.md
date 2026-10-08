@@ -38,9 +38,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
-* Collapse oversized pure removal-boundary blank-line runs by default in multi-item
-  `move_item` batches through anchored, audited rewrites; preserve explicit `retain`
-  replay, single-item defaults, single/double newlines and unrelated whitespace.
+* Collapse oversized pure interior removal-boundary blank-line runs by default in
+  multi-item `move_item` batches through anchored, audited rewrites; keep BOF/EOF
+  gaps unchanged by default, preserve explicit `retain` replay, byte-identical
+  single-item serialized plans, single/double newlines and unrelated whitespace.
 
 ### Fixed
 

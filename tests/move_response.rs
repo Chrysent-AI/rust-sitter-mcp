@@ -81,7 +81,7 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
         assert!(result["plan"][artifact].is_null());
     }
     let decisions = result["plan"]["decisions"].as_array().unwrap();
-    assert_eq!(decisions.len(), 2); // One blocking cause plus the audited removal gap.
+    assert_eq!(decisions.len(), 2); // One blocking cause plus the removal-gap choice.
     assert_eq!(result["counts"]["omissions"]["decisions"], 361 - 2);
     assert_eq!(result["counts"]["omissions"]["moves"], 30 - 4);
     assert_eq!(result["plan"]["moves"].as_array().unwrap().len(), 4);
@@ -113,7 +113,7 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
     assert_eq!(gap_group["count"], 1);
     assert_eq!(
         decisions[1]["removal_gap"]["default_disposition"],
-        "collapse"
+        "keep_in_place"
     );
     assert_eq!(blocking_group["count"], 360);
     assert_eq!(
