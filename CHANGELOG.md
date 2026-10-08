@@ -34,6 +34,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Prove ordinary workspace-member module chains through inert lint/doc metadata
+  and configured positive cfg edges, without Cargo discovery or executing doc
+  expressions; retain unknown, inactive, competing, unadmitted and recovered
+  chain refusals with anchored evidence.
 * Refuse provider-uncertain attributes in declarative declaration-identity proofs,
   including `serde(transparent)` beside familiar derive spellings; disclose the
   attribute and written owner anchors instead of treating unproved helper

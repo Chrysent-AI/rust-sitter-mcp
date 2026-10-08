@@ -1125,8 +1125,8 @@ fn build(
         &request.crate_root,
         &files,
         &parsed,
-        controls.deadline,
-        controls.cancelled,
+        (controls.deadline, controls.cancelled),
+        None,
         &mut result.counts.analysis_descriptor_bytes,
     )?;
     let contexts = &analysis.contexts;

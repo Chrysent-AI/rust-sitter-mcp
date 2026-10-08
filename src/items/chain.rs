@@ -1,5 +1,9 @@
 //! Evidence for failed ordinary module hops, not an alternative module resolver.
 use super::*;
+pub(super) mod attributes;
+pub(crate) use attributes::DeclaredCfg;
+#[cfg(test)]
+mod attributes_tests;
 #[cfg(test)]
 mod tests;
 
@@ -332,6 +336,7 @@ pub(crate) fn declaration_reasons(
     data: &ParsedFile,
     file: &FileSnapshot,
     item: &Item,
+    cfg: Option<&DeclaredCfg>,
 ) -> Vec<ChainReason> {
     let node = data
         .tree
@@ -343,6 +348,12 @@ pub(crate) fn declaration_reasons(
         reasons.push(ChainReason::InlineModuleLayout);
     }
     for attribute in &item.attributes {
+        if attributes::admits(
+            &file.source[attribute.range.start_byte..attribute.range.end_byte],
+            cfg,
+        ) {
+            continue;
+        }
         let node = data
             .tree
             .root_node()
