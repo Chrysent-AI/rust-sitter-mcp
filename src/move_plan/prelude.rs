@@ -266,12 +266,20 @@ impl Shadows {
             }
         }
     }
-    fn attribute(&mut self, path: &str, node: Node<'_>, source: &str) {
+    fn attribute(
+        &mut self,
+        path: &str,
+        node: Node<'_>,
+        source: &str,
+        cfg: Option<&items::DeclaredCfg>,
+    ) {
         if node.has_error() || node.is_missing() {
             self.context("unparseable_attribute", path, Some(node));
             return;
         }
-        if items::context_independent_attribute(&source[node.byte_range()]) {
+        if items::context_independent_attribute(&source[node.byte_range()])
+            || items::cfg::attribute(&source[node.byte_range()], cfg, false).is_ok()
+        {
             return;
         }
         if let Some(names) = items::derive_names(node, source) {
@@ -302,6 +310,8 @@ impl Shadows {
                                 &source[attribute.byte_range()],
                             )
                             && items::derive_names(attribute, source).is_none()
+                            && items::cfg::attribute(&source[attribute.byte_range()], cfg, false)
+                                .is_err()
                         {
                             self.conditional_derives[index] = true;
                             self.record(
@@ -377,6 +387,7 @@ fn shadows(
     node: Node<'_>,
     source: &str,
     controls: (Instant, &AtomicBool),
+    cfg: Option<&items::DeclaredCfg>,
 ) -> Result<Shadows, DomainError> {
     let mut found = Shadows::default();
     let mut stack = vec![(node, false)];
@@ -394,7 +405,7 @@ fn shadows(
             }
             "block" => continue,
             "attribute_item" | "inner_attribute_item" => {
-                found.attribute(path, current, source);
+                found.attribute(path, current, source, cfg);
                 continue;
             }
             "use_declaration" => {
@@ -573,9 +584,10 @@ impl ScopedShadows {
         node: Node<'_>,
         source: &str,
         controls: (Instant, &AtomicBool),
+        cfg: Option<&items::DeclaredCfg>,
     ) -> Result<Self, DomainError> {
         let mut result = Self {
-            root: shadows(path, node, source, controls)?,
+            root: shadows(path, node, source, controls, cfg)?,
             inline: BTreeMap::new(),
         };
         let mut stack = vec![node];
@@ -585,12 +597,12 @@ impl ScopedShadows {
                 .then(|| current.child_by_field_name("body"))
                 .flatten()
             {
-                let mut found = shadows(path, body, source, controls)?;
+                let mut found = shadows(path, body, source, controls, cfg)?;
                 let mut previous = current.prev_named_sibling();
                 while let Some(attribute) = previous {
                     match attribute.kind() {
                         "attribute_item" => {
-                            found.attribute(path, attribute, source);
+                            found.attribute(path, attribute, source, cfg);
                         }
                         "line_comment" | "block_comment" => {}
                         _ => break,
@@ -686,13 +698,20 @@ pub(super) fn discharge(
     repairs: &[Repair],
     needs: &mut Vec<Need>,
     controls: (Instant, &AtomicBool),
+    cfg: Option<&items::DeclaredCfg>,
 ) -> Result<Vec<BindingProof>, DomainError> {
     let mut modules = BTreeMap::new();
     for (path, data) in parsed {
         items::check(controls.0, controls.1)?;
         modules.insert(
             path.clone(),
-            ScopedShadows::collect(path, data.tree.root_node(), &files[path].source, controls)?,
+            ScopedShadows::collect(
+                path,
+                data.tree.root_node(),
+                &files[path].source,
+                controls,
+                cfg,
+            )?,
         );
     }
     // Proposed imports are also visible bindings. Never let a fallback race a
@@ -715,7 +734,7 @@ pub(super) fn discharge(
             };
             let tree = crate::trivia::parse(&repair.after, controls.0, controls.1)?
                 .ok_or_else(|| DomainError::new("planning_deadline", "import audit stopped"))?;
-            let mut proposed = shadows(path, tree.root_node(), &repair.after, controls)?;
+            let mut proposed = shadows(path, tree.root_node(), &repair.after, controls, cfg)?;
             // Parsed replacement offsets are not original-source coordinates.
             for basis in &mut proposed.refusal_basis {
                 basis.anchor.range = match &repair.target {
@@ -755,7 +774,7 @@ pub(super) fn discharge(
             .root_node()
             .named_descendant_for_byte_range(item.span.range.start_byte, item.span.range.end_byte)
             .expect("selected item");
-        let mut found = ScopedShadows::collect(path, node, &files[path].source, controls)?;
+        let mut found = ScopedShadows::collect(path, node, &files[path].source, controls, cfg)?;
         // Leading outer attributes lie outside the item anchor, but arrive with
         // it and must participate in the destination's expansion audit.
         for attribute in &item.attributes {
@@ -769,7 +788,7 @@ pub(super) fn discharge(
                         attribute.range.end_byte,
                     )
             {
-                found.root.attribute(path, node, &files[path].source);
+                found.root.attribute(path, node, &files[path].source, cfg);
             }
         }
         arrivals
@@ -893,8 +912,9 @@ pub(super) fn discharge(
                 } else {
                     STANDARD_PRELUDE[audited].0
                 };
-                let assessment =
-                    items::lexical_assessment(path, node, source, name, controls, false)?;
+                let assessment = items::lexical_assessment_with_cfg(
+                    path, node, source, name, controls, false, cfg,
+                )?;
                 if assessment.binding != items::LexicalBinding::Absent {
                     if let Some(witness) = assessment.uncertainty {
                         let anchor = witness.pattern.as_ref().unwrap_or(&witness.scope);
@@ -1072,11 +1092,24 @@ pub(super) fn discharge(
                 }
             }
             need.refusal_basis = unique;
+            if cfg.is_some()
+                && need
+                    .refusal_basis
+                    .iter()
+                    .any(|b| b.class == "conditional_context")
+            {
+                need.message.push_str("; caller-declared configuration consulted; unknown atoms and unsupported context retain their veto");
+            }
             remaining.push(need);
         }
     }
     *needs = remaining;
-    Ok(proofs.into_values().collect())
+    Ok(proofs.into_values().map(|mut proof| {
+        if let Some(cfg) = cfg {
+            proof.basis.push_str(&format!("; conditional context evaluated under caller-declared positive cfg atoms {cfg:?}; unknown atoms remain vetoes"));
+        }
+        proof
+    }).collect())
 }
 
 fn record_proof(

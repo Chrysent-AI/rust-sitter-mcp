@@ -197,6 +197,40 @@ pub struct MoveRequest {
     pub resolve_semantic: bool,
     pub semantic_configuration: Option<semantic::Configuration>,
 }
+impl MoveRequest {
+    /// One positive-only configuration for this root, shared by written audits.
+    pub(crate) fn declared_cfg(&self) -> Option<items::DeclaredCfg> {
+        let config = self.semantic_configuration.as_ref()?;
+        let mut roots = config
+            .crates
+            .iter()
+            .filter(|c| c.root_file == self.crate_root);
+        let root = roots.next()?;
+        if roots.next().is_some()
+            || root.edition.parse::<ra_ap_syntax::Edition>().is_err()
+            || root.cfg.len() + root.features.len() > 1024
+            || root.cfg.iter().any(|c| {
+                c.key.is_empty()
+                    || c.key.len() > 256
+                    || c.value.as_ref().is_some_and(|v| v.len() > 256)
+            })
+            || root.features.iter().any(|f| f.len() > 256)
+        {
+            return None;
+        }
+        Some(
+            root.cfg
+                .iter()
+                .map(|c| (c.key.clone(), c.value.clone()))
+                .chain(
+                    root.features
+                        .iter()
+                        .map(|f| ("feature".into(), Some(f.clone()))),
+                )
+                .collect(),
+        )
+    }
+}
 fn default_max_moves() -> usize {
     500
 }
@@ -1401,40 +1435,7 @@ fn build(
     }
     // Only one explicit configuration for the selected root can supply positive
     // cfg evidence. Workspace manifests and absent atoms are never inferred.
-    let cfg = request
-        .resolve_semantic
-        .then_some(())
-        .and(request.semantic_configuration.as_ref())
-        .and_then(|config| {
-            let mut roots = config
-                .crates
-                .iter()
-                .filter(|c| c.root_file == request.crate_root);
-            let root = roots.next()?;
-            if roots.next().is_some()
-                || root.edition.parse::<ra_ap_syntax::Edition>().is_err()
-                || root.cfg.len() + root.features.len() > 1024
-                || root.cfg.iter().any(|c| {
-                    c.key.is_empty()
-                        || c.key.len() > 256
-                        || c.value.as_ref().is_some_and(|v| v.len() > 256)
-                })
-                || root.features.iter().any(|f| f.len() > 256)
-            {
-                return None;
-            }
-            Some(
-                root.cfg
-                    .iter()
-                    .map(|c| (c.key.clone(), c.value.clone()))
-                    .chain(
-                        root.features
-                            .iter()
-                            .map(|f| ("feature".into(), Some(f.clone()))),
-                    )
-                    .collect::<items::DeclaredCfg>(),
-            )
-        });
+    let cfg = request.declared_cfg();
     let module_analysis = items::modules(
         &scope,
         &request.crate_root,
@@ -2019,6 +2020,7 @@ fn build(
             &analysis.repairs,
             &mut analysis.needs,
             (deadline, cancelled),
+            cfg.as_ref(),
         )?;
         result.coverage.standard_prelude = proofs
             .iter()
