@@ -1,4 +1,4 @@
-//! Anchored assembly boundaries and opt-in shaping of removal-owned gaps.
+//! Anchored assembly boundaries and bounded shaping of removal-owned gaps.
 use super::*;
 
 /// Include attached trailing comments (including their line ending), never insert inside them.
@@ -103,7 +103,7 @@ fn whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
-/// Only pure removal components qualify. Any repair/insertion sharing the boundary excludes it.
+/// Only pure removal components qualify. Payload insertions sharing a boundary exclude it.
 #[allow(clippy::too_many_arguments)] // Snapshot, splice ownership and replay accounting stay explicit.
 pub(super) fn removal_gaps(
     request: &MoveRequest,
@@ -162,8 +162,10 @@ pub(super) fn removal_gaps(
             .iter()
             .any(|i| i.path == *path && start <= i.at && i.at <= end)
             || edits.iter().any(|e| {
+                // A separate repair at the gap's end does not consume whitespace.
+                // The assembler cannot mate a zero-width edit at the gap's start.
                 e.path == *path
-                    && e.range.start_byte <= end
+                    && e.range.start_byte < end
                     && e.range.end_byte >= start
                     && !component.iter().any(|r| r.range == e.range)
             })
@@ -195,7 +197,14 @@ pub(super) fn removal_gaps(
         let target = RewriteTarget::Source {
             anchor: anchor(path, source, &range(start, end)),
         };
-        let mut selected = "keep_in_place";
+        // Batch removals can accumulate many blank lines. Single-item plans retain
+        // their existing byte-identical default; either default can be overridden.
+        let default = if request.moves.len() > 1 && newlines.len() > 2 {
+            "collapse"
+        } else {
+            "keep_in_place"
+        };
+        let mut selected = default;
         let mut selected_action = "accept_default";
         let mut chosen = false;
         for (index, choice) in request
@@ -225,9 +234,13 @@ pub(super) fn removal_gaps(
                             "rewrite_overrides",
                         ));
                     }
-                    used.insert(index);
                     if matches!(choice.action, RewriteAction::Retain) {
+                        selected = "keep_in_place";
                         selected_action = "retain";
+                    }
+                    // Collapsed choices are consumed by the audited rewrite below.
+                    if selected == "keep_in_place" {
+                        used.insert(index);
                     }
                 }
                 RewriteAction::Replace => {
@@ -256,14 +269,14 @@ pub(super) fn removal_gaps(
         }
         let decision_id = format!("d/{}", result.plan.decisions.len());
         let decision = Decision {
-            reason: DecisionReason::RemovalGapChoice, next_action: "keep the gap unchanged, or replay the target with action replace and removal_gap.after_text".into(),
+            reason: DecisionReason::RemovalGapChoice, next_action: "review the selected gap disposition; replay the target with retain to preserve residual bytes or replace with removal_gap.after_text to collapse".into(),
             action, id: decision_id.clone(), category: "removal_gap".into(),
             anchors: match &target { RewriteTarget::Source { anchor } => vec![anchor.clone()], _ => unreachable!() },
-            item_ids: ids.clone(), evidence: Vec::new(), unresolved_consequence: "removal-boundary blank lines stay byte-identical unless explicitly collapsed".into(),
+            item_ids: ids.clone(), evidence: Vec::new(), unresolved_consequence: "oversized removal-boundary gaps collapse by default in multi-item batches; retain preserves residual whitespace bytes".into(),
             resolution: "choice_available".into(), supported_choices: vec!["accept_default".into(), "retain".into(), "replace".into()],
             selected_choice: Some(selected_action.into()),
             blocks_applicability: false, chain_diagnostic_ids: Vec::new(), lexical_uncertainty: None, refusal_basis: Vec::new(),
-            removal_gap: Some(RemovalGapChoice { before_text: before.clone(), after_text: after.clone(), default_disposition: "keep_in_place".into(), selected_disposition: selected.into() }),
+            removal_gap: Some(RemovalGapChoice { before_text: before.clone(), after_text: after.clone(), default_disposition: default.into(), selected_disposition: selected.into() }),
         };
         if result.plan.decisions.len() >= 100_000 {
             return Err(DomainError::new(
@@ -280,7 +293,7 @@ pub(super) fn removal_gaps(
                 result,
                 target,
                 "removal_gap",
-                &before,
+                &after,
                 &ids,
                 Some(&after),
             )?;
@@ -294,9 +307,19 @@ pub(super) fn removal_gaps(
                 .anchors
                 .clone();
             audit.decision_ids.push(decision_id);
-            audit.default_action = "retain".into();
-            audit.evidence = vec!["exact selected removals and adjacent whitespace; explicit caller-selected collapse".into()];
-            audit.rationale = "explicitly collapse only whitespace left by these engine-owned removals; no retained syntax is changed".into();
+            audit.default_action = if default == "collapse" {
+                "accept_default"
+            } else {
+                "retain"
+            }
+            .into();
+            if selected_action == "accept_default" {
+                audit.origin = "synthesized".into();
+            }
+            audit.evidence = vec![format!(
+                "exact selected removals and adjacent whitespace; {selected_action} collapse"
+            )];
+            audit.rationale = "collapse only whitespace left by these engine-owned removals; no retained syntax is changed".into();
             let mut edit = Edit::new(path, source, start, end, text, "");
             edit.match_ids.clear();
             edit.item_ids = ids;
