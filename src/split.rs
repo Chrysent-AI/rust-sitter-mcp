@@ -87,6 +87,18 @@ impl AdviceLimits {
 fn default_max_items() -> usize {
     500
 }
+/// Associated units still require their header anchor; admission here is advice only.
+fn draftable(item: &Item) -> bool {
+    item.eligibility == "supported_unit"
+        || (item.enclosing_impl.is_some() && item.reasons.is_empty())
+}
+fn partitioned_impl(item: &Item) -> bool {
+    item.kind == "impl_item"
+        && item
+            .reasons
+            .iter()
+            .any(|reason| reason == "partition_associated_units_instead")
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct AdviceAnchor {
@@ -1010,10 +1022,7 @@ fn build(
     }
     .into();
     result.counts.inventory_items = advice_units.len();
-    result.counts.eligible_items = advice_units
-        .iter()
-        .filter(|i| i.eligibility == "supported_unit")
-        .count();
+    result.counts.eligible_items = advice_units.iter().filter(|i| draftable(i)).count();
     result.inventory = advice_units
         .iter()
         .take(request.max_items)

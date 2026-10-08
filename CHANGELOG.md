@@ -34,6 +34,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Include non-excluded written inherent methods/consts in `suggest_split` drafts
+  while preserving `context_sensitive` eligibility, exact enclosing anchors,
+  retained impls and per-group blocker forecasts; avoid scanning impl bodies
+  twice when their members are separately inventoried.
 * Consult declared features/cfg in written conditional context audits without
   requiring semantic resolution, sharing positive-only predicate evaluation
   across module chains, imports, required bindings, lexical and prelude scopes;
@@ -45,7 +49,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   payloads blocked; predicate context cannot erase a `derive_veto`.
 * Classify all written impl members as `context_sensitive` in `suggest_split`,
   retaining their enclosing header anchors and excluding them from top-level-only
-  batches and automatic partitions without changing associated-item move validation.
+  batches without changing associated-item move validation.
 * Prove ordinary workspace-member module chains through inert lint/doc metadata
   and configured positive cfg edges, without Cargo discovery or executing doc
   expressions; retain unknown, inactive, competing, unadmitted and recovered

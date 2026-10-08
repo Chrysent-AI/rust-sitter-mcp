@@ -237,10 +237,10 @@ fn all_written_units_and_display_omission_preserve_complete_drafts() {
         }
         assert_eq!(seen, by_id.keys().copied().collect());
         let retain = &draft["groups"][0]["item_ids"];
-        for unit in inventory
-            .iter()
-            .filter(|i| i["eligibility"] != "supported_unit")
-        {
+        for unit in inventory.iter().filter(|i| {
+            i["eligibility"] != "supported_unit"
+                && !(i.get("enclosing_impl").is_some() && i["reasons"] == json!([]))
+        }) {
             assert!(retain.as_array().unwrap().contains(&unit["id"]));
         }
     }

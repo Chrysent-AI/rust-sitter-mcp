@@ -73,7 +73,7 @@ fn plan(repo: &Fixture, moves: Vec<Value>) -> Value {
 }
 
 #[test]
-fn every_written_impl_member_has_context_and_is_retained_in_advice() {
+fn every_written_impl_member_has_context_and_excluded_members_are_retained() {
     let repo = fixture();
     let before = observe(&repo.0);
     for (path, expected) in [
@@ -137,16 +137,38 @@ fn every_written_impl_member_has_context_and_is_retained_in_advice() {
             assert!(inventory.iter().any(|item| item["kind"] == "impl_item"
                 && item["span"]["range"] == implementation["range"]));
             for draft in result["drafts"].as_array().unwrap() {
+                if !member["reasons"].as_array().unwrap().is_empty() {
+                    assert!(
+                        draft["groups"][0]["item_ids"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&member["id"])
+                    );
+                }
+                let owner = inventory
+                    .iter()
+                    .find(|item| {
+                        item["kind"] == "impl_item"
+                            && item["span"]["range"] == implementation["range"]
+                    })
+                    .unwrap();
                 assert!(
                     draft["groups"][0]["item_ids"]
                         .as_array()
                         .unwrap()
-                        .contains(&member["id"])
+                        .contains(&owner["id"])
                 );
             }
         }
         assert!(!result["drafts"].as_array().unwrap().is_empty());
-        assert_eq!(result["counts"]["eligible_items"], 2);
+        let admitted = inventory
+            .iter()
+            .filter(|item| {
+                item["eligibility"] == "supported_unit"
+                    || (item.get("enclosing_impl").is_some() && item["reasons"] == json!([]))
+            })
+            .count();
+        assert_eq!(result["counts"]["eligible_items"], admitted);
         // Containment does not turn an otherwise selectable member into an exclusion.
         assert_eq!(selected(&result, "identity")["reasons"], json!([]));
         let conditional = if path == SERVE { "debug_addr" } else { "merge" };
