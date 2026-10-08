@@ -140,18 +140,34 @@ pub struct Proof {
     pub coverage: ResolutionCoverage,
 }
 
-pub fn candidate(need: &Need) -> bool {
+pub fn candidate(need: &Need, parsed: &items::ParsedFile, source: &str) -> bool {
     matches!(
         need.reason,
         DecisionReason::MemberOrConstructorUnproved | DecisionReason::ExternalOrMissingBinding
     ) || (need.reason == DecisionReason::ConditionalOrInheritedContext
         && need.category == "scope_dependency"
-        && (need.attribute_range.is_some()
-            || need.refusal_basis.iter().any(|basis| {
+        && match &need.attribute_range {
+            // Selected attributes gain only predicate evaluation, not nominal
+            // declaration evidence that could bypass a derive's binding audit.
+            Some(span) => parsed
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(span.start_byte, span.end_byte)
+                .filter(|node| {
+                    matches!(node.kind(), "attribute_item" | "inner_attribute_item")
+                        && node.byte_range() == (span.start_byte..span.end_byte)
+                })
+                .and_then(|attr| attr.named_child(0)?.named_child(0))
+                .is_some_and(|name| {
+                    name.kind() == "identifier"
+                        && matches!(&source[name.byte_range()], "cfg" | "cfg_attr")
+                }),
+            None => need.refusal_basis.iter().any(|basis| {
                 matches!(basis.class.as_str(), "derive_veto" | "conditional_context")
                     && basis.anchor.path == need.path
                     && basis.anchor.range.as_ref() == Some(&need.range)
-            })))
+            }),
+        })
 }
 
 // One attribute may be admitted for nominal identity and refused for method facts.
@@ -581,10 +597,10 @@ fn evaluate(
         let proof = (|| {
             let final_anchor = mapped(&anchor, origins, new)?;
             refusal_class = "semantic_source_fact_unproved";
-            let before = fact(old, &anchor)?;
+            let before = fact(old, &anchor, need.attribute_range.is_some())?;
             let before_assumed = old.assumed_declared_helpers.get();
             refusal_class = "semantic_final_fact_unproved";
-            let after = fact(new, &final_anchor)?;
+            let after = fact(new, &final_anchor, need.attribute_range.is_some())?;
             let assumed = before_assumed || new.assumed_declared_helpers.get();
             refusal_class = "semantic_identity_unproved";
             if before.classification != after.classification
@@ -891,13 +907,15 @@ fn exact_path(root: &SyntaxNode, span: &ByteRange) -> Option<ast::Path> {
             && usize::from(p.syntax().text_range().end()) == span.end_byte
     })
 }
-fn fact(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
+fn fact(inputs: &Inputs, anchor: &SourceAnchor, predicate_context: bool) -> Option<Fact> {
     // The next solver requires its own TLS attachment in addition to Salsa's.
     // Return only owned evidence before attaching the other database revision.
     inputs.assumed_declared_helpers.set(false);
-    ra_ap_hir::attach_db(&inputs.db, || fact_attached(inputs, anchor))
+    ra_ap_hir::attach_db(&inputs.db, || {
+        fact_attached(inputs, anchor, predicate_context)
+    })
 }
-fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
+fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor, predicate_context: bool) -> Option<Fact> {
     let sema = Semantics::new(&inputs.db);
     let root = sema.parse_guess_edition(*inputs.ids.get(&anchor.path)?);
     let syntax = root.syntax();
@@ -907,16 +925,19 @@ fn fact_attached(inputs: &Inputs, anchor: &SourceAnchor) -> Option<Fact> {
         if usize::from(attr.syntax().text_range().start()) == anchor.range.start_byte
             && usize::from(attr.syntax().text_range().end()) == anchor.range.end_byte
         {
-            let fact_class = if attr
-                .syntax()
-                .ancestors()
-                .find_map(ast::Item::cast)
-                .is_some_and(|item| {
-                    matches!(
-                        item,
-                        ast::Item::Struct(_) | ast::Item::Enum(_) | ast::Item::Union(_)
-                    )
-                }) {
+            // Selected cfg_attr payloads must retain the strict derive/macro
+            // gate; syntactic custom-derive paths are not binding evidence.
+            let fact_class = if !predicate_context
+                && attr
+                    .syntax()
+                    .ancestors()
+                    .find_map(ast::Item::cast)
+                    .is_some_and(|item| {
+                        matches!(
+                            item,
+                            ast::Item::Struct(_) | ast::Item::Enum(_) | ast::Item::Union(_)
+                        )
+                    }) {
                 FactClass::NominalIdentity
             } else {
                 FactClass::GeneratedItems
