@@ -90,8 +90,8 @@ fn same_spelled_variant_in_final_overlay_must_keep_parent_declaration_identity()
         range: range(start, start + "Value::Unit".len()),
         expected_text: "Value::Unit".into(),
     };
-    let before = fact(&old, &anchor).unwrap();
-    let after = fact(&new, &anchor).unwrap();
+    let before = fact(&old, &anchor, false).unwrap();
+    let after = fact(&new, &anchor, false).unwrap();
     assert_eq!(before.classification, "variant_path");
     assert_eq!(after.classification, "variant_path");
     assert_ne!(before.declaration, after.declaration);
@@ -199,7 +199,7 @@ fn nominal_variant_facts_require_stable_written_bindings() {
         };
         let inputs =
             Inputs::new(BTreeMap::from([("lib.rs".into(), text)]), &config, controls).unwrap();
-        let resolved = fact(&inputs, &anchor);
+        let resolved = fact(&inputs, &anchor, false);
         assert_eq!(resolved.is_some(), proved, "{context}: {occurrence}");
         if !proved {
             assert!(inputs.context.borrow().values().any(|e| e.kind == "binding"
@@ -242,7 +242,7 @@ fn configured_extern_prelude_roots_never_gain_custom_derive_admission() {
             controls,
         )
         .unwrap();
-        let resolved = fact(&inputs, &anchor);
+        let resolved = fact(&inputs, &anchor, false);
         assert_eq!(resolved.is_some(), proved, "{context}");
         if let Some(fact) = resolved {
             assert!(fact.fact_class == FactClass::GeneratedItems);

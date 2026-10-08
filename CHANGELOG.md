@@ -34,6 +34,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Route selected top-level `cfg`/`cfg_attr` predicates through configured
+  original/final context checks, discharging active declared features with exact
+  attribute proofs while retaining anchored unknown and inactive-item refusals.
+  Keep direct derives on their binding audit path and active custom-derive
+  payloads blocked; predicate context cannot erase a `derive_veto`.
 * Classify all written impl members as `context_sensitive` in `suggest_split`,
   retaining their enclosing header anchors and excluding them from top-level-only
   batches and automatic partitions without changing associated-item move validation.
