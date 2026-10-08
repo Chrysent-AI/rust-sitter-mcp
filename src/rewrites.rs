@@ -94,6 +94,104 @@ fn absolute_path(module: &[String], text: &str) -> Option<String> {
     prefix.extend(parts);
     Some(prefix.join("::"))
 }
+fn common_region(left: &[String], right: &[String]) -> Vec<String> {
+    left.iter()
+        .zip(right)
+        .take_while(|(a, b)| a == b)
+        .map(|(segment, _)| segment.clone())
+        .collect()
+}
+struct VisibilityRegion {
+    defining: Vec<String>,
+    required: Vec<String>,
+}
+impl VisibilityRegion {
+    fn text(&self) -> String {
+        if self.required.is_empty() {
+            "pub(crate)".into()
+        } else if self.required.len() + 1 == self.defining.len() {
+            "pub(super)".into()
+        } else {
+            format!("pub(in crate::{})", self.required.join("::"))
+        }
+    }
+}
+type VisibilityKey = (String, usize, usize, Option<String>);
+fn visibility_key(repair: &Repair) -> VisibilityKey {
+    (
+        repair.path.clone(),
+        repair.range.start_byte,
+        repair.range.end_byte,
+        repair.declaration_for.clone(),
+    )
+}
+fn restricted_region(
+    modifier: Node<'_>,
+    source: &str,
+    defining: &[String],
+    controls: (Instant, &AtomicBool),
+) -> Option<Vec<String>> {
+    // Read parsed grammar tokens; whitespace/comments do not alter the scope.
+    let mut text = String::new();
+    let mut stack = vec![modifier];
+    while let Some(node) = stack.pop() {
+        items::check(controls.0, controls.1).ok()?;
+        if matches!(node.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if node.child_count() == 0 {
+            text.push_str(&source[node.byte_range()]);
+        } else {
+            for i in (0..node.child_count()).rev() {
+                stack.push(node.child(i).expect("child"));
+            }
+        }
+    }
+    if text == "pub(crate)" {
+        return Some(Vec::new());
+    }
+    let restriction = text.strip_prefix("pub(")?.strip_suffix(')')?;
+    let restriction = match restriction {
+        "self" | "super" => restriction,
+        _ => restriction.strip_prefix("in")?,
+    };
+    let scope = absolute_path(defining, restriction)?;
+    let scope: Vec<_> = scope.split("::").skip(1).map(str::to_owned).collect();
+    defining.starts_with(&scope).then_some(scope)
+}
+fn chosen_visibility_region(
+    text: &str,
+    defining: &[String],
+    controls: (Instant, &AtomicBool),
+) -> Result<Vec<String>, DomainError> {
+    if text.trim().is_empty() {
+        return Ok(defining.to_vec());
+    }
+    if text.contains("//") || text.contains("/*") {
+        return Err(invalid_choice(
+            "visibility alternatives cannot contain comments",
+        ));
+    }
+    let source = format!("{text} fn __visibility() {{}}");
+    let tree = crate::trivia::parse(&source, controls.0, controls.1)?
+        .ok_or_else(|| invalid_choice("alternative parse interrupted"))?;
+    let root = tree.root_node();
+    let node = root.named_child(0);
+    let modifier = node.and_then(|n| n.named_child(0));
+    if root.has_error()
+        || root.named_child_count() != 1
+        || node.is_none_or(|n| n.kind() != "function_item")
+        || modifier.is_none_or(|n| {
+            n.kind() != "visibility_modifier" || &source[n.byte_range()] != text.trim()
+        })
+    {
+        return Err(invalid_choice(
+            "alternative must be one internal visibility modifier",
+        ));
+    }
+    restricted_region(modifier.expect("checked modifier"), &source, defining, controls)
+        .ok_or_else(|| invalid_choice("visibility must be private, pub(crate), pub(self), pub(super), or pub(in an evidenced ancestor); no pub/API escalation"))
+}
 fn parsed_import(
     text: &str,
     controls: (Instant, &AtomicBool),
@@ -190,6 +288,7 @@ struct Analyzer<'a> {
     contexts: &'a BTreeMap<String, ModuleEvidence>,
     final_contexts: &'a BTreeMap<String, ModuleEvidence>,
     repairs: Vec<Repair>,
+    visibility_regions: BTreeMap<VisibilityKey, VisibilityRegion>,
     imports: Vec<ImportBinding>,
     descriptor_bytes: usize,
     reference_candidates: &'a mut usize,
@@ -278,6 +377,41 @@ impl Analyzer<'_> {
         } else {
             self.repairs.push(repair);
         }
+    }
+    fn add_visibility(&mut self, mut repair: Repair, defining: &[String], required: &[String]) {
+        let key = visibility_key(&repair);
+        if !self.visibility_regions.contains_key(&key) {
+            self.descriptor_bytes += repair.path.len()
+                + repair.declaration_for.as_ref().map_or(0, String::len)
+                + defining
+                    .iter()
+                    .chain(required)
+                    .map(|s| s.len() + 32)
+                    .sum::<usize>()
+                + 256;
+        }
+        let region = self
+            .visibility_regions
+            .entry(key)
+            .or_insert_with(|| VisibilityRegion {
+                defining: defining.to_vec(),
+                required: required.to_vec(),
+            });
+        region.required = common_region(&region.required, required);
+        repair.after = region.text();
+        if repair.range.start_byte == repair.range.end_byte {
+            repair.after.push(' ');
+        }
+        // All callers share one splice. Later callers can require a broader ancestor.
+        if let Some(existing) = self.repairs.iter_mut().find(|r| {
+            r.kind == "visibility"
+                && r.path == repair.path
+                && r.range == repair.range
+                && r.declaration_for == repair.declaration_for
+        }) {
+            existing.after.clone_from(&repair.after);
+        }
+        self.add(repair);
     }
     fn contributors(&self, ids: &[String]) -> Vec<SourceAnchor> {
         self.request
@@ -631,33 +765,8 @@ impl Analyzer<'_> {
         let modifier = (0..node.named_child_count())
             .filter_map(|i| node.named_child(i as u32))
             .find(|n| n.kind() == "visibility_modifier")?;
-        // Significant grammar tokens admit whitespace/comments without guessing from text.
-        let mut text = String::new();
-        let mut stack = vec![modifier];
-        while let Some(node) = stack.pop() {
-            items::check(self.controls.0, self.controls.1).ok()?;
-            if matches!(node.kind(), "line_comment" | "block_comment") {
-                continue;
-            }
-            if node.child_count() == 0 {
-                text.push_str(&self.files[path].source[node.byte_range()]);
-            } else {
-                for i in (0..node.child_count()).rev() {
-                    stack.push(node.child(i).expect("child"));
-                }
-            }
-        }
-        let restriction = text.strip_prefix("pub(")?.strip_suffix(')')?;
-        let restriction = match restriction {
-            "self" | "super" => restriction,
-            _ => restriction.strip_prefix("in")?,
-        };
-        let scope = absolute_path(parent, restriction)?;
-        let scope: Vec<_> = scope.split("::").skip(1).map(str::to_owned).collect();
-        // Rust restrictions must denote an ancestor, never an arbitrary module or alias.
-        parent
-            .starts_with(&scope)
-            .then(|| using.starts_with(&scope))
+        restricted_region(modifier, &self.files[path].source, parent, self.controls)
+            .map(|scope| using.starts_with(&scope))
     }
     fn inaccessible_route(
         &self,
@@ -866,12 +975,6 @@ impl Analyzer<'_> {
             let Some(item) = item else {
                 return false;
             };
-            // A retained module's relative restriction keeps its written parent scope.
-            if item.kind == "mod_item"
-                && self.module_visible(path, item, defining, using) == Some(true)
-            {
-                return true;
-            }
             let node = self.parsed[path]
                 .tree
                 .root_node()
@@ -880,44 +983,47 @@ impl Analyzer<'_> {
                     item.span.range.end_byte,
                 )
                 .expect("item");
-            let Some(scope) =
-                items::absolute_visibility(node, &self.files[path].source, self.controls)
-            else {
-                return false;
-            };
-            if !defining.starts_with(&scope) {
-                return false;
-            }
-            if using.starts_with(&scope) {
-                return true;
-            }
             let modifier = (0..node.named_child_count())
                 .filter_map(|i| node.named_child(i as u32))
                 .find(|n| n.kind() == "visibility_modifier")
                 .expect("restriction");
+            // Relative restrictions are only evidence when their declaring scope stays put.
+            let scope = if self.final_path(path, item) == path {
+                restricted_region(modifier, &self.files[path].source, defining, self.controls)
+            } else {
+                items::absolute_visibility(node, &self.files[path].source, self.controls)
+                    .filter(|scope| defining.starts_with(scope))
+            };
+            let Some(scope) = scope else {
+                return false;
+            };
+            if using.starts_with(&scope) {
+                return true;
+            }
+            let required = common_region(&scope, using);
             let bytes = &self.files[path].source[modifier.byte_range()];
             if bytes.contains("//") || bytes.contains("/*") {
                 return false;
             }
             let range = span(modifier.start_byte(), modifier.end_byte());
             let a = anchor(self.files, path, &range);
-            self.add(Repair {
+            self.add_visibility(Repair {
                 path: path.into(),
                 range,
-                after: "pub(crate)".into(),
+                after: String::new(),
                 kind: "visibility",
                 written_reexport: false,
                 target: RewriteTarget::Source { anchor: a.clone() },
                 item_ids: ids.to_vec(),
                 anchors: vec![a],
-                rationale: "known absolute restriction is insufficient for a proven final access"
+                rationale: "known ancestor restriction is insufficient for a proven final access; preserve its existing region and cover all proven callers at their deepest common ancestor"
                     .into(),
                 declaration_for,
                 references: Vec::new(),
                 caller_override: false,
                 import_module: None,
                 import_scope: None,
-            });
+            }, defining, &required);
             return true;
         }
         if visibility != "private" {
@@ -933,14 +1039,14 @@ impl Analyzer<'_> {
                 .expect("validated name")
                 .into()
         }));
-        self.add(Repair {
-            path: path.into(), range: span(at, at), after: "pub(crate) ".into(), kind: "visibility", written_reexport: false,
+        self.add_visibility(Repair {
+            path: path.into(), range: span(at, at), after: String::new(), kind: "visibility", written_reexport: false,
             target: RewriteTarget::Synthesis { path: path.into(), slot: "visibility_insert".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(parts.join("::")) },
             item_ids: ids.to_vec(), anchors: item.map(|i| vec![anchor(self.files, path, &i.span.range)]).unwrap_or_default(),
-            rationale: "a proven written access is outside the declaration's parent lexical scope and descendants".into(),
+            rationale: "proven access is outside the declaration's parent scope; cover all proven callers at their deepest common ancestor".into(),
             declaration_for,
             references: Vec::new(), caller_override: false, import_module: None, import_scope: None,
-        });
+        }, defining, &common_region(defining, using));
         true
     }
     fn import(
@@ -2100,14 +2206,10 @@ impl Analyzer<'_> {
                     }
                 }
                 "visibility" => {
-                    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-                    if compact != "pub(crate)" && !compact.is_empty() {
-                        return Err(invalid_choice(
-                            "visibility alternative must be private or pub(crate); no pub/API escalation",
-                        ));
-                    }
-                    if compact.is_empty() {
-                        failures.push(self.repair_need(&repair, DecisionReason::VisibilityScopeUnproved, "visibility_context", "selected private visibility still leaves the proven access outside its allowed scope"));
+                    let region = &self.visibility_regions[&visibility_key(&repair)];
+                    let chosen = chosen_visibility_region(text, &region.defining, self.controls)?;
+                    if !region.required.starts_with(&chosen) {
+                        failures.push(self.repair_need(&repair, DecisionReason::VisibilityScopeUnproved, "visibility_context", "selected visibility does not cover every proven caller and the declaration's preserved access region"));
                     }
                 }
                 "import_insert" => {
@@ -2612,6 +2714,7 @@ pub(crate) fn analyze(
         contexts,
         final_contexts,
         repairs: Vec::new(),
+        visibility_regions: BTreeMap::new(),
         imports: Vec::new(),
         descriptor_bytes: 0,
         reference_candidates,

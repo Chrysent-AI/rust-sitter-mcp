@@ -368,7 +368,6 @@ impl Analyzer<'_> {
                         let final_path = self.final_path(&p, &member).to_owned();
                         let defining = self.final_contexts[&final_path].module_segments.clone();
                         if !member.reasons.is_empty()
-                            || !matches!(member.visibility_key, "private" | "pub(crate)" | "pub")
                             || !self.widen(
                                 &p,
                                 Some(&member),

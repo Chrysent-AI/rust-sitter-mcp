@@ -131,6 +131,12 @@ member. Headers must be byte-identical and resolve to the same written type.
 Unchanged generic/where headers qualify only with preserved written dependencies;
 trait/unsafe/negative/attributed impls, cfg/unexamined or generic members and generated
 members remain excluded. Review visibility repairs and field-access blockers.
+Visibility defaults merge all proven caller module chains at their deepest common
+ancestor, emitting `pub(super)`, `pub(in crate::path)` or `pub(crate)` only as needed.
+Already sufficient visibility is preserved, and moved private members retain access
+from their original defining region. Supported private/restricted internal choices
+are rechecked against the merged requirement; an insufficient narrower choice blocks
+with `visibility_scope_unproved`, never a silently accepted broken access.
 Associated batches share context evaluations at plan level; per-proof context arrays
 are empty. Keep enclosing impl inventory units in the retain set when moving members.
 
