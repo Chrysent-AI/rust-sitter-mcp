@@ -1123,11 +1123,60 @@ is immaterial), direct `super::name` paths, and observed references through dire
 and module declarations are excluded. No macro expansion, nested-module inference,
 external test-file scan or cfg evaluation is performed; absence is not proof of no
 test coupling. Duplicate target spellings remain labeled ambiguous candidates.
+These legacy signals remain separate from the broader advisory projection below.
 These signals project the existing conditional-consumer decision reason;
 **default execution behavior is unchanged**: same-file cfg(test) consumers still
 block relocation in `move_item`. The separate explicit `acknowledge_test_consumers`
 option above discloses supported consumer risks instead; advice itself never
 acknowledges them. No cfg evaluation or safe-relocation guarantee is introduced.
+
+### Advisory test observations
+
+`test_observations` is a separate schema-2 advice object with `coverage`, `routes`,
+`records` and `limitations`. It does not modify ownership/boundary records, legacy
+`cfg_test_consumer` signals, local forecasts or execution acknowledgement.
+
+- `coverage` reports `completed`, admitted/traversed paths, `unlinked_test_roots`,
+  `not_assessed`, token-shape coverage and an explicit zero-observation caveat.
+  Completion means the admitted written scan finished, not complete test coverage.
+- `routes[]` links exact module declarations and attached attribute anchors to
+  conventional flat-file and `mod.rs` candidates and their `admitted`, `unadmitted`
+  or `missing` states. Exact `#[cfg(test)]` establishes conditional discovery only,
+  never an execution-admissible cfg edge. Supported routes have status
+  `conditional_written_route` or `inline_written`; uncertain inline scopes use
+  `inline_uncertain`. Missing/unadmitted files, competing layouts and unsupported
+  attributes/remapping are explicit limitations, not zero-consumer reassurance.
+  Admitted files with written test markers but no supported route are disclosed as
+  `unlinked_test_root`; directory names never establish Cargo targets/library aliases.
+- `records[]` has a response-local `test-observation/N` ID, `channel`, `access_kind`,
+  original occurrence `anchor`, known enclosing function/modules, optional written
+  module segments, `route_ids`, `route_evidence`, candidate `target_item_ids`,
+  `attribution`, typed `uncertainty`, non-exclusive `labels`, `candidate_couplings`
+  and `possible_companion`. Route IDs are `test-route/N`, not execution anchors.
+- The `cst` channel observes path/field/method accesses independently of line wrapping.
+  Field attribution requires a simple lexical receiver with a written nominal
+  parameter/let type or literal struct initializer and a matching written field
+  on that target. Receiver chains, inferred/generic types and method identity remain
+  unproved; a same-spelled field on an unrelated type never establishes a link.
+  Visible glob imports contribute candidates with `glob_binding_candidate`, not
+  certain binding identity. Block macros retain lexical uncertainty even where a
+  simple written parameter/let candidate can be inspected.
+- `macro_token_candidate` observes bounded written identifier paths and simple
+  `identifier.field` token shapes in assertion/other macro inputs, excluding comments
+  and literals. Anchors cover the complete observed token shape. These are not
+  expanded expressions, binding proofs or assertion-equivalence evidence.
+- Labels are `facade`, `moved_implementation`, `private_state`, `mixed`, `unresolved`.
+  They are non-exclusive; candidate-relative labels link to ownership candidate IDs
+  without changing their membership. `possible_companion:true` only asks the caller
+  to inspect a test, never selects or mandates relocation. No assertions, placements,
+  visibility or test acknowledgement eligibility change. Out-of-line/third-file glob
+  consumers still block where the move contract requires, with either flag value.
+
+The projection uses the shared reference/descriptor guards, cancellation and time
+budget. Response fitting strips display text first, then records exact
+`counts.omissions.test_observations`, `test_routes` and `test_limitations` if the
+projection must be withheld; stopped/withheld projection coverage is not complete.
+`counts.test_observations` is the analyzed record count, not a test count or safety score.
 
 Risk fields and signal kinds are unchanged by counts-first response shaping;
 `semantic:"not_performed"` is unchanged. `suggest_split` publishes schema version 2

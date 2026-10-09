@@ -275,6 +275,7 @@ Use for:
 - Compare up to two draft partitions, with reasons, original-range sizes, explicit impl/member containment and cross-group overlap links. Affected sizes are labeled non_additive; exact-once item IDs are not a disjoint byte partition or generated module size estimate.
 - Inspect ranked structural ownership_candidates separately from inspection companions and whole-impl/member alternatives; weak naming/section/attribute facts never join cores.
 - Observe admitted-file incoming/outgoing written routes through separately scoped boundary_observations; not symbol resolution, repairability or a change to local forecasts.
+- Disclose separate test_observations for admitted inline/out-of-line conditional test routes, CST field/path shapes and macro_token_candidate access shapes. Read route/attribute anchors, missing/unadmitted/competing/remapped limitations, unlinked roots, uncertainty and non-exclusive coupling labels. No Cargo alias inference, expansion, assertion equivalence or mandatory test relocation; zero records never means tests unaffected. Exact same-file inline acknowledgement eligibility and third-file glob blockers are unchanged.
 - Choose items to submit later as an explicit move_item batch. Completed analysis with no supported core reports partition_outcome no_credible_written_partition, not a balanced primary; incomplete analysis cannot establish that negative.
 Does NOT:
 - Execute a split, extract inline-module bodies, or return an applicable move plan.

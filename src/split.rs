@@ -3,9 +3,14 @@ mod boundary;
 mod drafts;
 mod ownership;
 mod signals;
+mod test_observations;
 pub use boundary::{BoundaryCoverage, BoundaryObservation, BoundaryObservations};
 pub use ownership::{
     InspectionCompanion, OwnershipAlternative, OwnershipCandidate, OwnershipRanking,
+};
+pub use test_observations::{
+    TestCandidateCoupling, TestCoverage, TestLimitation, TestObservation, TestObservations,
+    TestRoute,
 };
 #[cfg(test)]
 mod tests;
@@ -339,6 +344,7 @@ pub struct AdviceCounts {
     pub drafts: usize,
     pub ownership_candidates: usize,
     pub boundary_observations: usize,
+    pub test_observations: usize,
     pub analysis_descriptor_bytes: usize,
     pub omissions: BTreeMap<String, usize>,
 }
@@ -383,6 +389,7 @@ pub struct SuggestSplitEnvelope {
     pub drafts: Vec<Draft>,
     pub ownership_candidates: Vec<OwnershipCandidate>,
     pub boundary_observations: BoundaryObservations,
+    pub test_observations: TestObservations,
     pub partition_outcome: String,
     /// Non-executable membership summaries when output fitting withholds full drafts.
     pub draft_summaries: Vec<DraftMembership>,
@@ -427,6 +434,7 @@ impl SuggestSplitEnvelope {
             drafts: Vec::new(),
             ownership_candidates: Vec::new(),
             boundary_observations: BoundaryObservations::default(),
+            test_observations: TestObservations::default(),
             partition_outcome: "incomplete_analysis".into(),
             draft_summaries: Vec::new(),
             draft_eligibility: DraftEligibility {
@@ -547,6 +555,7 @@ impl SuggestSplitEnvelope {
         self.withhold();
         self.partition_outcome = "incomplete_analysis".into();
         self.boundary_observations.coverage.completed = false;
+        self.test_observations.coverage.completed = false;
         for candidate in &mut self.ownership_candidates {
             for companion in &mut candidate.companions {
                 companion.classification = "undetermined".into();
@@ -561,6 +570,16 @@ impl SuggestSplitEnvelope {
             self.truncation_reasons.push(reason.into());
             self.draft_eligibility.reasons.push(reason.into());
         }
+    }
+    fn omit_test_observations(&mut self) {
+        self.counts.test_observations = self
+            .counts
+            .test_observations
+            .max(self.test_observations.records.len());
+        self.omit("test_observations", self.test_observations.records.len());
+        self.omit("test_routes", self.test_observations.routes.len());
+        self.omit("test_limitations", self.test_observations.limitations.len());
+        self.test_observations = TestObservations::default();
     }
     fn account(&mut self, bytes: usize) -> Result<(), DomainError> {
         self.counts.analysis_descriptor_bytes =
@@ -682,6 +701,8 @@ impl SuggestSplitEnvelope {
         {
             omitted += omit_text(&mut anchor.span);
         }
+        controls.check()?;
+        omitted += self.test_observations.omit_text();
         self.omit("display_text_fields", omitted);
         controls.check()?;
         if self.wire_bytes() <= self.limits.response_bytes {
@@ -733,6 +754,7 @@ impl SuggestSplitEnvelope {
             self.boundary_observations.records.len(),
         );
         self.boundary_observations.records.clear();
+        self.omit_test_observations();
         self.omit("signals", self.signals.len());
         self.omit("decisions", self.decisions.len());
         self.omit("chain_diagnostics", self.chain_diagnostics.len());
@@ -973,6 +995,7 @@ fn run_with_recheck(
         );
         result.boundary_observations.records.clear();
         result.boundary_observations.coverage.completed = false;
+        result.omit_test_observations();
         if error.code != "STALE_SELECTION" {
             result.omit("chain_diagnostics", result.chain_diagnostics.len());
             result.chain_diagnostics.clear();
@@ -1303,6 +1326,16 @@ fn build(
     )?;
     ownership::build(result, controls)?;
     boundary::link(result, controls)?;
+    test_observations::collect(
+        request,
+        &scope,
+        &files,
+        &parsed,
+        contexts,
+        &glob_routes,
+        controls,
+        result,
+    )?;
     result.draft_eligibility.evidence_complete = true;
     if !clean {
         result.partition_outcome = "unsupported_input".into();
@@ -1343,6 +1376,7 @@ fn build(
             "source corpus changed or final scan incomplete; obtain fresh advice",
         ));
     }
+    test_observations::recheck(&scope, result, controls)?;
     for draft in &result.drafts {
         controls.check()?;
         for group in &draft.groups {
@@ -1371,6 +1405,7 @@ fn build(
         &result.impl_contexts,
         &result.ownership_candidates,
         &result.boundary_observations,
+        &result.test_observations,
         &result.source,
     ))?)?;
     Ok(())
