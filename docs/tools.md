@@ -1339,8 +1339,12 @@ finite tunable parameters, **not frozen measured guarantees**; representative
 measurements and a human cap choice remain pending. Accounting conservatively
 includes owned container/string capacities, descriptor/node reserves, buffers,
 input manifests and identity metadata, separately from transient analysis/output
-and process peak RSS. A test-only limit override and cap-neutral allocation probe
-support that measurement without adding MCP flags. Registry removal does not
+and process peak RSS. Capacity is reserved before additional retained-record
+materialization using a conservative non-materializing bound; pending candidates
+occupy capacity and refund or transfer their charges on failure or publication.
+This does not eliminate existing analysis/output buffers or bound total process memory.
+A test-only limit override and cap-neutral allocation probe support that measurement
+without adding MCP flags. Registry removal does not
 subtract bytes still owned by an in-flight reader. Expiry is monotonic and fixed,
 not extended by navigation; expired payloads are reclaimed lazily. No silent
 eviction, persistence, background refresh, jobs or restart-survival promise exists.

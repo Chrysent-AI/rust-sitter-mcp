@@ -5,6 +5,7 @@ use std::{
     borrow::Cow,
     collections::hash_map::RandomState,
     hash::BuildHasher,
+    io::{self, Write},
     mem::size_of,
     sync::{
         Arc, Mutex,
@@ -12,6 +13,9 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
+
+mod accounting;
+use accounting::{evidence_allocation, preparation_allocation, retention_allocation};
 
 /// Provisional measurement parameters, not a frozen product guarantee.
 pub const PROVISIONAL_RECORDS: usize = 1;
@@ -86,6 +90,15 @@ struct Charge {
     usage: Arc<Usage>,
     bytes: usize,
 }
+impl Charge {
+    fn reconcile(&mut self, bytes: usize) -> Result<(), &'static str> {
+        // Never grow a candidate past the allocation reserved before materialization.
+        let refund = self.bytes.checked_sub(bytes).ok_or("record_too_large")?;
+        self.usage.bytes.fetch_sub(refund, Ordering::Relaxed);
+        self.bytes = bytes;
+        Ok(())
+    }
+}
 impl Drop for Charge {
     fn drop(&mut self) {
         self.usage.bytes.fetch_sub(self.bytes, Ordering::Relaxed);
@@ -111,6 +124,8 @@ pub struct Store {
     origin: Instant,
     limits: RetentionLimits,
     usage: Arc<Usage>,
+    #[cfg(test)]
+    materializations: AtomicUsize,
 }
 impl Default for Store {
     fn default() -> Self {
@@ -128,9 +143,11 @@ impl Store {
             origin: Instant::now(),
             limits,
             usage: Arc::new(Usage::default()),
+            #[cfg(test)]
+            materializations: AtomicUsize::new(0),
         }
     }
-    /// Cap-neutral measurement seam: these are accounted live allocations, not process RSS.
+    /// Accounted live records and preparation reservations, not process RSS.
     pub fn accounted_allocation(&self) -> (usize, usize) {
         (
             self.usage.records.load(Ordering::Relaxed),
@@ -179,18 +196,69 @@ impl Store {
             .filter_map(|h| state.records.remove(&h))
             .collect()
     }
+    fn reserve(&self, now: Instant, controls: Controls<'_>) -> Result<(u64, Charge), &'static str> {
+        // Removing registry entries does not refund readers' Arcs. Large drops stay unlocked.
+        let expired = {
+            let mut state = self.state.lock().expect("advice store lock");
+            self.prune(&mut state, now)
+        };
+        drop(expired);
+        let mut state = self.state.lock().expect("advice store lock");
+        controls
+            .check()
+            .map_err(|_| "cancelled_before_publication")?;
+        if self.usage.records.load(Ordering::Relaxed) >= self.limits.records {
+            return Err("capacity");
+        }
+        state.next = state.next.checked_add(1).ok_or("capacity")?;
+        self.usage.records.fetch_add(1, Ordering::Relaxed);
+        Ok((
+            state.next,
+            Charge {
+                usage: self.usage.clone(),
+                bytes: 0,
+            },
+        ))
+    }
+    fn reserve_bytes(&self, charge: &mut Charge, bytes: usize) -> Result<(), &'static str> {
+        if bytes > self.limits.aggregate_bytes {
+            return Err("record_too_large");
+        }
+        let _state = self.state.lock().expect("advice store lock");
+        if self
+            .usage
+            .bytes
+            .load(Ordering::Relaxed)
+            .saturating_add(bytes)
+            > self.limits.aggregate_bytes
+        {
+            return Err("capacity");
+        }
+        self.usage.bytes.fetch_add(bytes, Ordering::Relaxed);
+        charge.bytes = bytes;
+        Ok(())
+    }
     fn prepare(
         &self,
         canonical: &SuggestSplitEnvelope,
         evidence: Evidence,
         request: &SuggestSplitRequest,
         now: Instant,
+        controls: Controls<'_>,
     ) -> Result<Record, &'static str> {
-        let id = {
-            let mut state = self.state.lock().expect("advice store lock");
-            state.next = state.next.checked_add(1).ok_or("capacity")?;
-            state.next
-        };
+        // No canonical Value, normalized request or candidate record before both reservations.
+        let (id, mut charge) = self.reserve(now, controls)?;
+        let bytes = preparation_allocation(
+            canonical,
+            &evidence,
+            request,
+            self.limits.aggregate_bytes,
+            controls,
+        )?;
+        self.reserve_bytes(&mut charge, bytes)?;
+        controls
+            .check()
+            .map_err(|_| "cancelled_before_publication")?;
         let expires = self
             .tick(now)
             .checked_add(
@@ -201,13 +269,15 @@ impl Store {
             )
             .ok_or("capacity")?;
         let handle = self.signed(&format!("a1/{id}/{expires:020}"));
-        let mut normalized = serde_json::to_value(request).expect("request JSON");
+        let mut normalized = serde_json::to_value(request).map_err(|_| "record_too_large")?;
         normalized["repo_path"] = json!(canonical.root);
         normalized["paths"] = evidence.normalized_scope["paths"].clone();
         normalized["globs"] = evidence.normalized_scope["globs"].clone();
         normalized["diagnostic_count_explicit"] = json!(request.limits.diagnostic_count_explicit);
+        #[cfg(test)]
+        self.materializations.fetch_add(1, Ordering::Relaxed);
         let mut record = Record {
-            canonical: serde_json::to_value(canonical).expect("canonical JSON"),
+            canonical: serde_json::to_value(canonical).map_err(|_| "record_too_large")?,
             retention: Retention {
                 state: "retained".into(),
                 analysis_handle: Some(handle.clone()),
@@ -225,7 +295,7 @@ impl Store {
             captured_at: now,
             published_at: now,
             expires,
-            charge: None,
+            charge: Some(charge),
         };
         // Source text lives once in frozen buffers; descriptors retain original coordinates.
         strip_source_text(&mut record.canonical);
@@ -233,30 +303,18 @@ impl Store {
         // BTree nodes/Arc/control blocks use a deliberately generous per-entry reserve.
         let bytes = size_of::<Record>()
             + allocation(&record.canonical)
-            + allocation(&serde_json::to_value(&record.retention).expect("retention JSON"))
-            + allocation(&record.evidence.normalized_scope)
-            + allocation(&record.evidence.source_manifest)
-            + record
-                .evidence
-                .buffers
-                .iter()
-                .map(|(p, b)| 256 + p.capacity() + b.capacity())
-                .sum::<usize>()
-            + record.evidence.inputs.ignores.capacity() * size_of::<scope::IgnoreInput>()
-            + record
-                .evidence
-                .inputs
-                .ignores
-                .iter()
-                .map(|i| i.path.capacity() + i.bytes.as_ref().map_or(0, Vec::capacity))
-                .sum::<usize>()
-            + record.evidence.scope_input_digest.capacity()
+            + retention_allocation(&record.retention)
+            + evidence_allocation(&record.evidence)
             + handle.capacity()
             + 1024;
-        if bytes > self.limits.aggregate_bytes {
+        if bytes > record.charge.as_ref().expect("reserved charge").bytes {
             return Err("record_too_large");
         }
+        // Keep the preparation bound until publication finalizes identity/expiry allocation.
         record.retention.accounted_bytes = bytes;
+        controls
+            .check()
+            .map_err(|_| "cancelled_before_publication")?;
         Ok(record)
     }
     fn publish(
@@ -266,6 +324,7 @@ impl Store {
         now: Instant,
     ) -> Result<Retention, &'static str> {
         // Fixed expiry starts at publication, not at preparation or the last detail request.
+        let metadata_bytes = retention_allocation(&record.retention);
         debug_assert!(now >= record.captured_at);
         record.published_at = now;
         record.expires = self
@@ -288,6 +347,14 @@ impl Store {
         record.retention.analysis_handle =
             Some(self.signed(&format!("a1/{id}/{:020}", record.expires)));
         record.retention.expires_at = Some(wall_expiry(self.limits.ttl_seconds));
+        let bytes = record.retention.accounted_bytes - metadata_bytes
+            + retention_allocation(&record.retention);
+        record
+            .charge
+            .as_mut()
+            .expect("reserved charge")
+            .reconcile(bytes)?;
+        record.retention.accounted_bytes = bytes;
         let published = record.retention.clone();
         // Reclaim large payloads outside the mutex.
         let expired = {
@@ -299,19 +366,11 @@ impl Store {
         if controls.check().is_err() {
             return Err("cancelled_before_publication");
         }
-        let (records, bytes) = self.accounted_allocation();
-        let allocation = record.retention.accounted_bytes;
-        if records >= self.limits.records
-            || bytes.saturating_add(allocation) > self.limits.aggregate_bytes
-        {
-            return Err("capacity");
-        }
-        self.usage.bytes.fetch_add(allocation, Ordering::Relaxed);
-        self.usage.records.fetch_add(1, Ordering::Relaxed);
-        record.charge = Some(Charge {
-            usage: self.usage.clone(),
-            bytes: allocation,
-        });
+        // The prepared record already owns its slot/byte charge. Publication transfers it.
+        debug_assert_eq!(
+            record.charge.as_ref().expect("reserved charge").bytes,
+            record.retention.accounted_bytes
+        );
         state.records.insert(
             record
                 .retention
@@ -1330,7 +1389,7 @@ pub(super) fn present(
         && full.coverage.scope_exhaustive
         && let Some(evidence) = evidence
     {
-        match store.prepare(&full, evidence, request, Instant::now()) {
+        match store.prepare(&full, evidence, request, Instant::now(), controls) {
             Ok(prepared) => {
                 retention = prepared.retention.clone();
                 record = Some(prepared);
@@ -1411,7 +1470,7 @@ pub(super) fn present(
         let retention = store
             .publish(record, controls, Instant::now())
             .unwrap_or_else(|reason| Retention::unavailable(store.limits, reason));
-        // Publication changes only fixed-width identity/expiry metadata. No serialization under lock.
+        // Publication finalizes charge and fixed-width identity/expiry metadata outside the lock.
         match &mut response {
             SplitResponse::Full(full) => full.retention = Some(retention),
             SplitResponse::Compact(manifest) => manifest.set_retention(retention),

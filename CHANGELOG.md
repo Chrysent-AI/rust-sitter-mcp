@@ -80,6 +80,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Reserve retained-advice record and byte capacity before materializing a retained
+  copy; refund failed or dropped candidates and preserve charges for in-flight readers.
 * Distinguish positive `#[cfg(test)]` root markers from other cfg mentions of
   `test`; disclose the latter as uncertainty without implying test coupling.
 * Distinguish inspection companions' selection-completeness, boundary-dependency
