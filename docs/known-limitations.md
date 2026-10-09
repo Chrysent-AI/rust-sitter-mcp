@@ -1,9 +1,10 @@
 # Known limitations and gaps
 
-Honest boundaries of the evidence tiers and split planning as of v0.4.1 (2026-10-08).
-Measured on the oss-benchmark (see `docs/benchmark-unlocks.md` and the orchestration
-artifacts for run data: 6 popular open-source repos + two internal targets, 24 files,
-114+ probed items). Each limitation is ticketed or documented; none is a silent guess —
+Honest boundaries of the evidence tiers and split planning as of v0.5.0.
+Historical applicability measurements below are from v0.4.1 (2026-10-08),
+not new balanced-default evidence. Measured on the oss-benchmark (see `docs/benchmark-unlocks.md` and the orchestration
+artifacts for run data: 6 popular open-source repos + two additional targets,
+24 files, 114 selected items across the combined cohort). Each limitation is ticketed or documented; none is a silent guess —
 everything the engine cannot prove is refused with anchored, classified disclosure.
 
 ## Proof-tier boundaries
@@ -115,9 +116,20 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   inline-module, forwarded named-route, receiver and unadmitted/generated contexts
   remain unproved. Boundary observations disclose separate coverage and candidates;
   they neither change local blocker forecasts nor assess destination/batch repairability.
-- Completed analysis without a supported core reports `no_credible_written_partition`
-  with no balanced primary. Existing balanced alternatives remain available when
-  structural advice exists until the separately announced default cutover.
+- Since v0.5.0, omitted/false `include_balanced` excludes byte-balanced
+  alternatives. Explicit true requests the existing distinct low-confidence,
+  original-order alternative only when structural advice and layout are valid;
+  identical alternatives are deduplicated, never a two-proposal promise. Before
+  this boundary a distinct balanced alternative was included by default when
+  structural advice existed. Completed analysis without a supported core still
+  reports `no_credible_written_partition` with inventory/evidence and no balanced
+  primary, even with true. Incomplete analysis cannot establish that negative;
+  unsupported layout remains separate. No ownership, exclusion, membership or
+  execution-proof policy is relaxed.
+- Completing the fixed release workload does not imply all repository-scale
+  advice is complete. Work-guard stops and mandatory-output overflow remain
+  partial; display-only diagnostic/text caps or proven duplicate-display fitting
+  are not missing analysis. Read each result's status, coverage and omissions.
 
 - Inventory includes overlapping whole impl and member descriptors, with explicit
   containment and cross-group links. Non-additive size labels preserve original
@@ -175,9 +187,19 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Measured state (oss-benchmark run 6, 2026-10-08)
 
-0 of 114 batch-probed items applicable across 6 external repos; remaining refusals fully
-classified (workspace chains fixed, declared-cfg written-tier wiring landed, root-attr
+0 of 114 batch-probed items applicable across the combined six public repositories
+and two additional targets; remaining refusals fully classified (workspace chains fixed, declared-cfg written-tier wiring landed, root-attr
 admission landed; residual walls: sysroot-class member calls, deeper written-tier
 conditionals on unadmitted dependency modules, macro bodies, pub-API conservatism). The
 configured-target workflow (declared configuration + assumption flag) is proven end-to-end
-on the internal target including 19-method impl partitioning with 517 scheduler tests green.
+on the additional application target including 19-method impl partitioning with
+517 scheduler tests green.
+
+The pre-cutover frozen-input replay on Linux arm64 preserved all original roots,
+scopes, flags/configuration and 114 selections: 24 rows across eight repositories,
+22 complete blocked move batches, zero applicable batches or driver errors, and
+21 available historical plans exactly equal. This is Linux arm64 verification,
+not the original Darwin binary/platform. All 24 advice calls were partial under
+work/output limits, recorded independently of move applicability; no narrowed
+subset is presented as the complete cohort. The final cutover changes advice
+selection and package version only, not move/root/freshness/proof contracts.

@@ -1066,7 +1066,7 @@ Definite bad requests use `INVALID_ITEM_SELECTION`, `DUPLICATE_MOVE`, `STALE_SEL
 {"repo_path":"/absolute/project","crate_root":"src/lib.rs","source_path":"src/rich.rs","paths":["src"],"limits":{"text_bytes":0}}
 ```
 
-This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no search cursor, saved executable plan, execution handle, or implicit selection. Historical retention and its separate detail tokens are opt-in (below). Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
+This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Since **v0.5.0**, optional `include_balanced` resolves to false on omission: omitted/false returns no byte-balanced alternative; explicit `true` requests the existing distinct low-confidence original-order alternative only when structural advice and layout are valid. Pre-v0.5.0 releases included a distinct balanced alternative by default when structural advice existed; clients wanting that alternative now must send `include_balanced:true`. No call is promised two proposals, and the flag never relaxes ownership, exclusions, membership or move-proof policies. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no search cursor, saved executable plan, execution handle, or implicit selection. Historical retention and its separate detail tokens are opt-in (below). Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
 
 The result has `advisory:true`, `source`, `inventory[]`, `overlaps[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `chain_diagnostics[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
 
@@ -1097,7 +1097,7 @@ Companion `classification` is `observed_exclusive`, `observed_shared` or `undete
 
 `boundary_observations` has its own `coverage` and `records`: admitted/observed paths, completion, unsupported-context counts/examples, uncertainty and explicit unassessed domains. Records link incoming consumers or outgoing dependencies to inventory/candidate IDs, exact original occurrence `anchor`, optional enclosing unit/counterpart, and `route_evidence`. `certainty:"written_route"` means an ordinary written module path or explicit file-level import to an admitted declaration, not resolved identity. Glob/ambiguous routes are `candidate`; forwarded named routes, inline modules, macros and arbitrary receivers remain outside this bounded observation channel. This does not run a move planner or prove repairability. Legacy `assessment_scope.assessed:"local_only"`, its `other_consumers` unassessed entry, and `expected_to_block` meanings remain unchanged.
 
-`partition_outcome` distinguishes `credible_written_candidates`, `no_credible_written_partition`, `insufficient_input`, `unsupported_layout`, `unsupported_input`, `incomplete_analysis` and `failed_analysis`. Only completed structural analysis may establish no credible partition; it retains inventory and weak evidence but emits no balanced primary. With a credible core, the pre-cutover distinct original-order byte-balanced alternative remains available with low confidence; its final default cutover is not part of this change. Other units remain in source, retaining the earliest eligible unit if necessary; equivalent alternatives are not duplicated.
+`partition_outcome` distinguishes `credible_written_candidates`, `no_credible_written_partition`, `insufficient_input`, `unsupported_layout`, `unsupported_input`, `incomplete_analysis` and `failed_analysis`. Only completed structural analysis may establish no credible partition; it retains inventory and weak evidence but emits no balanced primary. With a credible core, `include_balanced:true` may additionally return the labeled low-confidence original-order byte-balanced alternative, never a natural semantic boundary or an implicit primary. Omitted/false excludes it. True does not override no-credible, insufficient-input, incomplete-analysis or unsupported-layout outcomes. Other units remain in source, retaining the earliest eligible unit if necessary; equivalent alternatives are not duplicated.
 
 Group `facts`, rationale and confidence expose integer organization evidence, not a probability of compiler correctness. High confidence requires at least two independent signal families and complete layout/membership; execution risks remain unresolved. Sizes count written item bytes/lines, not a prediction of generated file size. Exact-once ID membership is **not a disjoint byte partition**: whole impl descriptors overlap their members, even across groups. Member `enclosing_impl_id` links to the whole impl inventory ID, independently of the exact header-only execution anchor in `enclosing_impl.anchor`.
 
@@ -1412,6 +1412,10 @@ A successful `retention` has `state:"retained"`, opaque `analysis_handle` and
 `normalized_request`, grammar/server/build/grouping `provenance`, informative
 RFC3339 `expires_at`, effective `limits` and `accounted_bytes`. Metadata includes
 all effective request options and whether diagnostic expansion was explicit.
+At v0.5.0, normalized `include_balanced` records the effective boolean: false
+for omission/false and true for explicit opt-in, alongside server-version
+provenance. Full, compact and retained historical group memberships follow that
+same option; retrieval does not add a balanced alternative or regroup the record.
 Handles identify one analysis, not a corpus hash or authorization. Separate
 analyses on identical bytes/options have different handles. With unavailability,
 there is no usable handle and `state:"unavailable"` names one reason:
@@ -1827,7 +1831,7 @@ current original bytes for execution anchors, even after a complete advice resul
 
 ### Explicit edited-batch flow
 
-1. Inspect the inventory, decisions and one or two drafts; edit/choose/ignore them **outside the server**.
+1. Inspect the inventory, decisions and any structural draft (plus a distinct balanced alternative only if explicitly requested); edit/choose/ignore them **outside the server**. No-credible or incomplete advice is not a reason to force a partition.
 2. Obtain full current source bytes, select the intended whole-item ranges, and explicitly choose each destination/parent. Retain items by not listing them in `moves`, not by asking the server to execute a draft.
 3. Submit one `move_item` batch. Optional `draft_provenance` only echoes display metadata: it never authorizes membership or bypasses stale-anchor checks.
 4. Require `plan.applicable:true`, review all rewrites/trivia decisions and complete edits/creations/patch, then externally recheck/apply against unchanged bases. No server-side application occurs.

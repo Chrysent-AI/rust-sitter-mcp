@@ -322,7 +322,9 @@ fn tokens() { target!(); stringify!(target); let _ = "target"; /* target */ }
 #[test]
 fn planted_cohesion_balanced_alternative_and_weak_fallback() {
     let repo = Fixture::generate();
-    let result = run(&repo, args(&repo, "src/rich.rs"));
+    let mut request = args(&repo, "src/rich.rs");
+    request["include_balanced"] = json!(true);
+    let result = run(&repo, request);
     advice_flow::complete(&result);
     assert_eq!(
         edge(&result, "alpha_read", "alpha_parse").unwrap()["count"],
@@ -332,7 +334,7 @@ fn planted_cohesion_balanced_alternative_and_weak_fallback() {
         edge(&result, "beta_write", "alpha_parse").unwrap()["count"],
         1
     );
-    assert!((1..=2).contains(&result["drafts"].as_array().unwrap().len()));
+    assert_eq!(result["drafts"].as_array().unwrap().len(), 2);
     let first = &result["drafts"][0];
     let groups = first["groups"].as_array().unwrap();
     let alpha = groups

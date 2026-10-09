@@ -52,6 +52,9 @@ pub struct SuggestSplitRequest {
     pub source_path: String,
     pub paths: Option<Vec<String>>,
     pub globs: Option<Vec<String>>,
+    /// Since v0.5.0, omitted/false excludes byte balancing; true requests a distinct
+    /// low-confidence original-order alternative only when structural advice is valid.
+    pub include_balanced: Option<bool>,
     #[serde(default)]
     pub retain_snapshot: bool,
     #[serde(default)]

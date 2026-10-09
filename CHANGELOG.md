@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-10
+
 ### Added
 
 * Add explicit private `new_child` extraction plans through the existing planner
@@ -83,10 +85,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* **Balanced alternatives are now opt-in:** `suggest_split` omitting
+  `include_balanced` or setting it false excludes byte balancing at the v0.5.0
+  boundary. Explicit true requests the existing distinct low-confidence
+  original-order alternative only when structural advice and layout are valid;
+  identical alternatives are deduplicated, with no two-proposal promise. No
+  balanced primary substitutes for `no_credible_written_partition`, and true
+  does not override incomplete analysis, exclusions, membership or proof rules.
 * Stop forming credible advice cores from weak naming/section/attribute/adjacency
   signals; completed analysis with no supported core reports
-  `no_credible_written_partition` rather than a balanced primary. Existing balancing
-  remains an alternative when structural advice exists, pending the announced cutover.
+  `no_credible_written_partition` rather than a balanced primary. Balancing is
+  available only as an explicitly requested alternative when structural advice exists.
 * Explain every `BUSY` rejection: the analysis slot is occupied, the rejected call
   starts no analysis and is not queued; wait for active work or cancellation to
   settle, then retry serially, without a retry deadline or another request's identity.

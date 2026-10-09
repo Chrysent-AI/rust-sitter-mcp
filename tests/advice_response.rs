@@ -267,7 +267,10 @@ fn stdio_advice_exposes_containment_without_changing_descriptor_sizes() {
     let repo = fixture(source);
     let before = observe(&repo.0);
     let mut client = Client::new();
-    let result = client.call("suggest_split", request(&repo));
+    // The explicit balanced alternative places retained impls across member groups.
+    let mut args = request(&repo);
+    args["include_balanced"] = json!(true);
+    let result = client.call("suggest_split", args);
     assert_eq!(result["status"], "complete");
     assert_eq!(result["schema_version"], 2);
     assert_eq!(result["integrity"]["semantic"], "not_performed");
@@ -337,6 +340,8 @@ fn full_stdio_duplicate_displays_reconstruct_all_records_without_retention() {
     let before = observe(&repo.0);
     let mut args = request(&repo);
     args["source_path"] = json!("cases/advice/worker.rs");
+    // Keep both distinct drafts to exercise duplicate fitting at the default wire cap.
+    args["include_balanced"] = json!(true);
     args["limits"] = json!({"text_bytes":0});
     let mut client = Client::new();
     let fitted = client.call("suggest_split", args.clone());
