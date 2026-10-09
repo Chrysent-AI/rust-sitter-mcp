@@ -196,6 +196,10 @@ pub struct Signal {
     pub kind: String,
     pub basis: String,
     pub item_ids: Vec<String>,
+    /// Under response pressure, item_size/name_prefix duplicate declaration displays
+    /// may be empty: resolve item_ids in order to same-response inventory spans.
+    /// counts.omissions.duplicate_declaration_display_spans counts these copies;
+    /// unique occurrence evidence is never shared this way.
     pub evidence: Vec<SourceSlice>,
     /// Present for directed reference candidates and observed test consumers.
     pub from_item_id: Option<String>,
@@ -623,6 +627,95 @@ impl SuggestSplitEnvelope {
             Ok(())
         }
     }
+    // Only declaration displays may share inventory spans. Occurrence evidence stays direct.
+    // Preflight the whole projection so a mismatch cannot leave a partly shared response.
+    fn fit_duplicate_declaration_displays(
+        &mut self,
+        controls: Controls<'_>,
+    ) -> Result<bool, DomainError> {
+        controls.check()?;
+        if self.wire_bytes() <= self.limits.response_bytes {
+            return Ok(true);
+        }
+        if self.status != "complete"
+            || self.error.is_some()
+            || !self.coverage.scan_exhausted
+            || !self.coverage.eligible_scan_complete
+            || !self.coverage.scope_exhaustive
+            || !self.draft_eligibility.membership_complete
+            || !self.draft_eligibility.evidence_complete
+            || self.inventory.len() != self.counts.inventory_items
+            || self.counts.returned_items != self.inventory.len()
+            || self
+                .counts
+                .omissions
+                .get("inventory_items")
+                .copied()
+                .unwrap_or(0)
+                != 0
+        {
+            return Ok(false);
+        }
+        let inventory: BTreeMap<_, _> = self
+            .inventory
+            .iter()
+            .map(|item| (item.id.as_str(), &item.span))
+            .collect();
+        if inventory.len() != self.inventory.len() {
+            return Ok(false);
+        }
+        let mut indices = Vec::new();
+        let mut count = 0;
+        for (index, signal) in self.signals.iter().enumerate() {
+            controls.check()?;
+            if !matches!(signal.kind.as_str(), "item_size" | "name_prefix") {
+                continue;
+            }
+            if signal.item_ids.is_empty() || signal.evidence.len() != signal.item_ids.len() {
+                return Ok(false);
+            }
+            for (id, span) in signal.item_ids.iter().zip(&signal.evidence) {
+                controls.check()?;
+                // Full descriptor equality includes positions, text bytes and omission flags,
+                // not just geometry. Iterating the IDs preserves evidence order exactly.
+                if inventory.get(id.as_str()).copied() != Some(span) {
+                    return Ok(false);
+                }
+            }
+            count += signal.evidence.len();
+            indices.push(index);
+        }
+        if indices.is_empty() {
+            return Ok(false);
+        }
+        controls.check()?;
+        let removed: Vec<_> = indices
+            .into_iter()
+            .map(|index| (index, std::mem::take(&mut self.signals[index].evidence)))
+            .collect();
+        let key = "duplicate_declaration_display_spans";
+        let previous = self.counts.omissions.get(key).copied();
+        self.omit(key, count);
+        // Use the duplicated encoder, including escaping, omission metadata and reserve.
+        // Inventory is unchanged after the preflight: every removed span is recoverable
+        // from this response in item_ids order, without a retained handle.
+        let fits = self.wire_bytes() <= self.limits.response_bytes;
+        let checked = controls.check();
+        if fits && checked.is_ok() {
+            return Ok(true);
+        }
+        // Failed fitting (or cancellation) must leave the existing fail-closed path intact.
+        for (index, spans) in removed {
+            self.signals[index].evidence = spans;
+        }
+        if let Some(previous) = previous {
+            self.counts.omissions.insert(key.into(), previous);
+        } else {
+            self.counts.omissions.remove(key);
+        }
+        checked?;
+        Ok(false)
+    }
     pub fn wire_bytes(&self) -> usize {
         let value = serde_json::to_value(self).expect("serializable advice");
         serde_json::to_vec(&serde_json::json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":self.error.is_some()})).expect("wire JSON").len() + 4096
@@ -750,6 +843,9 @@ impl SuggestSplitEnvelope {
         self.omit("item_contexts", self.item_contexts.len());
         self.item_contexts.clear();
         if self.wire_bytes() <= self.limits.response_bytes {
+            return Ok(());
+        }
+        if self.fit_duplicate_declaration_displays(controls)? {
             return Ok(());
         }
         if !self.drafts.is_empty() {

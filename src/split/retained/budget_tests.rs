@@ -88,6 +88,136 @@ fn full_display_caps_do_not_cap_the_retained_canonical_inventory_or_decisions() 
 }
 
 #[test]
+fn duplicate_display_fitting_preserves_canonical_records_and_historical_pages() {
+    let source = (0..400)
+        .map(|i| {
+            let family = if i < 200 { "alpha" } else { "beta" };
+            let next = i ^ 1;
+            format!(
+                "fn {family}_{i:03}() {{ {family}_{next:03}(); let _payload = \"{}\"; }}\n",
+                "x".repeat(1800)
+            )
+        })
+        .collect::<String>();
+    let repo = Fixture::new(&source);
+    let mut request = repo.request();
+    request.limits.response_bytes = 2097152;
+    request.limits.diagnostic_count = 100000;
+    let (full, evidence) = repo.analyze(&request);
+    let mut canonical = serde_json::to_value(&full).unwrap();
+    // Preserve the existing canonical storage projection: original bytes live once
+    // in immutable buffers; fitting must not introduce any additional change.
+    strip_source_text(&mut canonical);
+    let store = Store::default();
+    let response = present(
+        full.clone(),
+        Some(evidence),
+        &request,
+        &store,
+        controls(&AtomicBool::new(false)),
+    );
+    assert!(wire_bytes(&response) <= request.limits.response_bytes);
+    let SplitResponse::Full(fitted) = response else {
+        panic!("expected full");
+    };
+    assert_eq!(fitted.status, "complete");
+    assert_eq!(
+        fitted.counts.omissions["duplicate_declaration_display_spans"],
+        800
+    );
+    let retention = fitted.retention.as_ref().unwrap();
+    assert_eq!(retention.state, "retained");
+    let record = store
+        .obtain(
+            &identity(retention, page(Collection::Inventory, 1000)),
+            Instant::now(),
+        )
+        .unwrap();
+    // Every canonical record, including direct signal evidence, is independent of fitting.
+    assert_eq!(record.canonical, canonical);
+    assert_eq!(array(&record.canonical["signals"]).len(), 802);
+    assert!(
+        array(&record.canonical["signals"])
+            .iter()
+            .filter(|s| matches!(s["kind"].as_str(), Some("item_size" | "name_prefix")))
+            .all(|s| !array(&s["evidence"]).is_empty())
+    );
+
+    // Compact presentation is constructed from uncapped analysis, never from fitted full.
+    let compact = Manifest::from_full(&full, retention.clone());
+    assert!(compact.manifest_complete);
+    assert!(
+        !compact
+            .omissions
+            .contains_key("duplicate_declaration_display_spans")
+    );
+    assert_eq!(
+        compact.candidate_summaries,
+        array(&canonical["ownership_candidates"])
+    );
+    for (draft, membership) in full.drafts.iter().zip(&compact.draft_memberships) {
+        for (group, summary) in draft.groups.iter().zip(&membership.groups) {
+            assert_eq!(group.item_ids, summary.item_ids);
+            assert_eq!(
+                serde_json::to_value(&group.consequence_summary).unwrap(),
+                serde_json::to_value(&summary.consequence_summary).unwrap()
+            );
+        }
+    }
+
+    let mut pages = Vec::new();
+    for collection in [
+        Collection::Inventory,
+        Collection::Groups,
+        Collection::Decisions,
+        Collection::AdviceDecisions,
+        Collection::Companions,
+    ] {
+        let mut detail = identity(retention, page(collection, 1000));
+        detail.limits.response_bytes = 16777216;
+        let first = store.detail(detail.clone(), &AtomicBool::new(false));
+        assert!(
+            first.error.is_none() && first.returned_page_complete && first.collection_exhausted
+        );
+        let expected: Vec<_> =
+            collection_records(&record, collection, controls(&AtomicBool::new(false)))
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    detail_record(&record, r, controls(&AtomicBool::new(false)), 16777216).unwrap()
+                })
+                .collect();
+        assert_eq!(first.records, expected);
+        pages.push((detail, serde_json::to_value(first).unwrap()));
+    }
+    let unit = identity(
+        retention,
+        Selector::Units {
+            item_ids: vec![full.inventory[0].id.clone()],
+        },
+    );
+    let original = store.detail(unit.clone(), &AtomicBool::new(false));
+    assert!(original.error.is_none());
+    let range = &full.inventory[0].span.range;
+    assert_eq!(
+        original.records[0]["item"]["expected_text"],
+        &source[range.start_byte..range.end_byte]
+    );
+    fs::write(repo.0.join("src/worker.rs"), "fn changed() {}\n").unwrap();
+    for (detail, before) in pages {
+        assert_eq!(
+            serde_json::to_value(store.detail(detail, &AtomicBool::new(false))).unwrap(),
+            before
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(store.detail(unit, &AtomicBool::new(false))).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+    assert_eq!(record.canonical, canonical);
+}
+
+#[test]
 fn aggregate_allocation_capacity_is_independent_of_record_count() {
     let repo = Fixture::new(SOURCE);
     let (full, evidence) = repo.analyze(&repo.request());

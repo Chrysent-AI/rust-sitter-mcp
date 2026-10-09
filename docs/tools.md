@@ -1288,6 +1288,39 @@ run. Expanded `decisions[]` records provide the per-occurrence anchored display
 descriptors, evidence, unresolved consequence and next action; consult omissions
 rather than assuming that every detail record is present. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
 
+Under full-response budget pressure, after display text and neighboring item
+contexts have been fitted, `item_size` and `name_prefix` signals may have
+`evidence:[]` instead of repeating declaration-display spans. This tier requires
+complete analysis and complete same-response inventory, and verifies that every
+original descriptor equals the inventory span for the corresponding ordered
+`signal.item_ids` entry, including ranges, positions, text bytes and omission flags.
+`counts.omissions.duplicate_declaration_display_spans` counts the removed duplicate
+**display descriptors**, not missing analysis or fewer observed references.
+
+Clients that read direct declaration evidence arrays must join the existing IDs
+back to `inventory[].span` in `item_ids` order when this count is present:
+
+```python
+by_id = {item["id"]: item for item in advice["inventory"]}
+shared = advice["counts"]["omissions"].get("duplicate_declaration_display_spans", 0)
+for signal in advice["signals"]:
+    evidence = signal["evidence"]
+    if shared and signal["kind"] in ("item_size", "name_prefix") and not evidence:
+        evidence = [by_id[item_id]["span"] for item_id in signal["item_ids"]]
+    # Inspect evidence as display descriptors, never as complete move anchors.
+```
+
+No retained handle or follow-up request is needed for this reconstruction. Signal
+IDs, ordered item IDs, facts, limitations and endpoints remain unchanged, as do
+all unique reference/consumer occurrence spans, decisions, candidates, companions,
+consequence summaries and full draft memberships. Already-fitting responses keep
+their direct evidence arrays. Canonical retained records are captured before this
+projection and remain unchanged; compact manifests use their separate contract.
+A missing ID, unequal descriptor/order, incomplete inventory/analysis or a still
+oversized projection does not qualify: the existing conservative partial-output
+path remains. Completeness is preserved only when the actual structured/text
+encoding, escaping, omission metadata and framing reserve fit the effective cap.
+
 When output fitting withholds full drafts, `draft_summaries[]` retains each draft's
 ID, source snapshot, group kind/destination path, complete `item_ids`, `overlap_ids`,
 non-additive `size_interpretation` where present, uncapped `consequence_summary`,
@@ -1300,7 +1333,7 @@ the omitted decision records need not resolve locally. Display inventory is trim
 before these summaries or decision groups; root/snapshot/coverage/omissions survive.
 Only the final tier may omit summaries, with exact summary/reference counts.
 
-Empty/singleton/recovered or unsupported-layout files return inventory and an explicit no-draft reason. A work, discovery, membership, freshness or mandatory evidence/output limit gives incomplete advice and withholds **all complete drafts**. Counts distinguish observed inventory/descriptors/candidates from returned items; `counts.omissions` records suppressed arrays and membership/decision links. Dropping only source/context display text preserves complete drafts when full coordinates and required evidence links fit. `span.text:null` is not a shortened `expected_text`: obtain the complete current original bytes before execution. Integrity is input-only (`input_checked`, `input_recovered` or `not_checked`), always `semantic:"not_performed"`.
+Empty/singleton/recovered or unsupported-layout files return inventory and an explicit no-draft reason. A work, discovery, membership, freshness or mandatory evidence/output limit gives incomplete advice and withholds **all complete drafts**. Counts distinguish observed inventory/descriptors/candidates from returned items; `counts.omissions` records suppressed arrays and membership/decision links. Dropping source/context display text or sharing the proven duplicate declaration displays described above preserves complete drafts when full coordinates and required evidence links fit. `span.text:null` is not a shortened `expected_text`: obtain the complete current original bytes before execution. Integrity is input-only (`input_checked`, `input_recovered` or `not_checked`), always `semantic:"not_performed"`.
 
 ### Retained advice and compact manifests
 

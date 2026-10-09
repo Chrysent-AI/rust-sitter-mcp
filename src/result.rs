@@ -163,13 +163,13 @@ pub struct ByteRange {
     pub start_byte: usize,
     pub end_byte: usize,
 }
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct Position {
     pub line: usize,
     pub byte_column: usize,
 }
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SourceSlice {
     pub range: ByteRange,

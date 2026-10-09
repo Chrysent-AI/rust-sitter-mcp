@@ -84,6 +84,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Keep large full advice complete at the default response cap by sharing only
+  proven identical `item_size`/`name_prefix` declaration displays through existing
+  ordered inventory IDs under budget pressure. Count duplicate display omissions
+  as `duplicate_declaration_display_spans`; direct-array clients must dereference
+  inventory spans. Preserve unique occurrences, candidates, companions,
+  consequence summaries, drafts and canonical retained evidence; genuine overflow
+  remains partial.
 * Reserve retained-advice record and byte capacity before materializing a retained
   copy; refund failed or dropped candidates and preserve charges for in-flight readers.
 * Distinguish positive `#[cfg(test)]` root markers from other cfg mentions of
