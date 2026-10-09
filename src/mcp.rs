@@ -38,6 +38,15 @@ impl Drop for CancelOnDrop {
         self.0.store(true, Ordering::Relaxed);
     }
 }
+fn busy_error() -> DomainError {
+    DomainError::new(
+        "BUSY",
+        concat!(
+            "the analysis slot is occupied; this rejected call started no analysis and was not queued; ",
+            "wait for the active call to finish or cancellation to settle, then retry serially"
+        ),
+    )
+}
 fn wire(result: SearchEnvelope) -> CallToolResult {
     let failed = result.error.is_some();
     let value = serde_json::to_value(result).expect("serializable envelope");
@@ -79,13 +88,7 @@ impl Server {
             wire(result)
         };
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
-            return failure(
-                request.limits,
-                DomainError::new(
-                    "BUSY",
-                    "another engine call is running; retry after it finishes",
-                ),
-            );
+            return failure(request.limits, busy_error());
         };
         let flag = Arc::new(AtomicBool::new(false));
         let _guard = CancelOnDrop(flag.clone());
@@ -124,13 +127,7 @@ impl Server {
     ) -> CallToolResult {
         let failure = |limits, error| plan_wire(PlanEnvelope::failed(limits, error));
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
-            return failure(
-                request.limits,
-                DomainError::new(
-                    "BUSY",
-                    "another engine call is running; retry after it finishes",
-                ),
-            );
+            return failure(request.limits, busy_error());
         };
         let flag = Arc::new(AtomicBool::new(false));
         let _guard = CancelOnDrop(flag.clone());
@@ -169,13 +166,7 @@ impl Server {
     ) -> CallToolResult {
         let failure = |limits, error| move_wire(MoveEnvelope::failed(limits, error));
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
-            return failure(
-                request.limits.into(),
-                DomainError::new(
-                    "BUSY",
-                    "another engine call is running; retry after it finishes",
-                ),
-            );
+            return failure(request.limits.into(), busy_error());
         };
         let flag = Arc::new(AtomicBool::new(false));
         let _guard = CancelOnDrop(flag.clone());
@@ -213,13 +204,7 @@ impl Server {
             suggest_wire(SuggestSplitEnvelope::failed(limits.into(), error))
         };
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
-            return failure(
-                request.limits,
-                DomainError::new(
-                    "BUSY",
-                    "another engine call is running; retry after it finishes",
-                ),
-            );
+            return failure(request.limits, busy_error());
         };
         let flag = Arc::new(AtomicBool::new(false));
         let _guard = CancelOnDrop(flag.clone());

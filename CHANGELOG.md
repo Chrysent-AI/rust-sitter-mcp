@@ -38,6 +38,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Explain every `BUSY` rejection: the analysis slot is occupied, the rejected call
+  starts no analysis and is not queued; wait for active work or cancellation to
+  settle, then retry serially, without a retry deadline or another request's identity.
 * Collapse oversized pure interior removal-boundary blank-line runs by default in
   multi-item `move_item` batches through anchored, audited rewrites; keep BOF/EOF
   gaps unchanged by default, preserve explicit `retain` replay, byte-identical

@@ -748,7 +748,10 @@ Ordinary children of the root or an existing `mod.rs` reside in that file's dire
 - **Cargo autotest discovery:** creating a sibling directly under `tests/*.rs` can create a new integration-test crate under Cargo's default discovery rules. Ordinary module validity cannot see this build-graph change; review the target layout and Cargo test discovery externally before applying a patch.
 - **Macro-invocation-as-item files:** when most of a file consists of macro invocations generating implementations, the inventory exposes those invocations, not their expanded items. This archetype is unsplittable by written-item moves; unlike ordinary inherent impl members, generated members are not selectable; use advice rather than treating generated methods/items as selectable written units.
 
-Serialize MCP probes: a parallel call returns `BUSY`; wait for the active call to finish before retrying, rather than treating the busy result as an applicability measurement.
+Serialize MCP probes: a parallel call returns `BUSY` because the analysis slot is
+occupied. The rejected call starts no analysis and is not queued. Wait for the
+active call to finish or cancellation to settle, then retry serially; no retry
+deadline is promised. A busy result is not an applicability measurement.
 
 ### Diagnosing an unproved module chain
 
@@ -1350,7 +1353,7 @@ Eligibility precedence: oversized → binary (NUL in first 8,192 bytes) → non-
 | `limits.diagnostic_count` | 64 | 256; 100,000 for `move_item` and `suggest_split` detail (minimum 0) |
 | `limits.text_bytes` | 8 KiB | 64 KiB (minimum 0) |
 
-Other bounds are positive. Partial option objects use defaults for omitted settings; unknown fields are rejected. Raw query size is at most 64 KiB, 64 patterns/64 capture names. Sugar size is at most 64 KiB, 4,096 significant IR nodes and 64 metavariable occurrences. Decoded arguments are at most 8 MiB. Per-file query execution permits at most 100,000 candidate matches and 128 MiB of capture/range descriptors. Unfinished file matches are discarded. One engine call is admitted at a time (`BUSY` instead of unbounded queueing); blocking work uses at most four worker-local parsers/cursors. Cancellation/deadlines are cooperative; OS/Git I/O can outlast them.
+Other bounds are positive. Partial option objects use defaults for omitted settings; unknown fields are rejected. Raw query size is at most 64 KiB, 64 patterns/64 capture names. Sugar size is at most 64 KiB, 4,096 significant IR nodes and 64 metavariable occurrences. Decoded arguments are at most 8 MiB. Per-file query execution permits at most 100,000 candidate matches and 128 MiB of capture/range descriptors. Unfinished file matches are discarded. One engine call is admitted at a time; blocking work uses at most four worker-local parsers/cursors. `BUSY` means the analysis slot is occupied: the rejected call starts no analysis and is not queued. Wait for the active call to finish or cancellation to settle, then retry serially. The rejection discloses no other request's identity and promises no retry deadline. Cancellation/deadlines are cooperative; OS/Git I/O can outlast them, and the active worker retains the admission permit until its work settles.
 
 Structured results also include a JSON text fallback. Wire accounting includes both representations, JSON escaping and a framing reserve. The schema-version-1 envelope carries `tool`, canonical `root` (null if unresolved), `snapshot_id`, `status`, `coverage`, `counts`, effective `limits`, `truncation_reasons`, fixed-key `skipped`, bounded `diagnostics` and omissions, typed `error`, `matches`, `next_cursor` and `has_more`. Invalid/domain calls set MCP `isError:true` and return a failed envelope; successful empty results are not errors. Input deserialization failures use `INVALID_PARAMS`, not an opaque router response. When a string is supplied where an object is expected, or the literal string `"null"` causes a type error, the message adds a client-stringification hint: omit optional object parameters instead of passing null. Values are still rejected, never parsed again or coerced; required object parameters must be actual JSON objects.
 

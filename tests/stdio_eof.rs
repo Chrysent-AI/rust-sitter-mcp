@@ -171,11 +171,59 @@ fn eof_flow(tool: &str) {
                 .unwrap()
                 .success()
         );
-        writeln!(input, "{}", json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"replace","arguments":{"repo_path":fixture.0,"pattern":"foo()","replacement":"foo()"}}})).unwrap();
-        input.flush().unwrap();
-        let busy = rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        assert_eq!(busy["id"], 3);
-        assert_eq!(busy["result"]["structuredContent"]["error"]["code"], "BUSY");
+        let competing_calls = [
+            ("search", json!({"repo_path":fixture.0,"pattern":"foo()"})),
+            (
+                "search_query",
+                json!({"repo_path":fixture.0,"query":"(call_expression) @match"}),
+            ),
+            (
+                "replace",
+                json!({"repo_path":fixture.0,"pattern":"foo()","replacement":"foo()"}),
+            ),
+            (
+                "move_item",
+                json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","moves":[]}),
+            ),
+            (
+                "suggest_split",
+                json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs"}),
+            ),
+        ];
+        for (index, (busy_tool, arguments)) in competing_calls.into_iter().enumerate() {
+            let id = index + 3;
+            writeln!(input, "{}", json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":busy_tool,"arguments":arguments}})).unwrap();
+            input.flush().unwrap();
+            let busy = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(busy["id"], id);
+            assert_eq!(busy["result"]["isError"], true);
+            let result = &busy["result"]["structuredContent"];
+            assert_eq!(result["tool"], busy_tool);
+            assert_eq!(result["status"], "failed");
+            assert_eq!(
+                result["error"],
+                json!({
+                    "code":"BUSY",
+                    "message":concat!(
+                        "the analysis slot is occupied; this rejected call started no analysis and was not queued; ",
+                        "wait for the active call to finish or cancellation to settle, then retry serially"
+                    )
+                })
+            );
+            assert!(result["root"].is_null() && result["snapshot_id"].is_null());
+            if busy_tool == "replace" || busy_tool == "move_item" {
+                let plan = &result["plan"];
+                assert_eq!(plan["applicable"], false);
+                assert!(plan["edits"].is_null() && plan["patch"].is_null());
+                if busy_tool == "move_item" {
+                    assert!(plan["created_files"].is_null());
+                }
+            } else if busy_tool == "suggest_split" {
+                assert!(result["drafts"].as_array().unwrap().is_empty());
+            } else {
+                assert!(result["matches"].as_array().unwrap().is_empty());
+            }
+        }
         assert!(
             Command::new("kill")
                 .args(["-CONT", &git_pid.to_string()])
@@ -213,6 +261,7 @@ fn eof_flow(tool: &str) {
         "EOF did not cancel active engine work: {log}"
     );
     for response in responses {
+        assert_eq!(response["id"], 2, "rejected calls must not run later");
         if response["id"] == 2 {
             if tool == "suggest_split" {
                 let advice = &response["result"]["structuredContent"];

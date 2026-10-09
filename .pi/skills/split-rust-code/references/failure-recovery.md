@@ -36,7 +36,7 @@ Decision groups may encode `decision_ids` as `{first_id, count}` runs rather tha
 | `ATTRIBUTE_ATTACHMENT_CHANGED` / `OVERLAPPING_EDITS` | Unsafe attribute attachment or conflicting intervals | Remove the unsafe choice; revise the batch. |
 | `INVALID_REWRITE_OVERRIDE` / `STALE_REWRITE_OVERRIDE` | Unsupported/duplicate override or changed contributor anchor | Rerun the same batch without stale choices; copy fresh full published targets verbatim. |
 | `INVALID_MOVE_TRIVIA_OVERRIDE` / `UNSUPPORTED_TRIVIA_DISPOSITION` | Stale/unrelated trivia anchor, unselected target, protected attachment | Use exact current ordinary-ambiguous anchors only; leave protected/owned trivia alone. |
-| `BUSY` | Another engine call is running | Serialize; retry after completion. |
+| `BUSY` | The analysis slot is occupied; the rejected call started no analysis and was not queued | Wait for the active call to finish or cancellation to settle, then retry serially. No retry deadline or other request's identity is disclosed. |
 | Cancellation | Work stopped | Only retry if still requested. |
 | Limit/partial states | Membership/evidence/scan/output not complete | Inspect truncation+omissions; raise supported limits or reduce optional text/context — never exclude needed chain/binding evidence to force applicability. |
 
