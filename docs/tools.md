@@ -1333,21 +1333,24 @@ there is no usable handle and `state:"unavailable"` names one reason:
 `cancelled_before_publication`. Otherwise complete analysis remains complete.
 Compact retention-off reports `state:"not_requested"`.
 
-Current **provisional measurement parameters** are one active record, 134,217,728
-aggregate accounted retained bytes and 900 seconds from publication. These are
-finite tunable parameters, **not frozen measured guarantees**; representative
-measurements and a human cap choice remain pending. Accounting conservatively
-includes owned container/string capacities, descriptor/node reserves, buffers,
-input manifests and identity metadata, separately from transient analysis/output
-and process peak RSS. Capacity is reserved before additional retained-record
-materialization using a conservative non-materializing bound; pending candidates
-occupy capacity and refund or transfer their charges on failure or publication.
+Retention defaults are **one active record, 134,217,728 aggregate accounted bytes
+(128 MiB), and a fixed non-sliding 900-second lifetime from publication**. They are
+not runtime request settings. The byte cap is a maximum budget, not an upfront
+allocation, repository-size limit, response-byte limit or total-process RSS ceiling.
+Accounting conservatively includes owned container/string capacities,
+descriptor/node reserves, buffers, input manifests and identity metadata,
+separately from transient analysis/output and process peak RSS. Capacity is
+reserved before additional retained-record materialization using a conservative
+non-materializing bound; pending preparations occupy the record slot and byte
+capacity, refunding or transferring their charges on failure or publication.
+The bound may refuse retention even when final stored charges alone would fit.
 This does not eliminate existing analysis/output buffers or bound total process memory.
-A test-only limit override and cap-neutral allocation probe support that measurement
-without adding MCP flags. Registry removal does not
-subtract bytes still owned by an in-flight reader. Expiry is monotonic and fixed,
-not extended by navigation; expired payloads are reclaimed lazily. No silent
-eviction, persistence, background refresh, jobs or restart-survival promise exists.
+Test-only injectable limits and a cap-neutral allocation probe remain available
+for lifecycle and measurement checks; they add no runtime knobs or MCP flags.
+Registry removal does not subtract records or bytes still owned by an in-flight
+reader. Expiry is monotonic and fixed, not extended by navigation; expired
+payloads are reclaimed lazily. Release is explicit. No silent eviction,
+persistence, background refresh, jobs or restart-survival promise exists.
 
 `scope_input_digest` binds the corpus snapshot, normalized scope and effective
 in-root `.gitignore` inputs consulted in discovery, including absence and exact

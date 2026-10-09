@@ -157,7 +157,7 @@ fn oversize_estimates_and_preparation_failures_refund_the_slot_before_retry() {
         Some("capacity")
     );
     assert_eq!(store.accounted_allocation(), (0, 0));
-    store.limits.ttl_seconds = PROVISIONAL_TTL_SECONDS;
+    store.limits.ttl_seconds = DEFAULT_TTL_SECONDS;
     retain(&store, &repo, &request, store.origin);
     assert_eq!(store.materializations.load(Ordering::Relaxed), 1);
 }

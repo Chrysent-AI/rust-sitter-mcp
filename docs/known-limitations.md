@@ -36,12 +36,14 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   than silently dropping evidence. Unavailable retention does not by itself make
   completed advice incomplete.
 - Retention is bounded, process-local and immutable: no silent eviction, persistence,
-  jobs, background refresh or restart survival. Current one-record/128-MiB/900-second
-  defaults are **provisional measurement parameters**, pending representative
-  workload measurements and human cap selection. Accounted owned allocations are
-  not peak process RSS; transient analysis/output are separate. Fixed monotonic
-  expiry does not slide on detail reads, and release/expiry retain accounting for
-  still-owned in-flight readers.
+  jobs, background refresh or restart survival. Defaults are one active record,
+  134,217,728 aggregate accounted bytes (128 MiB), and a fixed non-sliding
+  900-second lifetime from publication. Preparations and in-flight readers occupy
+  capacity; conservative reservation may refuse before final stored charges would
+  fit. The byte cap is not allocated upfront or a repository-size, response-byte
+  or process-RSS limit; transient analysis/output are separate. Release is explicit.
+  Fixed monotonic expiry does not slide on detail reads, and release/expiry retain
+  record/byte accounting for still-owned in-flight readers.
 - `get_split_detail` returns frozen original evidence with `historical:true` and
   `live_freshness:"not_checked"`, never live reanalysis. Full unit/header anchors
   are not current execution authority. Unknown/expired/mismatched identities,

@@ -325,7 +325,7 @@ impl Engine {
     ) -> crate::split::DetailEnvelope {
         self.retained_advice.detail(request, cancelled)
     }
-    /// Measurement-only integration seam; it does not alter MCP requests or freeze defaults.
+    /// Test-only integration seam; it does not expose runtime retention settings.
     #[cfg(test)]
     pub fn with_retention_limits(
         launch: PathBuf,

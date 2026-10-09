@@ -15,6 +15,13 @@ It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comm
 | `suggest_split` | Advisory file-splitting: complete item inventory, cohesion signals and explained partition drafts with consequence/test-coupling scope; opt-in compact manifests and immutable retention — you edit and execute via explicit `move_item` batches |
 | `get_split_detail` | Bounded repeatable historical pages and complete original unit/header anchors from explicitly retained advice, or release its process-local record; no live freshness check, reanalysis or move submission |
 
+Explicit advice retention defaults to one active record, 134,217,728 aggregate
+accounted bytes (128 MiB), and a fixed non-sliding 900-second lifetime from
+publication. Preparations and in-flight readers count against capacity;
+conservative reservation can refuse before final stored charges would fit.
+The cap is not allocated upfront or a repository-size, response-byte or process-RSS
+limit. Release is explicit, there is no silent eviction, and restart loses records.
+
 Every mutating tool returns a **plan** (`applicable` / `blocked` / `incomplete`), a **unified diff**, and a **JSON edit list** that reconstructs the same bytes. Ambiguous situations (comment ownership, import/visibility rewrites under shadowing or glob imports, parse recovery) are surfaced as explicit, overridable decisions — never guessed. See [`docs/tools.md`](docs/tools.md) for the complete contracts.
 
 This repository also ships a pi agent skill at [`.pi/skills/split-rust-code/`](.pi/skills/split-rust-code/SKILL.md) — pi users get a guided end-to-end workflow (advice triage, anchor construction, failure recovery) automatically.

@@ -17,10 +17,12 @@ use std::{
 mod accounting;
 use accounting::{evidence_allocation, preparation_allocation, retention_allocation};
 
-/// Provisional measurement parameters, not a frozen product guarantee.
-pub const PROVISIONAL_RECORDS: usize = 1;
-pub const PROVISIONAL_BYTES: usize = 128 * 1024 * 1024;
-pub const PROVISIONAL_TTL_SECONDS: u64 = 900;
+/// Active records, including preparations and in-flight readers.
+pub const DEFAULT_RECORDS: usize = 1;
+/// Aggregate accounted retained capacity, not upfront allocation or process RSS.
+pub const DEFAULT_AGGREGATE_BYTES: usize = 128 * 1024 * 1024;
+/// Fixed, non-sliding lifetime from publication.
+pub const DEFAULT_TTL_SECONDS: u64 = 900;
 #[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct RetentionLimits {
@@ -31,9 +33,9 @@ pub struct RetentionLimits {
 impl Default for RetentionLimits {
     fn default() -> Self {
         Self {
-            records: PROVISIONAL_RECORDS,
-            aggregate_bytes: PROVISIONAL_BYTES,
-            ttl_seconds: PROVISIONAL_TTL_SECONDS,
+            records: DEFAULT_RECORDS,
+            aggregate_bytes: DEFAULT_AGGREGATE_BYTES,
+            ttl_seconds: DEFAULT_TTL_SECONDS,
         }
     }
 }

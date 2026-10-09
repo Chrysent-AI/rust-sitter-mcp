@@ -78,6 +78,10 @@ fn real_stdio_retention_navigation_release_and_restart_are_historical_only() {
     assert_eq!(manifest["analysis_status"], "complete");
     assert_eq!(manifest["manifest_complete"], true);
     assert_eq!(manifest["retention"]["state"], "retained");
+    assert_eq!(
+        manifest["retention"]["limits"],
+        json!({"records": 1, "aggregate_bytes": 134_217_728, "ttl_seconds": 900})
+    );
     assert!(
         manifest["retention"]["accounted_bytes"].as_u64().unwrap() > initial_bytes.len() as u64
     );

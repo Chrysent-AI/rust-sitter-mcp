@@ -66,12 +66,14 @@ Repeat every option unchanged with `selector.page_token`. A `reason` filter must
 be an observed typed reason in that collection; unknown reasons refuse rather
 than returning a misleading empty result. `scope_input_digest` is distinct from
 `snapshot_id`: it also binds normalized scope and effective in-root ignore
-inputs, but detail performs no live source, mode or ignore freshness check. The
-provisional one-record / 128-MiB accounted allocation / 900-second lifetime
-parameters are not measured or final guarantees. Expiry is fixed from
-publication, navigation does not extend it, there is no silent eviction or disk
-persistence, restart loses records, and release removes only the process-local
-record.
+inputs, but detail performs no live source, mode or ignore freshness check.
+Retention defaults are one active record, 134,217,728 aggregate accounted bytes
+(128 MiB), and a fixed non-sliding 900-second lifetime from publication.
+Preparations and in-flight readers occupy capacity; conservative reservation may
+refuse before final stored charges would fit. The cap is not allocated upfront or
+a repository-size, response-byte or process-RSS limit. Navigation does not extend
+expiry, there is no silent eviction or disk persistence, restart loses records,
+and explicit release removes only the process-local record.
 
 `units` returns complete frozen original item and header anchors, but they are
 historical (`historical:true`, `live_freshness:"not_checked"`), not checked-current

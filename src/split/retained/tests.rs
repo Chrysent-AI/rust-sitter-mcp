@@ -101,6 +101,15 @@ fn error(result: DetailEnvelope, code: &str) {
 }
 
 #[test]
+fn default_limits_report_one_record_accounted_capacity_and_fixed_lifetime() {
+    assert_eq!(
+        serde_json::to_value(RetentionLimits::default()).unwrap(),
+        json!({"records": 1, "aggregate_bytes": 134_217_728, "ttl_seconds": 900})
+    );
+    assert_eq!(Store::default().accounted_allocation(), (0, 0));
+}
+
+#[test]
 fn every_page_union_is_uncapped_canonical_evidence_and_retries_are_identical() {
     let repo = Fixture::new(SOURCE);
     let store = Store::default();
