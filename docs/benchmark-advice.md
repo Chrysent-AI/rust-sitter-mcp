@@ -78,12 +78,49 @@ the server. Path lengths can change these sizes on another host. One draft
 is intentional: the primary cluster allocation and byte-balanced alternative
 have identical membership on this symmetric corpus, so the duplicate is not
 returned. The rich integration fixture independently verifies two distinct
-proposals and an externally edited two-sibling batch.
+proposals and an externally edited two-sibling batch. These are historical
+pre-v0.5.0 measurements, not evidence for the new omission default. Since v0.5.0,
+the unchanged workload omits `include_balanced` and receives only the structural
+draft; testing the rich fixture's balanced alternative explicitly sets
+`include_balanced:true`. The flag never promises two distinct drafts.
 
 Confidence is syntactic organization evidence, not a probability of correct
 Rust compilation. Input parsing is reported as `input_checked`; semantics
 remain `not_performed`. The server executes neither Cargo nor patch application.
 This benchmark measures **advice**, not the earlier single/batch move timings.
+
+## v0.5.0 omission-default verification, native macOS arm64, 2026-10-10
+
+Re-ran the exact release-only command above on the cutover source with Rust/Cargo
+1.98.1, macOS 26.6.2, Darwin arm64. The generated corpus, request, ten fresh
+processes, read-only observations, closure assertions, 2-MiB wire bound and
+≥9/10 runs within 5,000 ms are unchanged. `include_balanced` remains omitted,
+so this run exercises the v0.5.0 default-false behavior, not an opt-in alternative.
+
+| Run | Milliseconds |
+| --- | ---: |
+| 1 | 356 |
+| 2 | 292 |
+| 3 | 286 |
+| 4 | 283 |
+| 5 | 285 |
+| 6 | 336 |
+| 7 | 294 |
+| 8 | 276 |
+| 9 | 297 |
+| 10 | 298 |
+
+All ten calls completed with 100 eligible files, 400 inventoried functions,
+400 written reference candidates, 802 signals, one decision and one structural
+draft. Each returned 903,156 structured JSON bytes and 1,910,228 duplicated wire
+bytes including the 4,096-byte reserve, below 2,097,152 bytes. Accounted analysis
+descriptors were 4,057,826 bytes. Every run passed exact-once membership,
+signal/decision closure, identical fresh-process results and unchanged caller
+source/Git entries, bytes, modes and observable mtimes. **10/10** met the time
+gate. The binary reports `0.5.0`; no tool-count, move-proof or semantic boundary
+changed. This fixed workload does not establish complete advice for all real
+repositories, general move applicability, retained-memory performance or Linux
+timing. Historical figures above remain separate and are not relabeled as this run.
 
 ## Outstanding platform evidence
 

@@ -16,6 +16,14 @@ It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comm
 | `get_split_detail` | Bounded repeatable historical pages and complete original unit/header anchors from explicitly retained advice, or release its process-local record; no live freshness check, reanalysis or move submission |
 | `export_move_request` | One inactive ordinary exact-anchor move request from explicit retained unit/destination entries after observational source/scope/policy freshness checks; no implicit companions, submission or applicability claim |
 
+Since **v0.5.0**, `suggest_split` omitting `include_balanced` or setting it false
+excludes byte-balanced alternatives. Set `include_balanced:true` to request the
+existing distinct low-confidence original-order alternative when structural
+advice and layout are valid; there is no two-proposal promise or balanced primary
+for a no-credible result. Incomplete analysis and unsupported layout remain
+separate, and advice never relaxes move proofs. Inspect status, coverage and
+omissions: complete analysis, capped display and genuine partial advice differ.
+
 Explicit advice retention defaults to one active record, 134,217,728 aggregate
 accounted bytes (128 MiB), and a fixed non-sliding 900-second lifetime from
 publication. Preparations and in-flight readers count against capacity;

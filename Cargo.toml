@@ -1,6 +1,6 @@
 [package]
 name = "rust-sitter-mcp"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 license = "MIT"
 description = "Structural Rust search and refactoring proposals over MCP"

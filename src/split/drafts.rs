@@ -58,7 +58,7 @@ fn balanced(
 fn primary(
     result: &SuggestSplitEnvelope,
     controls: Controls<'_>,
-) -> Result<(Vec<Vec<usize>>, bool), DomainError> {
+) -> Result<Vec<Vec<usize>>, DomainError> {
     let index: BTreeMap<_, _> = result
         .inventory
         .iter()
@@ -100,7 +100,7 @@ fn primary(
         }
         groups.retain(|g| !g.is_empty());
     }
-    Ok((groups, false))
+    Ok(groups)
 }
 fn group_facts(
     members: &[usize],
@@ -637,9 +637,8 @@ pub(super) fn build(
             .push(result.partition_outcome.clone());
         return Ok(());
     }
-    let (a, fallback) = primary(result, controls)?;
-    let b = balanced(result, controls)?;
-    let Some(first) = make_draft(a.clone(), fallback, &layout, parent, result)? else {
+    let a = primary(result, controls)?;
+    let Some(first) = make_draft(a.clone(), false, &layout, parent, result)? else {
         result
             .draft_eligibility
             .reasons
@@ -647,10 +646,13 @@ pub(super) fn build(
         return Ok(());
     };
     result.drafts.push(first);
-    if a != b
-        && let Some(second) = make_draft(b, true, &layout, parent, result)?
-    {
-        result.drafts.push(second);
+    if request.include_balanced.unwrap_or(false) {
+        let b = balanced(result, controls)?;
+        if a != b
+            && let Some(second) = make_draft(b, true, &layout, parent, result)?
+        {
+            result.drafts.push(second);
+        }
     }
     result.counts.drafts = result.drafts.len();
     result.draft_eligibility.state = "drafted".into();

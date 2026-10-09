@@ -167,6 +167,8 @@ fn real_stdio_query() {
                 "submit chosen items as move_item anchors",
                 "no patch, edit, creation content, execution handle, stored plan",
                 "Banner adjacency never assigns ownership",
+                "include_balanced: optional boolean",
+                "since v0.5.0 omission/false excludes byte-balanced alternatives",
                 "semantic checking is not_performed",
             ],
             _ => unreachable!(),

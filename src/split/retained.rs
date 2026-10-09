@@ -277,6 +277,7 @@ impl Store {
         normalized["repo_path"] = json!(canonical.root);
         normalized["paths"] = evidence.normalized_scope["paths"].clone();
         normalized["globs"] = evidence.normalized_scope["globs"].clone();
+        normalized["include_balanced"] = json!(request.include_balanced.unwrap_or(false));
         normalized["diagnostic_count_explicit"] = json!(request.limits.diagnostic_count_explicit);
         #[cfg(test)]
         self.materializations.fetch_add(1, Ordering::Relaxed);

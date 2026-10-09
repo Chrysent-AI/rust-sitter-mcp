@@ -122,7 +122,17 @@ provides no atomic freshness guarantee.
 ## Reading structural ownership advice
 
 Name prefixes, banners, shared attributes and adjacency are displayed weak facts,
-not core-forming edges. In a complete full response fitted under budget pressure,
+not core-forming edges. Structural ownership advice is the default. Since v0.5.0,
+byte balancing is requested only with `include_balanced:true`, and only as the existing
+distinct low-confidence, original-order alternative when structural advice and
+layout are valid. Identical membership is deduplicated, so a second proposal is not
+guaranteed.
+
+The balanced alternative has no natural semantic boundary; group confidence is per
+group and advice-only, not architectural safety. Do not infer ownership from sizes
+or weak prefixes, or use balancing to replace a structural candidate:
+`no_credible_written_partition`, incomplete analysis and unsupported layout remain
+distinct outcomes. In a complete full response fitted under budget pressure,
 `item_size` and `name_prefix` signals may have `evidence:[]` with a nonzero
 `counts.omissions.duplicate_declaration_display_spans`; for those empty arrays only,
 resolve every existing `signal.item_ids` entry, in original order, to its

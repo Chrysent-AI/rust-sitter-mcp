@@ -78,7 +78,10 @@ Preparations and in-flight readers occupy capacity; conservative reservation may
 refuse before final stored charges would fit. The cap is not allocated upfront or
 a repository-size, response-byte or process-RSS limit. Navigation does not extend
 expiry, there is no silent eviction or disk persistence, restart loses records,
-and explicit release removes only the process-local record.
+and explicit release removes only the process-local record. Since v0.5.0, retained
+`normalized_request.include_balanced` records the effective value (false for
+omission/false, true only for explicit opt-in) alongside server-version provenance.
+Historical pages preserve those memberships and never regroup the record.
 
 `units` returns complete frozen original item and header anchors, but they are
 historical (`historical:true`, `live_freshness:"not_checked"`), not checked-current
@@ -257,6 +260,10 @@ move exclusions alone do not erase a supported association or its obligation.
 Candidate `candidate/N` and companion `companion/N` IDs are response-local only; execution still requires complete current anchors. Read the separate
 `boundary_observations.coverage`; zero observed consumers is not proof of no others,
 and uncertain routes cannot waive execution blockers or test acknowledgment rules.
+
+Since v0.5.0, omitted or false `include_balanced` intentionally excludes byte-balanced alternatives. Their absence is not withheld analysis and is not a reason to retry or raise limits. Explicit `true` requests the existing distinct low-confidence, original-order alternative only when structural advice and layout are valid. Identical memberships deduplicate, so no second draft is guaranteed; true cannot create an implicit primary or recover `no_credible_written_partition`, incomplete analysis, insufficient input or unsupported layout.
+
+Before v0.5.0, omission included the balanced alternative by default where structural advice existed; set `true` after upgrading to request it. Work/output-cap handling and genuine partial-result recovery remain governed by status, coverage and omission evidence above.
 
 **Complete duplicate-display fitting (full response).** When `status:"complete"` and
 `counts.omissions.duplicate_declaration_display_spans` is nonzero, that count means
