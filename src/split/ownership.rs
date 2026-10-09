@@ -673,9 +673,17 @@ fn candidate(
             record.stop_reasons.extend(stops.iter().cloned());
             record.stop_reasons.sort();
             record.stop_reasons.dedup();
+            // Association evidence determines the obligation independently of
+            // consumer attribution, traversal stops and move eligibility.
+            if signal.kind == "impl_owner_bundle"
+                && signal.facts.get("ambiguous_binding") != Some(&1)
+            {
+                record.review_obligation = "selection_completeness".into();
+            } else if supported(signal) && record.review_obligation != "selection_completeness" {
+                record.review_obligation = "boundary_dependency".into();
+            }
             // Implementation membership is disclosed as a choice, not inserted into core.
             if signal.kind == "impl_owner_bundle" {
-                record.review_obligation = "selection_completeness".into();
                 if !alternatives
                     .iter()
                     .any(|a: &OwnershipAlternative| a.item_ids == vec![item.id.clone()])
@@ -736,18 +744,6 @@ fn candidate(
             "observed_shared"
         } else {
             "observed_exclusive"
-        }
-        .into();
-        // A supported type/impl bundle needs an explicit completeness choice.
-        // Written references alone establish dependencies, not mandatory co-location.
-        record.review_obligation = if record.classification == "undetermined" {
-            "association_unproved"
-        } else if record.review_obligation == "selection_completeness"
-            && record.stop_reasons.is_empty()
-        {
-            "selection_completeness"
-        } else {
-            "boundary_dependency"
         }
         .into();
     }
