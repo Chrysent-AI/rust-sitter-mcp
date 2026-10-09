@@ -16,7 +16,7 @@ Signals NOT to split:
 - You'd need to widen visibility just to enable the split
 - The only motivation is a line-count target
 
-**No universal file-size threshold exists in Rust convention.** The 256-line group aim in the MCP's split advice is its own heuristic, not a Rust rule.
+**No universal file-size threshold exists in Rust convention.** The 256-line group aim in the MCP's split advice is its own heuristic, not a Rust rule. Advice sizes are original descriptor values/sums, not final module sizes. Whole impls overlap their member descriptors, including across groups: follow `enclosing_impl_id`, `overlap_ids` and `overlaps[].draft_groups`, and heed the `non_additive` size interpretation. Exact-once inventory-ID membership is not a disjoint source partition; choose a whole impl or its members, never both.
 
 ## Naming modules
 

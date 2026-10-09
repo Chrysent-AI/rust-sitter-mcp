@@ -40,6 +40,22 @@ use tree_sitter::{Node, Tree};
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct SizeInterpretation {
+    pub basis: &'static str,
+    pub additivity: &'static str,
+    pub generated_module_size: &'static str,
+}
+impl SizeInterpretation {
+    pub(crate) fn non_additive() -> Self {
+        Self {
+            basis: "original_descriptor_ranges",
+            additivity: "non_additive",
+            generated_module_size: "not_estimated",
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct Item {
     pub id: String,
     pub path: String,
@@ -60,6 +76,12 @@ pub struct Item {
     pub signal_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enclosing_impl: Option<associated::ImplIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing_impl_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overlap_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_interpretation: Option<SizeInterpretation>,
 }
 pub struct ParsedFile {
     pub tree: Tree,
@@ -179,6 +201,9 @@ pub fn parse(
                 .collect(),
             signal_ids: Vec::new(),
             enclosing_impl: None,
+            enclosing_impl_id: None,
+            overlap_ids: Vec::new(),
+            size_interpretation: None,
         });
     }
     Ok(ParsedFile {

@@ -29,6 +29,10 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Advice-tier boundaries
 
+- Inventory includes overlapping whole impl and member descriptors, with explicit
+  containment and cross-group links. Non-additive size labels preserve original
+  descriptor byte/line values and sums; no unique-byte or generated-module-size
+  metric is provided. Exact-once IDs do not establish a disjoint source partition.
 - Associated-item inventory covers **root-level impls only**; impl members inside nested
   inline modules appear as opaque `mod_item`s (follow-up tracked in the ticket store).
 - Drafts exclude context-sensitive members from top-level-only batches; selecting them

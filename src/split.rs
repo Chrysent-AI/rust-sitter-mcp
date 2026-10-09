@@ -5,7 +5,7 @@ mod signals;
 mod tests;
 
 use crate::{
-    items::{self, DecisionReason, Item, ParsedFile},
+    items::{self, DecisionReason, Item, ParsedFile, SizeInterpretation},
     matching::Lines,
     move_plan::{
         Confidence, DecisionAction, DecisionGroup, DecisionIdRun, decision_groups, id_runs,
@@ -139,6 +139,24 @@ pub struct ItemContext {
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct InventoryOverlap {
+    pub id: String,
+    pub relation: &'static str,
+    /// Enclosing impl first, contained member second; ranges follow the same order.
+    pub item_ids: [String; 2],
+    pub path: String,
+    pub ranges: [ByteRange; 2],
+    pub draft_groups: Vec<OverlapDraftGroups>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct OverlapDraftGroups {
+    pub draft_id: String,
+    pub impl_group_index: usize,
+    pub member_group_index: usize,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct ScopeTrivia {
     pub id: String,
     pub span: SourceSlice,
@@ -252,6 +270,9 @@ pub struct Group {
     pub rationale: String,
     pub confidence: Confidence,
     pub sizes: Sizes,
+    pub overlap_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_interpretation: Option<SizeInterpretation>,
     pub signal_ids: Vec<String>,
     pub facts: BTreeMap<String, usize>,
     pub expected_to_block: ExpectedBlocks,
@@ -284,6 +305,9 @@ pub struct GroupMembership {
     pub kind: String,
     pub destination_path: Option<String>,
     pub item_ids: Vec<String>,
+    pub overlap_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_interpretation: Option<SizeInterpretation>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -342,6 +366,7 @@ pub struct SuggestSplitEnvelope {
     pub source: Option<SourceDescription>,
     pub scope_trivia: Vec<ScopeTrivia>,
     pub inventory: Vec<Item>,
+    pub overlaps: Vec<InventoryOverlap>,
     pub item_contexts: Vec<ItemContext>,
     pub impl_contexts: Vec<ImplContext>,
     pub signals: Vec<Signal>,
@@ -382,6 +407,7 @@ impl SuggestSplitEnvelope {
             source: None,
             scope_trivia: Vec::new(),
             inventory: Vec::new(),
+            overlaps: Vec::new(),
             item_contexts: Vec::new(),
             impl_contexts: Vec::new(),
             signals: Vec::new(),
@@ -401,6 +427,42 @@ impl SuggestSplitEnvelope {
                 semantic: "not_performed".into(),
             },
         }
+    }
+    fn link_overlaps(&mut self, controls: Controls<'_>) -> Result<(), DomainError> {
+        let index: BTreeMap<_, _> = self
+            .inventory
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (item.id.clone(), i))
+            .collect();
+        for member in 0..self.inventory.len() {
+            controls.check()?;
+            let Some(parent) = self.inventory[member]
+                .enclosing_impl_id
+                .as_ref()
+                .and_then(|id| index.get(id))
+                .copied()
+            else {
+                continue;
+            };
+            let implementation = &self.inventory[parent];
+            let unit = &self.inventory[member];
+            let overlap = InventoryOverlap {
+                id: format!("overlap/{}", self.overlaps.len()),
+                relation: "member_contained_in_impl",
+                item_ids: [implementation.id.clone(), unit.id.clone()],
+                path: unit.path.clone(),
+                ranges: [implementation.span.range.clone(), unit.span.range.clone()],
+                draft_groups: Vec::new(),
+            };
+            self.account(descriptor_bytes(&overlap)?)?;
+            for i in [parent, member] {
+                self.inventory[i].overlap_ids.push(overlap.id.clone());
+                self.inventory[i].size_interpretation = Some(SizeInterpretation::non_additive());
+            }
+            self.overlaps.push(overlap);
+        }
+        Ok(())
     }
     pub fn failed(limits: Limits, error: DomainError) -> Self {
         let mut result = Self::empty(limits);
@@ -613,6 +675,8 @@ impl SuggestSplitEnvelope {
                             kind: group.kind.clone(),
                             destination_path: group.destination.as_ref().map(|d| d.path.clone()),
                             item_ids: group.item_ids.clone(),
+                            overlap_ids: group.overlap_ids.clone(),
+                            size_interpretation: group.size_interpretation.clone(),
                         })
                         .collect(),
                     unresolved_decision_ids: draft.unresolved_decision_ids.clone(),
@@ -631,6 +695,12 @@ impl SuggestSplitEnvelope {
                 .sum(),
         );
         self.chain_diagnostics.clear();
+        self.omit("overlaps", self.overlaps.len());
+        self.omit(
+            "overlap_draft_group_links",
+            self.overlaps.iter().map(|o| o.draft_groups.len()).sum(),
+        );
+        self.overlaps.clear();
         self.omit("scope_trivia", self.scope_trivia.len());
         self.omit("impl_contexts", self.impl_contexts.len());
         self.impl_contexts.clear();
@@ -1029,6 +1099,7 @@ fn build(
         .cloned()
         .collect();
     result.draft_eligibility.membership_complete = result.inventory.len() == advice_units.len();
+    result.link_overlaps(controls)?;
     let lines = Lines::new(&source.source);
     let physical_lines = source.source.bytes().filter(|b| *b == b'\n').count()
         + usize::from(!source.source.is_empty() && !source.source.ends_with('\n'));
