@@ -12,7 +12,8 @@ It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comm
 | `search_query` | Raw [tree-sitter queries](https://tree-sitter.github.io/tree-sitter/using-parsers/queries) for anything the sugar grammar doesn't cover |
 | `replace` | Structural search-and-replace → dry-run plan: exact template substitution, all-or-nothing patches, trivia decisions surfaced with overrides |
 | `move_item` | Lift & shift: move whole top-level items to existing files or new sibling modules (2018 layout, `mod x;` synthesis/reuse, file-creation patches). Opt-in discharge flags: `assume_standard_prelude` (std prelude names + built-in derives, both-ends shadow refusal) and `resolve_semantic` (rust-analyzer `ra_resolved` proofs over an explicit crate graph; no Cargo discovery or caller-code execution) |
-| `suggest_split` | Advisory file-splitting: complete item inventory, cohesion signals, 1–2 explained partition drafts with per-group expected-block counts, test-coupling flags, and assessment scope — you edit and execute via explicit `move_item` batches |
+| `suggest_split` | Advisory file-splitting: complete item inventory, cohesion signals and explained partition drafts with consequence/test-coupling scope; opt-in compact manifests and immutable retention — you edit and execute via explicit `move_item` batches |
+| `get_split_detail` | Bounded repeatable historical pages and complete original unit/header anchors from explicitly retained advice, or release its process-local record; no live freshness check, reanalysis or move submission |
 
 Every mutating tool returns a **plan** (`applicable` / `blocked` / `incomplete`), a **unified diff**, and a **JSON edit list** that reconstructs the same bytes. Ambiguous situations (comment ownership, import/visibility rewrites under shadowing or glob imports, parse recovery) are surfaced as explicit, overridable decisions — never guessed. See [`docs/tools.md`](docs/tools.md) for the complete contracts.
 

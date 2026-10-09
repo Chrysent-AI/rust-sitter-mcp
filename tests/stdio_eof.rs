@@ -141,7 +141,7 @@ fn eof_flow(tool: &str) {
     )
     .unwrap();
     let args = if tool == "suggest_split" {
-        json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs","limits":{"time_budget_ms":300000}})
+        json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs","retain_snapshot":true,"limits":{"time_budget_ms":300000}})
     } else if tool == "move_item" {
         json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","moves":[],"limits":{"time_budget_ms":300000}})
     } else {
@@ -189,6 +189,14 @@ fn eof_flow(tool: &str) {
                 "suggest_split",
                 json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs"}),
             ),
+            (
+                "get_split_detail",
+                json!({"analysis_handle":"unknown","snapshot_id":"sha1:unknown","selector":{"kind":"page","collection":"inventory"}}),
+            ),
+            (
+                "get_split_detail",
+                json!({"analysis_handle":"unknown","snapshot_id":"sha1:unknown","selector":{"kind":"release"}}),
+            ),
         ];
         for (index, (busy_tool, arguments)) in competing_calls.into_iter().enumerate() {
             let id = index + 3;
@@ -199,7 +207,13 @@ fn eof_flow(tool: &str) {
             assert_eq!(busy["result"]["isError"], true);
             let result = &busy["result"]["structuredContent"];
             assert_eq!(result["tool"], busy_tool);
-            assert_eq!(result["status"], "failed");
+            if busy_tool == "get_split_detail" {
+                assert_eq!(result["returned_page_complete"], false);
+                assert_eq!(result["historical"], true);
+                assert_eq!(result["live_freshness"], "not_checked");
+            } else {
+                assert_eq!(result["status"], "failed");
+            }
             assert_eq!(
                 result["error"],
                 json!({
@@ -220,6 +234,9 @@ fn eof_flow(tool: &str) {
                 }
             } else if busy_tool == "suggest_split" {
                 assert!(result["drafts"].as_array().unwrap().is_empty());
+            } else if busy_tool == "get_split_detail" {
+                assert!(result["records"].as_array().unwrap().is_empty());
+                assert!(result["released"].is_null());
             } else {
                 assert!(result["matches"].as_array().unwrap().is_empty());
             }
@@ -268,6 +285,7 @@ fn eof_flow(tool: &str) {
                 assert_eq!(advice["integrity"]["semantic"], "not_performed");
                 assert!(advice["drafts"].as_array().unwrap().is_empty());
                 assert!(advice.get("plan").is_none() && advice.get("patch").is_none());
+                assert!(advice["retention"]["analysis_handle"].is_null());
             }
             if tool == "move_item" {
                 let plan = &response["result"]["structuredContent"]["plan"];

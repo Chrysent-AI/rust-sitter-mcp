@@ -893,8 +893,9 @@ fn cancelled_invalid_and_strict_stdio_failures_are_typed() {
     let cancelled = Engine::new(repo.0.clone())
         .unwrap()
         .suggest_split(request, &AtomicBool::new(true));
-    assert_eq!(cancelled.error.unwrap().code, "CANCELLED");
-    assert!(cancelled.drafts.is_empty());
+    let cancelled = serde_json::to_value(cancelled).unwrap();
+    assert_eq!(cancelled["error"]["code"], "CANCELLED");
+    assert!(cancelled["drafts"].as_array().unwrap().is_empty());
     let mut client = Client::new();
     for change in [
         json!({"apply":true}),

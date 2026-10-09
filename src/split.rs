@@ -7,6 +7,8 @@ pub use consequences::{
     ConsequenceMembership, ConsequenceSummary, UnmappedConsequences,
 };
 mod ownership;
+pub mod retained;
+pub use retained::{DetailEnvelope, DetailRequest, SplitResponse};
 mod signals;
 mod test_observations;
 pub use boundary::{BoundaryCoverage, BoundaryObservation, BoundaryObservations};
@@ -50,6 +52,10 @@ pub struct SuggestSplitRequest {
     pub source_path: String,
     pub paths: Option<Vec<String>>,
     pub globs: Option<Vec<String>>,
+    #[serde(default)]
+    pub retain_snapshot: bool,
+    #[serde(default)]
+    pub response_mode: retained::ResponseMode,
     #[serde(default)]
     pub context: Context,
     #[serde(default)]
@@ -403,6 +409,8 @@ pub struct SuggestSplitEnvelope {
     /// Non-executable membership summaries when output fitting withholds full drafts.
     pub draft_summaries: Vec<DraftMembership>,
     pub draft_eligibility: DraftEligibility,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention: Option<retained::Retention>,
     pub integrity: Integrity,
 }
 impl SuggestSplitEnvelope {
@@ -453,6 +461,7 @@ impl SuggestSplitEnvelope {
                 membership_complete: false,
                 evidence_complete: false,
             },
+            retention: None,
             integrity: Integrity {
                 grammar: "tree-sitter-rust@0.24.2".into(),
                 syntax: "not_checked".into(),
@@ -954,19 +963,49 @@ fn module_description(
     }
 }
 
-pub fn run(
+pub fn run_retained(
+    launch: &Path,
+    request: SuggestSplitRequest,
+    cancelled: &AtomicBool,
+    store: &retained::Store,
+) -> SplitResponse {
+    let controls = Controls {
+        deadline: Instant::now()
+            + Duration::from_millis(request.limits.time_budget_ms.min(300_000)),
+        cancelled,
+    };
+    let (result, evidence) = analyze_with_recheck(launch, &request, cancelled, || {});
+    retained::present(result, evidence, &request, store, controls)
+}
+#[cfg(test)]
+fn run(
     launch: &Path,
     request: SuggestSplitRequest,
     cancelled: &AtomicBool,
 ) -> SuggestSplitEnvelope {
     run_with_recheck(launch, request, cancelled, || {})
 }
+#[cfg(test)]
 fn run_with_recheck(
     launch: &Path,
     request: SuggestSplitRequest,
     cancelled: &AtomicBool,
     before_recheck: impl FnOnce(),
 ) -> SuggestSplitEnvelope {
+    let (mut result, _) = analyze_with_recheck(launch, &request, cancelled, before_recheck);
+    result.shape_decisions(&request.limits);
+    let _ = result.fit(Controls {
+        deadline: Instant::now() + Duration::from_secs(5),
+        cancelled: &AtomicBool::new(false),
+    });
+    result
+}
+fn analyze_with_recheck(
+    launch: &Path,
+    request: &SuggestSplitRequest,
+    cancelled: &AtomicBool,
+    before_recheck: impl FnOnce(),
+) -> (SuggestSplitEnvelope, Option<retained::Evidence>) {
     let started = Instant::now();
     let controls = Controls {
         deadline: started + Duration::from_millis(request.limits.time_budget_ms.min(300_000)),
@@ -974,13 +1013,17 @@ fn run_with_recheck(
     };
     let mut result = SuggestSplitEnvelope::empty(request.limits.clone().into());
     result.effective_work_limits.max_items = request.max_items;
-    let outcome = build(launch, &request, controls, before_recheck, &mut result)
-        .and_then(|()| drafts::finalize(&mut result, controls))
-        .and_then(|()| {
-            result.shape_decisions(&request.limits);
-            result.fit(controls)
-        })
-        .and_then(|()| controls.check());
+    let mut evidence = None;
+    let outcome = build(
+        launch,
+        request,
+        controls,
+        before_recheck,
+        &mut result,
+        &mut evidence,
+    )
+    .and_then(|()| drafts::finalize(&mut result, controls))
+    .and_then(|()| controls.check());
     if let Err(error) = outcome {
         // A stopped collector may still have provisional IDs. Never publish partial linked
         // evidence as finalized; keep its observed counts and explicit omission accounting.
@@ -1070,7 +1113,7 @@ fn run_with_recheck(
     }
     result.counts.returned_items = result.inventory.len();
     tracing::info!(tool="suggest_split", elapsed_ms=started.elapsed().as_millis(), status=%result.status, items=result.counts.inventory_items, candidates=result.counts.reference_candidates, drafts=result.drafts.len(), error=?result.error.as_ref().map(|e| &e.code), "split advice finished");
-    result
+    (result, evidence)
 }
 fn build(
     launch: &Path,
@@ -1078,6 +1121,7 @@ fn build(
     controls: Controls<'_>,
     before_recheck: impl FnOnce(),
     result: &mut SuggestSplitEnvelope,
+    evidence: &mut Option<retained::Evidence>,
 ) -> Result<(), DomainError> {
     let mut scan_limits: Limits = request.limits.clone().into();
     // The scan's generic diagnostic limit remains bounded independently of advice detail.
@@ -1127,8 +1171,23 @@ fn build(
     };
     let scope = Scope::new(root, &scan_request)?;
     let mut scan = SearchEnvelope::empty(scan_request.limits.clone());
-    let (files, snapshot) =
-        scope::discover(&scope, &mut scan, controls.deadline, controls.cancelled)?;
+    let mut inputs = scope::ScopeInputManifest::default();
+    let (files, snapshot) = scope::discover_observed(
+        &scope,
+        &mut scan,
+        controls.deadline,
+        controls.cancelled,
+        request.retain_snapshot.then_some(&mut inputs),
+    )?;
+    let input_digest = if request.retain_snapshot {
+        snapshot
+            .as_ref()
+            .map(|s| inputs.digest(&scope, s, (controls.deadline, controls.cancelled)))
+            .transpose()?
+    } else {
+        None
+    };
+    result.account(inputs.accounted_allocation())?;
     result.coverage = scan.coverage;
     result.skipped = scan.skipped;
     result.truncation_reasons = scan.truncation_reasons;
@@ -1198,9 +1257,15 @@ fn build(
     .into();
     result.counts.inventory_items = advice_units.len();
     result.counts.eligible_items = advice_units.iter().filter(|i| draftable(i)).count();
+    let canonical_requested =
+        request.retain_snapshot || request.response_mode == retained::ResponseMode::Compact;
     result.inventory = advice_units
         .iter()
-        .take(request.max_items)
+        .take(if canonical_requested {
+            usize::MAX
+        } else {
+            request.max_items
+        })
         .cloned()
         .collect();
     result.draft_eligibility.membership_complete = result.inventory.len() == advice_units.len();
@@ -1388,12 +1453,23 @@ fn build(
     controls.check()?;
     before_recheck();
     let mut final_scan = SearchEnvelope::empty(scan_request.limits.clone());
-    let (_, latest) = scope::discover(
+    let mut final_inputs = scope::ScopeInputManifest::default();
+    let (_, latest) = scope::discover_observed(
         &scope,
         &mut final_scan,
         controls.deadline,
         controls.cancelled,
+        request.retain_snapshot.then_some(&mut final_inputs),
     )?;
+    if let (Some(expected), Some(latest)) = (&input_digest, &latest)
+        && final_inputs.digest(&scope, latest, (controls.deadline, controls.cancelled))?
+            != *expected
+    {
+        return Err(DomainError::new(
+            "SOURCE_CHANGED",
+            "effective ignore inputs changed during analysis; obtain fresh advice",
+        ));
+    }
     if !final_scan.coverage.scope_exhaustive || latest != snapshot {
         return Err(DomainError::new(
             "SOURCE_CHANGED",
@@ -1432,5 +1508,33 @@ fn build(
         &result.test_observations,
         &result.source,
     ))?)?;
+    if let Some(scope_input_digest) = input_digest {
+        let canonical = serde_json::to_value(&*result).expect("canonical evidence JSON");
+        let mut wanted = BTreeSet::from([request.source_path.clone(), request.crate_root.clone()]);
+        retained::referenced_paths(&canonical, &mut wanted);
+        let mut manifest_files = Vec::with_capacity(files.len());
+        for file in files.values() {
+            controls.check()?;
+            let content_digest = scope::hash_serialized(
+                &scope.root,
+                &file.source,
+                (controls.deadline, controls.cancelled),
+            )?;
+            manifest_files.push(serde_json::json!({"path":file.path,"mode":file.mode,"bytes":file.source.len(),"content_digest":content_digest}));
+        }
+        let source_manifest = serde_json::json!({"snapshot_id":snapshot,"files":manifest_files});
+        let buffers = files
+            .into_iter()
+            .filter(|(p, _)| wanted.contains(p))
+            .map(|(p, f)| (p, f.source))
+            .collect();
+        *evidence = Some(retained::Evidence {
+            buffers,
+            inputs,
+            scope_input_digest,
+            normalized_scope: serde_json::json!({"paths":scope.paths,"globs":scope.globs}),
+            source_manifest,
+        });
+    }
     Ok(())
 }

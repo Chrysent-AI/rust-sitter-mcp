@@ -134,7 +134,7 @@ fn injected_small_candidate_cap_stops_at_its_first_excess() {
     };
     let mut result = SuggestSplitEnvelope::empty(request.limits.clone().into());
     result.effective_work_limits.reference_candidates = 1;
-    let error = build(&repo.0, &request, controls, || {}, &mut result).unwrap_err();
+    let error = build(&repo.0, &request, controls, || {}, &mut result, &mut None).unwrap_err();
     assert_eq!(error.code, "reference_work_limit");
     assert_eq!(result.counts.reference_candidates, 2);
     assert!(result.drafts.is_empty());
