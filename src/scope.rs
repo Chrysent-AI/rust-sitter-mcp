@@ -426,6 +426,8 @@ pub fn discover(
 #[derive(Debug, Default, serde::Serialize)]
 pub struct ScopeInputManifest {
     pub ignores: Vec<IgnoreInput>,
+    /// Observed directory/source identities and permissions, not source-content hashes.
+    pub identities: Vec<(String, u64, u64, u32)>,
     #[serde(skip)]
     accounted: usize,
 }
@@ -435,6 +437,34 @@ pub struct IgnoreInput {
     pub bytes: Option<Vec<u8>>,
 }
 impl ScopeInputManifest {
+    fn identity(
+        &mut self,
+        path: &Path,
+        root: &Path,
+        metadata: &Metadata,
+    ) -> Result<(), DomainError> {
+        let name = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(Path::to_str)
+            .ok_or_else(|| {
+                DomainError::new(
+                    "scan_incomplete",
+                    "input identity is outside the observed root",
+                )
+            })?
+            .to_owned();
+        self.accounted = self.accounted.saturating_add(name.capacity() + 128);
+        if self.identities.len() >= 200_000 || self.accounted > 16 * 1024 * 1024 {
+            return Err(DomainError::new(
+                "scan_incomplete",
+                "input identity manifest exceeds bounded policy limits",
+            ));
+        }
+        self.identities
+            .push((name, metadata.dev(), metadata.ino(), metadata.mode()));
+        Ok(())
+    }
     fn observe(&mut self, directory: &Path, root: &Path) -> Result<(), DomainError> {
         let path = directory.join(".gitignore");
         let fail = || {
@@ -470,6 +500,7 @@ impl ScopeInputManifest {
                 if !same(&opened, &after) || bytes.len() as u64 != after.len() {
                     return Err(fail());
                 }
+                self.identity(&path, root, &opened)?;
                 Some(bytes)
             }
         };
@@ -591,6 +622,16 @@ pub fn discover_observed(
                 if let Some(inputs) = &mut inputs
                     && entry.file_type().is_some_and(|kind| kind.is_dir())
                 {
+                    let metadata = fs::symlink_metadata(entry.path()).map_err(|_| {
+                        DomainError::new("scan_incomplete", "cannot observe directory identity")
+                    })?;
+                    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                        return Err(DomainError::new(
+                            "scan_incomplete",
+                            "directory identity changed during discovery",
+                        ));
+                    }
+                    inputs.identity(entry.path(), &scope.root, &metadata)?;
                     inputs.observe(entry.path(), &scope.root)?;
                 }
                 if entry.error().is_some() {
@@ -715,7 +756,10 @@ pub fn discover_observed(
         })();
         let name = relative.to_str().expect("UTF-8 admitted").to_owned();
         let eligible = match read {
-            Ok((buffer, _)) => {
+            Ok((buffer, metadata)) => {
+                if let Some(inputs) = &mut inputs {
+                    inputs.identity(&path, &scope.root, &metadata)?;
+                }
                 if buffer.iter().take(8192).any(|b| *b == 0) {
                     Err("binary")
                 } else {

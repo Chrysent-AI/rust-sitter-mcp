@@ -1,6 +1,6 @@
 # Structural Rust search, move plans and split advice
 
-`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, and `get_split_detail` for explicitly retained historical evidence/release. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
+`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, `get_split_detail` for explicitly retained historical evidence/release, and `export_move_request` for inactive exact-anchor requests from an explicit retained selection. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
 
 A stdio launch configuration is:
 
@@ -1387,13 +1387,16 @@ persistence, background refresh, jobs or restart-survival promise exists.
 
 `scope_input_digest` binds the corpus snapshot, normalized scope and effective
 in-root `.gitignore` inputs consulted in discovery, including absence and exact
-bytes at observed directories. It does not change `snapshot_id` or search-cursor
+bytes at observed directories, plus observed directory/source/ignore-file device/inode
+identities and permission modes. Replacement by equal bytes is not silently relabeled
+as the same observation. It does not change `snapshot_id` or search-cursor
 semantics. Hard-excluded, symlink and nested-repository boundaries remain intact.
 Policy observation is bounded to 100,000 entries, 1 MiB per input and 16 MiB
-aggregate path/byte/entry accounting within the advice descriptor/time guards;
+aggregate path/byte/entry accounting (also covering at most 200,000 filesystem
+identity/permission entries) within the advice descriptor/time guards;
 unreadable, unsafe or over-limit relevant input fails closed. The retained source
 manifest records admitted paths, modes, lengths and content digests. This is a
-freshness seam for future operations, **not** a claim that historical detail checks
+freshness seam used by export, **not** a claim that historical detail checks
 current source, ignore policy or modes.
 
 Compact returns `schema_version:1`, `envelope_kind:"split_manifest"`,
@@ -1490,7 +1493,101 @@ publication/pruning/removal, not I/O, serialization or response fitting.
 Historical full bytes are **not verified current execution anchors**. Before
 constructing/submitting an ordinary explicit `move_item` request, obtain/recheck
 current original bytes and header provenance; that tool still independently
-performs every audit. No move-by-ID or export tool is added by historical retrieval.
+performs every audit. Historical retrieval itself never exports or submits a move.
+The separately invoked export below can perform a current observational recheck.
+
+### Inactive exact-anchor export (`export_move_request`)
+
+```json
+{"analysis_handle":"opaque-analysis-token","snapshot_id":"sha1:captured-corpus-hash","selection":[{"unit_ref":{"analysis_id":"opaque-analysis-identity","item_id":"i/src/worker.rs/0/14"},"destination":{"kind":"new_sibling","parent_path":"src/lib.rs","path":"src/helpers.rs"}}],"limits":{"response_bytes":2097152}}
+```
+
+This seventh read-only tool accepts a **nonempty explicit selection**, not a
+candidate/group ID or implicit companion closure. Required identity is the retained
+`analysis_handle` and expected `snapshot_id`; optional top-level `analysis_id` and
+`scope_input_digest` must match when supplied. Every entry requires an
+`analysis_id`-qualified `unit_ref` and a complete caller-chosen ordinary
+`Destination`: `existing`, `new_sibling` or `existing_impl`. No `new_child` variant
+is supported. IDs are bounded to 512 bytes; analysis identity strings to 200 bytes.
+Duplicate IDs, unknown IDs, cross-analysis qualifiers and overlapping original
+ranges (including whole-impl/member alternatives) refuse instead of pruning.
+Supported whole-impl alternatives are distinct from the advisory instruction to
+partition their members; member exclusions and syntax recovery still refuse.
+
+All objects are strict: unknown fields, missing destinations and unsupported
+variants fail. Destination validation checks normalized root-relative Rust paths,
+literal sibling/name/parent geometry, member-only `existing_impl`, and internally
+consistent complete caller `implementation`/`before_item` anchors. It does **not**
+prove destination admission/absence, declaration identity, bindings, privacy,
+trivia ownership or batch applicability. Those remain ordinary `move_item` audits.
+
+Optional `move_options` permits **only** explicitly supplied `context`, ordinary
+move `limits`, and `max_moves`. Their normal bounds/defaults apply, including move
+`diagnostic_count` 0–100000 and `max_moves` default 500, range 1–5000. Selection
+length must fit that cap; export never increases it automatically. Export `limits`
+separately accepts only `response_bytes` (64 KiB–16 MiB, default 2 MiB) and
+`time_budget_ms` (1–300000, default 60000). Advice display/work settings are not
+silently copied into the move request. An omitted move diagnostic count remains
+omitted, preserving ordinary blocked-preview defaults; explicit expansion stays
+explicit. Assumptions, semantic configuration or
+resolution, acknowledgments, draft provenance and rewrite/trivia choices are
+**absent** from its JSON, taking strict ordinary defaults on submission. Edit
+supported ordinary fields separately and explicitly if needed.
+
+Schema-1 output is `envelope_kind:"move_request_scaffold"`, `tool:"export_move_request"`,
+`scaffold:true`, `submitted:false`, `applicability:"not_assessed"`. On success,
+`source_freshness:"checked_at_export"` and `request` contains exactly the supplied
+selection/destinations in caller order, canonical Git root, original crate-root
+and normalized discovery paths/globs. Item `{path,range,expected_text}` anchors
+contain **full original frozen bytes**, never display snippets. Members additionally
+have full exact header-only `enclosing_impl` anchors ending immediately before
+`{`, preserving generic/where clauses and line endings rather than regenerating
+Rust or returning an entire enclosing impl extent.
+
+Outside the strict request, `provenance` supplies analysis handle/ID, snapshot,
+input digest, normalized analysis request and grammar/server/build/grouping
+provenance. `review` lists selected item IDs, relevant `companions_not_selected`
+and collection-qualified `unresolved_decision_refs` from canonical evidence,
+including source-wide uncertainty, with `destination_and_batch_applicability:"not_assessed"`.
+These are review obligations, not selected moves or policy overrides.
+`integrity.semantic` and export syntax validation remain `not_performed`: no new
+parsing, grouping, compilation, equivalence or move applicability claim is made.
+
+Before success, export rediscovery re-fingerprints the captured admitted corpus
+and compare scope-input manifests: bytes, modes, normalized root/scope, observed
+filesystem identities and effective in-root `.gitignore` presence/absence/bytes.
+Missing/added admitted files, unsafe symlink/nested boundaries, policy changes
+even with unchanged admission, and observed equal-byte replacements refuse.
+Only captured evidence boundaries are promised; ignored/hard-excluded paths are
+not promoted into scope. This is **observational**, not an atomic application-time
+guarantee. `get_split_detail` remains historical after any edit. Export never
+submits/calls `move_item`; callers separately submit the full ordinary request,
+and later edits still fail its independent stale-anchor/audit checks.
+
+The complete generated request must fit the same **8-MiB decoded-argument** JSON
+accounting as MCP, and the whole wrapper must fit duplicated structured/text wire
+accounting, escaping and framing reserve included. Oversize refuses the entire
+request: no shortened anchors, partial executable JSON or automatic batch splitting.
+`counts.selected_units` reports input count; `request_bytes` reports serialized
+complete-request size once constructed, and `response_bytes` conservatively
+reports the full attempted duplicated result when measured. Zero byte counts mean
+that construction/measurement was not reached, not that the request was empty.
+
+| Export error | Meaning; every failure has `request:null` |
+|---|---|
+| `ADVICE_SNAPSHOT_UNKNOWN` / `ADVICE_SNAPSHOT_EXPIRED` / `ADVICE_SNAPSHOT_MISMATCH` | Same fixed lifecycle and identity semantics as detail; no silent reanalysis |
+| `UNKNOWN_ADVICE_ID` | Selected inventory ID is absent from this retained record |
+| `INVALID_SCAFFOLD_SELECTION` | Empty/over-cap/invalid/duplicate/cross-analysis or overlapping explicit selection |
+| `UNSUPPORTED_SCAFFOLD_SELECTION` | Excluded context/unit, recovery, or missing complete original byte/header provenance |
+| `INVALID_DESTINATION` | Invalid destination syntax, path geometry or required caller anchor |
+| `SOURCE_CHANGED` | Captured source/scope/policy/identity/modes changed or cannot be completely reobserved |
+| `SCAFFOLD_TOO_LARGE` | Complete decoded request or duplicated wire response cannot fit; no partial request |
+| `INVALID_PARAMS` | Malformed strict object, missing fields or unsupported options/bounds |
+| `CANCELLED` / `planning_deadline` / `BUSY` | Existing cooperative stoppage or occupied slot; no request is published |
+
+All exports use the original worker-owned single admission permit through
+cancellation/shutdown, with no queue. Store locks cover only lookup/pruning;
+freshness I/O and serialization run unlocked on an owned immutable record.
 
 ### Consuming decisions and member labels
 

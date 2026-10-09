@@ -79,6 +79,10 @@ fn move_shares_admission_and_eof_reaps_owned_git_child() {
 fn advice_shares_admission_and_eof_reaps_owned_git_child() {
     eof_flow("suggest_split");
 }
+#[test]
+fn export_shares_admission_and_eof_reaps_owned_git_child() {
+    eof_flow("export_move_request");
+}
 fn eof_flow(tool: &str) {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -100,7 +104,11 @@ fn eof_flow(tool: &str) {
     // Same substantial corpus as the lifecycle reproduction: keep the hasher
     // observable without a fake Git executable or a product-side test hook.
     let line = "fn f(){foo();}\n";
-    let source = line.repeat(1024 * 1024 / line.len());
+    let source = if tool == "export_move_request" {
+        format!("fn f() {{}}\n/*{}*/\n", " ".repeat(1024 * 1024))
+    } else {
+        line.repeat(1024 * 1024 / line.len())
+    };
     for index in 0..120 {
         std::fs::write(fixture.0.join(format!("stress-{index:03}.rs")), &source).unwrap();
     }
@@ -140,7 +148,18 @@ fn eof_flow(tool: &str) {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"})
     )
     .unwrap();
-    let args = if tool == "suggest_split" {
+    let args = if tool == "export_move_request" {
+        writeln!(input, "{}", json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"suggest_split","arguments":{
+            "repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs","retain_snapshot":true,"limits":{"time_budget_ms":300000}
+        }}})).unwrap();
+        input.flush().unwrap();
+        let retained = rx.recv_timeout(Duration::from_secs(120)).unwrap();
+        let advice = &retained["result"]["structuredContent"];
+        assert_eq!(advice["retention"]["state"], "retained", "{retained}");
+        json!({"analysis_handle":advice["retention"]["analysis_handle"],"snapshot_id":advice["snapshot_id"],"selection":[{
+            "unit_ref":{"analysis_id":advice["retention"]["analysis_id"],"item_id":advice["inventory"][0]["id"]},
+            "destination":{"kind":"new_sibling","path":"helper.rs","parent_path":"stress-000.rs"}}],"limits":{"time_budget_ms":300000}})
+    } else if tool == "suggest_split" {
         json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","source_path":"stress-000.rs","retain_snapshot":true,"limits":{"time_budget_ms":300000}})
     } else if tool == "move_item" {
         json!({"repo_path":fixture.0,"crate_root":"stress-000.rs","moves":[],"limits":{"time_budget_ms":300000}})
@@ -162,7 +181,7 @@ fn eof_flow(tool: &str) {
         assert!(Instant::now() < deadline, "did not observe an owned hasher");
         thread::sleep(Duration::from_millis(10));
     };
-    if tool == "move_item" || tool == "suggest_split" {
+    if tool == "move_item" || tool == "suggest_split" || tool == "export_move_request" {
         // Freeze only this test's hasher so the competing request observes a held permit.
         assert!(
             Command::new("kill")
@@ -172,6 +191,10 @@ fn eof_flow(tool: &str) {
                 .success()
         );
         let competing_calls = [
+            (
+                "export_move_request",
+                json!({"analysis_handle":"unknown","snapshot_id":"sha1:unknown","selection":[{"unit_ref":{"analysis_id":"unknown","item_id":"unknown"},"destination":{"kind":"existing","path":"other.rs"}}]}),
+            ),
             ("search", json!({"repo_path":fixture.0,"pattern":"foo()"})),
             (
                 "search_query",
@@ -211,6 +234,10 @@ fn eof_flow(tool: &str) {
                 assert_eq!(result["returned_page_complete"], false);
                 assert_eq!(result["historical"], true);
                 assert_eq!(result["live_freshness"], "not_checked");
+            } else if busy_tool == "export_move_request" {
+                assert_eq!(result["submitted"], false);
+                assert_eq!(result["applicability"], "not_assessed");
+                assert!(result["request"].is_null());
             } else {
                 assert_eq!(result["status"], "failed");
             }
@@ -237,6 +264,8 @@ fn eof_flow(tool: &str) {
             } else if busy_tool == "get_split_detail" {
                 assert!(result["records"].as_array().unwrap().is_empty());
                 assert!(result["released"].is_null());
+            } else if busy_tool == "export_move_request" {
+                assert!(result["request"].is_null());
             } else {
                 assert!(result["matches"].as_array().unwrap().is_empty());
             }
@@ -273,6 +302,7 @@ fn eof_flow(tool: &str) {
         log.contains(match tool {
             "move_item" => "move plan finished",
             "suggest_split" => "split advice finished",
+            "export_move_request" => "move request export finished",
             _ => "search finished",
         }) && log.contains("CANCELLED"),
         "EOF did not cancel active engine work: {log}"

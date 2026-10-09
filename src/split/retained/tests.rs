@@ -5,6 +5,8 @@ use std::{fs, path::PathBuf, process::Command};
 mod admission_tests;
 #[path = "budget_tests.rs"]
 mod budget_tests;
+#[path = "export_tests.rs"]
+mod export_tests;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Fixture(PathBuf);

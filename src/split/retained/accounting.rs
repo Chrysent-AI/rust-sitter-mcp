@@ -16,6 +16,13 @@ pub(super) fn evidence_allocation(evidence: &Evidence) -> usize {
             .iter()
             .map(|i| i.path.capacity() + i.bytes.as_ref().map_or(0, Vec::capacity))
             .sum::<usize>()
+        + evidence.inputs.identities.capacity() * size_of::<(String, u64, u64, u32)>()
+        + evidence
+            .inputs
+            .identities
+            .iter()
+            .map(|i| i.0.capacity())
+            .sum::<usize>()
         + evidence.scope_input_digest.capacity()
 }
 

@@ -318,6 +318,15 @@ impl Engine {
     ) -> crate::split::SplitResponse {
         crate::split::run_retained(&self.launch, request, cancelled, &self.retained_advice)
     }
+    pub fn export_move_request(
+        &self,
+        request: crate::split::ExportRequest,
+        cancelled: &AtomicBool,
+    ) -> crate::split::ExportEnvelope {
+        let result = self.retained_advice.export(request, cancelled);
+        tracing::info!(error = ?result.error.as_ref().map(|e| &e.code), "move request export finished");
+        result
+    }
     pub fn get_split_detail(
         &self,
         request: crate::split::DetailRequest,

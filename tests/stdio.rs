@@ -50,7 +50,26 @@ fn real_stdio_query() {
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
     let advertised = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(advertised.len(), 6);
+    assert_eq!(advertised.len(), 7);
+    let export_tool = advertised
+        .iter()
+        .find(|t| t["name"] == "export_move_request")
+        .unwrap();
+    assert!(export_tool["outputSchema"].is_object());
+    assert_eq!(export_tool["annotations"]["readOnlyHint"], true);
+    assert_eq!(export_tool["inputSchema"]["additionalProperties"], false);
+    assert!(
+        export_tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("selection"))
+    );
+    assert!(
+        export_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("submitted:false")
+    );
     let detail_tool = advertised
         .iter()
         .find(|t| t["name"] == "get_split_detail")

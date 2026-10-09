@@ -4,7 +4,8 @@ use crate::{
     plan::{PlanEnvelope, ReplaceRequest},
     result::{DomainError, Limits, PatternRequest, SearchEnvelope, SearchRequest},
     split::{
-        DetailEnvelope, DetailRequest, SplitResponse, SuggestSplitEnvelope, SuggestSplitRequest,
+        DetailEnvelope, DetailRequest, ExportEnvelope, ExportRequest, SplitResponse,
+        SuggestSplitEnvelope, SuggestSplitRequest,
     },
 };
 use rmcp::{
@@ -268,6 +269,36 @@ impl Server {
             DetailEnvelope::failed(DomainError::new("INTERNAL", "blocking detail task failed"))
         }))
     }
+    async fn run_export(
+        &self,
+        request: ExportRequest,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let Ok(permit) = self.admission.clone().try_acquire_owned() else {
+            return export_wire(ExportEnvelope::failed(busy_error()));
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let _guard = CancelOnDrop(flag.clone());
+        {
+            let mut active = self.active.lock().expect("active lock");
+            flag.store(active.cancelled, Ordering::Relaxed);
+            active.flags.retain(|weak| weak.strong_count() > 0);
+            active.flags.push(Arc::downgrade(&flag));
+        }
+        let engine = self.engine.clone();
+        let worker_flag = flag.clone();
+        let mut job = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            engine.export_move_request(request, &worker_flag)
+        });
+        let result = tokio::select! {
+            result = &mut job => result,
+            _ = context.ct.cancelled() => { flag.store(true, Ordering::Relaxed); job.await }
+        };
+        export_wire(result.unwrap_or_else(|_| {
+            ExportEnvelope::failed(DomainError::new("INTERNAL", "blocking export task failed"))
+        }))
+    }
     pub async fn shutdown(&self) {
         self.cancel_requests();
         // The owned permit lives until all blocking workers and Git children have joined.
@@ -301,6 +332,15 @@ fn detail_wire(result: DetailEnvelope) -> CallToolResult {
         CallToolResult::structured(value)
     }
 }
+fn export_wire(result: ExportEnvelope) -> CallToolResult {
+    let failed = result.error.is_some();
+    let value = serde_json::to_value(result).expect("serializable inactive scaffold");
+    if failed {
+        CallToolResult::structured_error(value)
+    } else {
+        CallToolResult::structured(value)
+    }
+}
 fn suggest_wire(result: SplitResponse) -> CallToolResult {
     let failed = result.error().is_some();
     let value = serde_json::to_value(result).expect("serializable advice");
@@ -312,6 +352,21 @@ fn suggest_wire(result: SplitResponse) -> CallToolResult {
 }
 #[tool_router]
 impl Server {
+    #[tool(name = "export_move_request", description = r#"Export one complete inactive ordinary move_item request from explicitly retained completed advice.
+Use for: explicit nonempty analysis-qualified unit IDs and caller-chosen existing/new_sibling/existing_impl destinations; full exact frozen item bytes and header-only enclosing_impl anchors.
+Does NOT: infer destinations, select companions, rerun grouping, submit move_item, audit move applicability, write files, compile or approve a plan.
+Example arguments:
+{"analysis_handle":"opaque-analysis-token","snapshot_id":"sha1:captured-corpus-hash","selection":[{"unit_ref":{"analysis_id":"opaque-analysis-identity","item_id":"i/src/worker.rs/0/14"},"destination":{"kind":"new_sibling","parent_path":"src/lib.rs","path":"src/helpers.rs"}}]}
+Workflow: explicitly retain suggest_split, review historical get_split_detail evidence, choose each unit and destination, export, then independently edit/review/submit the ordinary exact-anchor request to move_item. Advisory IDs never execute moves.
+Safety: schema 1 move_request_scaffold, scaffold:true, submitted:false, applicability:not_assessed, semantic:not_performed. Freshness reobserves captured corpus bytes/modes, normalized scope, effective in-root ignore inputs and observed filesystem identities without parsing/grouping. source_freshness:checked_at_export is observational, not atomic application-time freshness. Ordinary move_item independently rechecks every anchor/audit. Unknown/expired/mismatched identities, unknown/cross-analysis/duplicate/overlapping/excluded units, invalid destination syntax and budget failures return request:null, never partial executable anchors or automatic batches.
+Advanced details: limits accepts only response_bytes (64 KiB–16 MiB, default 2 MiB) and time_budget_ms (1–300000, default 60000). move_options accepts only explicitly supplied context, ordinary move limits and max_moves (default 500, 1–5000); assumptions, semantic configuration/resolution, acknowledgments and rewrite/trivia choices stay strict defaults and must be edited separately. No new_child variant is supported. Complete requests must fit 8 MiB decoded arguments AND duplicated structured/text wire budget including escaping/reserve. Provenance, unselected companions and unresolved decision links remain outside the strict request. All calls share worker-owned admission/cancellation/shutdown; BUSY starts no work and queues nothing. See docs/tools.md."#, output_schema = rmcp::handler::server::tool::schema_for_output::<ExportEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn export_move_request(
+        &self,
+        Parameters(request): Parameters<ExportRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(self.run_export(request, context).await)
+    }
     #[tool(name = "get_split_detail", description = r#"Read immutable historical evidence from explicitly retained completed advice, or release it.
 Use for: deterministic bounded pages, explicit records and full original unit/header anchors.
 Does NOT: read current files, reanalyze, assess applicability, export a move request or change repositories.
@@ -524,6 +579,7 @@ impl ServerHandler for Server {
             && request.name != "move_item"
             && request.name != "suggest_split"
             && request.name != "get_split_detail"
+            && request.name != "export_move_request"
         {
             return Err(rmcp::ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
@@ -533,7 +589,11 @@ impl ServerHandler for Server {
         let decoded = if serde_json::to_vec(&args).expect("JSON args").len() > 8 * 1024 * 1024 {
             Err("decoded arguments exceed 8 MiB".into())
         } else {
-            if request.name == "get_split_detail" {
+            if request.name == "export_move_request" {
+                serde_json::from_value::<ExportRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else if request.name == "get_split_detail" {
                 serde_json::from_value::<DetailRequest>(args)
                     .map(|_| ())
                     .map_err(|e| e.to_string())
@@ -569,6 +629,13 @@ impl ServerHandler for Server {
                 // Leave room for the hint inside DomainError's bounded message.
                 message = message.chars().take(800).collect();
                 message.push_str(" (a client may have stringified an object parameter; omit optional object parameters instead of passing null)");
+            }
+            if request.name == "export_move_request" {
+                return Ok(export_wire(ExportEnvelope::failed(DomainError::new(
+                    "INVALID_PARAMS",
+                    message,
+                )))
+                .into());
             }
             if request.name == "get_split_detail" {
                 return Ok(detail_wire(DetailEnvelope::failed(DomainError::new(

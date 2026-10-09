@@ -15,7 +15,9 @@ use std::{
 };
 
 mod accounting;
+mod export;
 use accounting::{evidence_allocation, preparation_allocation, retention_allocation};
+pub use export::{ExportEnvelope, ExportRequest};
 
 /// Active records, including preparations and in-flight readers.
 pub const DEFAULT_RECORDS: usize = 1;
