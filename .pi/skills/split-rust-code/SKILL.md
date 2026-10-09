@@ -170,7 +170,7 @@ Keep or recheck original base bytes/modes plus `created_files[].must_be_absent` 
 - **`crate_root` is NOT `Cargo.toml`** — it's a `.rs` source file. A wrong root (e.g., `main.rs` when the tree hangs off `lib.rs`) surfaces in `chain_diagnostics` and linked decisions; inspect them.
 - **Anchors go stale after any source edit** — `STALE_SELECTION` means re-read current bytes and rebuild anchors. Never guess offsets.
 - **Items inside inline `mod x { ... }` blocks cannot be extracted** — only direct top-level units and supported whole inherent associated units are movable.
-- **The engine serializes calls** — a second concurrent call returns `BUSY`. Wait, then retry.
+- **The engine serializes calls** — `BUSY` means the analysis slot is occupied. The rejected call started no analysis and was not queued. Wait for the active call to finish or cancellation to settle, then retry serially; no retry deadline or other request's identity is disclosed.
 - **Trailing newlines are not part of an item's syntax anchor** — inventory byte ranges exclude them.
 - **Some MCP clients stringify object parameters** — if a call fails validation with `must be object` (or you see `"limits": "null"` in the error echo), your client serialized `context`/`limits`/`globs` or an explicit `null` into a JSON string. Omit optional object parameters entirely; server defaults apply. Never pass explicit nulls.
 - **A complete draft is not move safety** — membership completeness and eligibility say nothing about cross-references, visibility, or macro context. That analysis happens in `move_item`.
