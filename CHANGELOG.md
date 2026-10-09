@@ -13,7 +13,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `get_split_detail` for deterministic historical pages, exact original unit/header
   anchors and explicit release; expose accounted allocation, fixed expiry and honest
   capacity/identity/page/oversize refusals without live reanalysis or move submission.
-  Retention bounds remain provisional pending workload measurements and cap selection.
+  Defaults are one active record, 134,217,728 aggregate accounted bytes (128 MiB),
+  and a fixed non-sliding 900-second lifetime from publication; preparations and
+  in-flight readers occupy capacity, and conservative admission may refuse before
+  final stored charges would fit. The cap is not allocated upfront or a repository,
+  response or process-RSS limit; no eviction, persistence or restart survival.
 * Capture a separate effective-ignore `scope_input_digest`, including observed
   `.gitignore` absence and exact bytes, without changing corpus snapshot semantics.
 
