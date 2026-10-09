@@ -92,6 +92,21 @@ exclusions and overlap links. Boundary observations show admitted written consum
 not symbol resolution, move repairability or architectural ownership. An observed-
 exclusive classification is restricted to the completed admitted observation scope.
 
+## Inspecting test coupling
+
+Read the separate `test_observations` projection before deciding test placement.
+Conditional out-of-line routes include declaration/attribute anchors and both
+conventional file candidates. Missing/unadmitted/competing/remapped routes and
+unlinked marked files mean unscanned or unproved evidence, never tests unaffected.
+CST field/path shapes survive line wrapping; private-state links require supported
+written nominal/lexical evidence. Arbitrary receivers and unrelated types remain
+uncertain. Macro-input shapes use `macro_token_candidate`, not expansion or assertion
+equivalence. Non-exclusive facade/implementation/private-state/mixed/unresolved
+labels identify relationships to inspect; possible companions are never mandatory
+relocations. Preserve assertions and test placement unless the caller separately
+chooses a supported change. Broader advice does not broaden the exact same-file
+inline acknowledgement class or waive third-file/out-of-line glob blockers.
+
 ## What to keep together
 
 - A type and its inherent `impl` blocks

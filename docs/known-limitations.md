@@ -29,6 +29,19 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Advice-tier boundaries
 
+- `test_observations` separately scans admitted written inline/ordinary out-of-line
+  test routes, including conditional exact `cfg(test)` declarations in both layouts.
+  Missing/excluded/competing/remapped routes and unlinked test roots remain explicit
+  limitations. No Cargo target or library alias is inferred. Completion/zero records
+  never means tests unaffected. CST access shapes tolerate line wrapping; only narrow
+  written nominal/lexical receiver evidence links fields. Arbitrary receiver chains,
+  inferred types and method identity remain unproved; unrelated same-spelled fields
+  stay unlinked. Macro-input access shapes are `macro_token_candidate`, excluding
+  comments/literals, not expansion or assertion equivalence. Non-exclusive coupling
+  labels and possible companions never select tests, rewrite assertions or expose
+  state. Legacy same-file signals and exact inline acknowledgement eligibility are
+  unchanged; out-of-line/third-file glob consumers still block in the move planner.
+
 - Ownership cores use written SCCs, unique nominal/impl associations and bounded
   same-owner member/signature-payload seeds, not names or inferred architectural
   ownership. Companions and impl/member alternatives are inspection-only and never

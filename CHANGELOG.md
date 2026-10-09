@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Disclose separate advisory `test_observations` for admitted inline/out-of-line
+  test routes, multiline CST accesses and labeled macro-token candidates, with
+  anchored discovery limitations, attribution uncertainty and non-exclusive
+  coupling labels; leave test acknowledgement, placement and assertions unchanged.
+
 * Add structural `ownership_candidates`, inspection-only companions and explicit
   whole-impl/member alternatives with deterministic integer ranking; disclose
   separately scoped admitted-file `boundary_observations` without move-safety claims.
