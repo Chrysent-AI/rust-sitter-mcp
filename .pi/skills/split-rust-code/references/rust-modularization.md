@@ -76,7 +76,15 @@ Rules:
 ## Reading structural ownership advice
 
 Name prefixes, banners, shared attributes and adjacency are displayed weak facts,
-not core-forming edges. Inspect the ranked written core and its separately disclosed
+not core-forming edges. In a complete full response fitted under budget pressure,
+`item_size` and `name_prefix` signals may have `evidence:[]` with a nonzero
+`counts.omissions.duplicate_declaration_display_spans`; for those empty arrays only,
+resolve every existing `signal.item_ids` entry, in original order, to its
+`inventory[].span` in the complete same-response inventory.
+This restores display evidence only: it does not make weak facts core-forming or
+establish ownership or move safety. Unique reference/consumer occurrences remain
+direct, companions are never auto-selected, and signal IDs/spans are not execution
+anchors. Inspect the ranked written core and its separately disclosed
 impl/payload/helper/constant companions. Candidate `candidate/N` and companion
 `companion/N` IDs are response-local, not move anchors. Read each companion's
 `review_obligation` from candidate-to-companion association evidence:

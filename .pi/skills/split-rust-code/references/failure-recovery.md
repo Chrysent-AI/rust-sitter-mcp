@@ -150,6 +150,20 @@ Candidate `candidate/N` and companion `companion/N` IDs are response-local only;
 `boundary_observations.coverage`; zero observed consumers is not proof of no others,
 and uncertain routes cannot waive execution blockers or test acknowledgment rules.
 
+**Complete duplicate-display fitting (full response).** When `status:"complete"` and
+`counts.omissions.duplicate_declaration_display_spans` is nonzero, that count means
+identical declaration display copies were suppressed, not that analysis is incomplete.
+Only `item_size` and `name_prefix` signals qualify: if their `evidence` is empty,
+resolve every existing `signal.item_ids` entry to `inventory[].span` in original ID
+order. This tier is guarded by complete analysis and full same-response inventory,
+with exact ordered ID-to-full-descriptor equality; missing IDs, unequal descriptors
+or an incomplete inventory do not qualify. The empty array is not zero observed evidence,
+and the reconstructed spans/IDs are not execution anchors. No retained handle or
+follow-up call is needed. Do not generalize this to unique reference/consumer
+occurrences, invent missing IDs/spans, or use it to label a genuine partial response
+complete. Genuine `partial`/`response_bytes` recovery remains the response-budget
+recovery described above.
+
 | `draft_eligibility.state` / reason | Meaning | Recovery |
 |---|---|---|
 | `incomplete` + `response_bytes` | Drafts/decisions withheld at the response cap | Retry with `limits: {"response_bytes": 8388608}` (≤16 MiB). Membership may still be complete — the inventory is usable. |

@@ -321,6 +321,120 @@ fn stdio_advice_exposes_containment_without_changing_descriptor_sizes() {
 }
 
 #[test]
+fn full_stdio_duplicate_displays_reconstruct_all_records_without_retention() {
+    let source = (0..400)
+        .map(|i| {
+            let family = if i < 200 { "alpha" } else { "beta" };
+            let next = i ^ 1;
+            format!(
+                "fn {family}_{i:03}() {{ {family}_{next:03}(); let _payload = \"{}\"; }}\n",
+                "x".repeat(1800)
+            )
+        })
+        .collect::<String>();
+    let repo = fixture("mod worker;\n");
+    repo.write("cases/advice/worker.rs", &source);
+    let before = observe(&repo.0);
+    let mut args = request(&repo);
+    args["source_path"] = json!("cases/advice/worker.rs");
+    args["limits"] = json!({"text_bytes":0});
+    let mut client = Client::new();
+    let fitted = client.call("suggest_split", args.clone());
+    assert_eq!(fitted["status"], "complete");
+    assert_eq!(fitted["draft_eligibility"]["evidence_complete"], true);
+    assert_eq!(fitted["coverage"]["scope_exhaustive"], true);
+    assert!(fitted.get("retention").is_none());
+    assert_eq!(fitted["inventory"].as_array().unwrap().len(), 400);
+    assert_eq!(fitted["signals"].as_array().unwrap().len(), 802);
+    assert_eq!(
+        fitted["ownership_candidates"].as_array().unwrap().len(),
+        200
+    );
+    assert_eq!(fitted["drafts"].as_array().unwrap().len(), 2);
+    let mut summaries = fitted["ownership_candidates"].as_array().unwrap().len();
+    let mut memberships = 0;
+    for draft in fitted["drafts"].as_array().unwrap() {
+        let mut seen = BTreeSet::new();
+        for group in draft["groups"].as_array().unwrap() {
+            summaries += 1;
+            assert!(group["consequence_summary"].is_object());
+            for id in group["item_ids"].as_array().unwrap() {
+                assert!(seen.insert(id.as_str().unwrap()));
+                memberships += 1;
+            }
+        }
+        assert_eq!(seen.len(), 400);
+    }
+    assert_eq!((memberships, summaries), (800, 206));
+    let occurrences: usize = fitted["signals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["kind"] == "reference_candidate")
+        .map(|s| s["evidence"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(occurrences, 400);
+
+    // A larger display budget is a control, not a substitute for the default-budget call.
+    args["limits"]["response_bytes"] = json!(16777216);
+    let mut direct = client.call("suggest_split", args);
+    assert_eq!(direct["status"], "complete");
+    assert!(
+        direct["counts"]["omissions"]
+            .get("duplicate_declaration_display_spans")
+            .is_none()
+    );
+    let spans: BTreeMap<_, _> = fitted["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["id"].as_str().unwrap(), i["span"].clone()))
+        .collect();
+    let mut reconstructed = fitted.clone();
+    let mut copies = 0;
+    for signal in reconstructed["signals"].as_array_mut().unwrap() {
+        if matches!(
+            signal["kind"].as_str().unwrap(),
+            "item_size" | "name_prefix"
+        ) {
+            assert_eq!(signal["evidence"], json!([]));
+            let evidence: Vec<_> = signal["item_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| spans[id.as_str().unwrap()].clone())
+                .collect();
+            copies += evidence.len();
+            signal["evidence"] = json!(evidence);
+        }
+    }
+    assert_eq!(copies, 800);
+    assert_eq!(
+        reconstructed["counts"]["omissions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("duplicate_declaration_display_spans"),
+        Some(json!(copies))
+    );
+    // All remaining differences are the pre-existing neighboring-context display tier
+    // and the explicitly different budget. Compare the whole response, not just totals.
+    assert_eq!(reconstructed["item_contexts"], json!([]));
+    let contexts = direct["item_contexts"].as_array().unwrap().len();
+    assert_eq!(contexts, 400);
+    direct["item_contexts"] = json!([]);
+    direct["counts"]["omissions"]["item_contexts"] = json!(contexts);
+    direct["limits"]["response_bytes"] = reconstructed["limits"]["response_bytes"].clone();
+    assert_eq!(reconstructed, direct);
+    let wire = json!({"content":[{"type":"text","text":fitted.to_string()}],
+        "structuredContent":fitted,"isError":false})
+    .to_string()
+    .len()
+        + 4096;
+    assert!(wire <= 2097152);
+    assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
 fn exact_file_scope_still_honestly_reports_unadmitted_sibling_destinations() {
     let repo = fixture("fn retained() { moved(); }\nfn moved() { retained(); }\n");
     let mut args = request(&repo);

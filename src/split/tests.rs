@@ -490,6 +490,228 @@ fn zero_consequences_and_fitted_memberships_keep_unassessed_applicability() {
     assert!(result.wire_bytes() <= result.limits.response_bytes);
 }
 
+fn display_controls() -> Controls<'static> {
+    static CANCELLED: AtomicBool = AtomicBool::new(false);
+    Controls {
+        deadline: Instant::now() + Duration::from_secs(30),
+        cancelled: &CANCELLED,
+    }
+}
+
+fn display_fixture() -> SuggestSplitEnvelope {
+    let repo = Fixture::new();
+    let mut result = run(&repo.0, repo.request(), &AtomicBool::new(false));
+    assert_eq!(result.status, "complete");
+    // Exercise descriptor text and JSON escaping, without first stripping text.
+    for item in &mut result.inventory {
+        item.span.text = Some("line\n\"\\λ\t".repeat(64));
+        item.span.text_bytes = item.span.text.as_ref().unwrap().len();
+        item.span.text_omitted = false;
+    }
+    let inventory: BTreeMap<_, _> = result
+        .inventory
+        .iter()
+        .map(|item| (item.id.clone(), item.span.clone()))
+        .collect();
+    for signal in &mut result.signals {
+        if matches!(signal.kind.as_str(), "item_size" | "name_prefix") {
+            signal.evidence = signal
+                .item_ids
+                .iter()
+                .map(|id| inventory[id].clone())
+                .collect();
+        }
+    }
+    result.drafts[0].rationale = "mandatory \"\\\nλ".repeat(6000);
+    force_display_pressure(&mut result);
+    result
+}
+
+fn force_display_pressure(result: &mut SuggestSplitEnvelope) {
+    // Stabilize the budget's digit width before choosing the one-byte overflow.
+    result.limits.response_bytes = result.wire_bytes();
+    result.limits.response_bytes = result.wire_bytes() - 1;
+    assert!(result.wire_bytes() > result.limits.response_bytes);
+}
+
+fn expand_declaration_displays(result: &mut SuggestSplitEnvelope) {
+    let inventory: BTreeMap<_, _> = result
+        .inventory
+        .iter()
+        .map(|item| (item.id.clone(), item.span.clone()))
+        .collect();
+    let mut expanded = 0;
+    for signal in &mut result.signals {
+        if matches!(signal.kind.as_str(), "item_size" | "name_prefix") && signal.evidence.is_empty()
+        {
+            signal.evidence = signal
+                .item_ids
+                .iter()
+                .map(|id| inventory[id].clone())
+                .collect();
+            expanded += signal.evidence.len();
+        }
+    }
+    assert_eq!(
+        result
+            .counts
+            .omissions
+            .remove("duplicate_declaration_display_spans"),
+        Some(expanded)
+    );
+}
+
+#[test]
+fn duplicate_declaration_display_fit_reconstructs_exactly_and_honors_escaped_wire_boundary() {
+    let before = display_fixture();
+    let mut projected = before.clone();
+    assert!(
+        projected
+            .fit_duplicate_declaration_displays(display_controls())
+            .unwrap()
+    );
+    let exact = projected.wire_bytes();
+    assert!(exact > 65_536);
+    let value = serde_json::to_value(&projected).unwrap();
+    let duplicated = serde_json::to_vec(&serde_json::json!({
+        "content":[{"type":"text","text":value.to_string()}],
+        "structuredContent":value,"isError":false
+    }))
+    .unwrap()
+    .len()
+        + 4096;
+    assert_eq!(exact, duplicated);
+    assert!(
+        exact > 2 * value.to_string().len() + 4096,
+        "escaping must be counted"
+    );
+    expand_declaration_displays(&mut projected);
+    assert_eq!(
+        serde_json::to_value(&projected).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+
+    let mut boundary = before.clone();
+    boundary.limits.response_bytes = exact;
+    assert!(
+        boundary
+            .fit_duplicate_declaration_displays(display_controls())
+            .unwrap()
+    );
+    assert_eq!(boundary.wire_bytes(), exact);
+    let mut too_small = before;
+    too_small.limits.response_bytes = exact - 1;
+    let unchanged = serde_json::to_value(&too_small).unwrap();
+    assert!(
+        !too_small
+            .fit_duplicate_declaration_displays(display_controls())
+            .unwrap()
+    );
+    assert_eq!(serde_json::to_value(&too_small).unwrap(), unchanged);
+}
+
+#[test]
+fn declaration_display_sharing_refuses_descriptor_or_inventory_mismatches_atomically() {
+    for case in 0..22 {
+        let mut result = display_fixture();
+        let index = result
+            .signals
+            .iter()
+            .position(|s| s.kind == "name_prefix")
+            .unwrap();
+        match case {
+            0 => result.signals[index].evidence.reverse(),
+            1 => result.signals[index].evidence[0].text = Some("different bytes".into()),
+            2 => result.signals[index].evidence[0].text_omitted = true,
+            3 => result.signals[index].evidence[0].text_bytes += 1,
+            4 => result.signals[index].evidence[0].start.byte_column += 1,
+            5 => result.signals[index].evidence[0].end.line += 1,
+            6 => result.signals[index].evidence[0].range.end_byte += 1,
+            7 => result.signals[index].item_ids[0] = "missing".into(),
+            8 => {
+                result.inventory.pop();
+            }
+            9 => result.status = "partial".into(),
+            10 => result.draft_eligibility.membership_complete = false,
+            11 => result.draft_eligibility.evidence_complete = false,
+            12 => result.coverage.scope_exhaustive = false,
+            13 => {
+                result.counts.omissions.insert("inventory_items".into(), 1);
+            }
+            14 => result.inventory[1].id = result.inventory[0].id.clone(),
+            15 => {
+                result.signals[index].evidence.pop();
+            }
+            16 => {
+                result.signals[index].item_ids.clear();
+            }
+            17 => result.coverage.scan_exhausted = false,
+            18 => result.coverage.eligible_scan_complete = false,
+            19 => result.counts.returned_items -= 1,
+            20 => result.counts.inventory_items += 1,
+            21 => result.error = Some(DomainError::new("SOURCE_CHANGED", "changed")),
+            _ => unreachable!(),
+        }
+        force_display_pressure(&mut result);
+        let before = serde_json::to_value(&result).unwrap();
+        assert!(
+            !result
+                .fit_duplicate_declaration_displays(display_controls())
+                .unwrap(),
+            "case {case}"
+        );
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            before,
+            "case {case}"
+        );
+    }
+}
+
+#[test]
+fn sharing_is_pressure_only_and_never_removes_unique_occurrences_or_other_signal_kinds() {
+    let mut result = display_fixture();
+    result.limits.response_bytes = result.wire_bytes();
+    let before = serde_json::to_value(&result).unwrap();
+    result.fit(display_controls()).unwrap();
+    assert_eq!(serde_json::to_value(&result).unwrap(), before);
+
+    result.limits.response_bytes -= 1;
+    let other: Vec<_> = result
+        .signals
+        .iter()
+        .filter(|s| !matches!(s.kind.as_str(), "item_size" | "name_prefix"))
+        .map(|s| serde_json::to_value(s).unwrap())
+        .collect();
+    assert!(!other.is_empty());
+    assert!(
+        result
+            .fit_duplicate_declaration_displays(display_controls())
+            .unwrap()
+    );
+    let after: Vec<_> = result
+        .signals
+        .iter()
+        .filter(|s| !matches!(s.kind.as_str(), "item_size" | "name_prefix"))
+        .map(|s| serde_json::to_value(s).unwrap())
+        .collect();
+    assert_eq!(after, other);
+
+    let mut unsupported = display_fixture();
+    for signal in &mut unsupported.signals {
+        if matches!(signal.kind.as_str(), "item_size" | "name_prefix") {
+            signal.kind = "unique_declaration".into();
+        }
+    }
+    let before = serde_json::to_value(&unsupported).unwrap();
+    assert!(
+        !unsupported
+            .fit_duplicate_declaration_displays(display_controls())
+            .unwrap()
+    );
+    assert_eq!(serde_json::to_value(&unsupported).unwrap(), before);
+}
+
 #[test]
 fn descriptor_and_expired_work_checks_are_not_passing_evidence() {
     let mut result = SuggestSplitEnvelope::empty(Limits::default());

@@ -29,6 +29,18 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Advice-tier boundaries
 
+- Under full-response budget pressure, `item_size`/`name_prefix` declaration
+  displays may use `evidence:[]` with existing ordered `item_ids` pointing to
+  same-response inventory spans. Clients consuming those direct arrays must
+  dereference IDs in order when
+  `counts.omissions.duplicate_declaration_display_spans` is present. The count
+  describes proven identical duplicate displays, not missing analysis; no retained
+  handle is needed. Full-descriptor equality and complete inventory/analysis are
+  required. Unique reference/consumer occurrences, candidates, companions,
+  consequence summaries and draft records remain direct and unchanged. This is a
+  late fitting tier only; already-fitting output and retained canonical detail are
+  untouched. Genuine mandatory overflow still yields partial advice and withholds
+  complete drafts, at the unchanged default 2-MiB duplicated-response cap.
 - Historical detail requires explicit `retain_snapshot:true` on a completed
   analysis. Legacy full calls allocate no record; `response_mode:"compact"` alone
   does not retain. Compact is a separate manifest, not a complete shortened
