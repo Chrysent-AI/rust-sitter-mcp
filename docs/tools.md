@@ -1146,8 +1146,11 @@ acknowledges them. No cfg evaluation or safe-relocation guarantee is introduced.
   `conditional_written_route` or `inline_written`; uncertain inline scopes use
   `inline_uncertain`. Missing/unadmitted files, competing layouts and unsupported
   attributes/remapping are explicit limitations, not zero-consumer reassurance.
-  Admitted files with written test markers but no supported route are disclosed as
-  `unlinked_test_root`; directory names never establish Cargo targets/library aliases.
+  Admitted files with exact `#[test]` or positive `#[cfg(test)]` markers (ignoring
+  whitespace) but no supported route are disclosed as `unlinked_test_root`;
+  directory names never establish Cargo targets/library aliases. Other cfg expressions
+  mentioning `test`, including `cfg(not(test))` and `cfg_attr(test, ...)`, yield anchored
+  `unsupported_test_cfg` limitations, not test-root or coupling evidence.
 - `records[]` has a response-local `test-observation/N` ID, `channel`, `access_kind`,
   original occurrence `anchor`, known enclosing function/modules, optional written
   module segments, `route_ids`, `route_evidence`, candidate `target_item_ids`,

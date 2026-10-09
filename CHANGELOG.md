@@ -68,6 +68,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Distinguish positive `#[cfg(test)]` root markers from other cfg mentions of
+  `test`; disclose the latter as uncertainty without implying test coupling.
 * Distinguish inspection companions' selection-completeness, boundary-dependency
   and unproved-association review obligations from observed-consumer classification;
   emit `candidate/N` IDs and deterministic unique response-local `companion/N` IDs.
