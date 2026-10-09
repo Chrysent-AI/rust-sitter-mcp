@@ -26,7 +26,7 @@ impl Fixture {
         );
         fs::write(
             root.join("lib.rs"),
-            "fn alpha_read() { alpha_parse(); }\nfn alpha_parse() {}\nfn retained() {}\n",
+            "fn alpha_read() { alpha_parse(); }\nfn alpha_parse() { alpha_read(); }\nfn retained() {}\n",
         )
         .unwrap();
         Self(root)
@@ -143,7 +143,16 @@ fn injected_small_candidate_cap_stops_at_its_first_excess() {
 fn final_fit_tier_accounts_membership_without_losing_root_or_snapshot() {
     let repo = Fixture::new();
     let source = (0..1500)
-        .map(|i| format!("fn unit_{i}() {{}}\n"))
+        .map(|i| {
+            format!(
+                "fn unit_{i}() {{ {} }}\n",
+                if i < 2 {
+                    format!("unit_{}();", i ^ 1)
+                } else {
+                    String::new()
+                }
+            )
+        })
         .collect::<String>();
     fs::write(repo.0.join("lib.rs"), source).unwrap();
     let mut request = repo.request();
@@ -341,7 +350,7 @@ fn impl_heavy_mixed_layout_drafts_members_without_duplicate_body_observations() 
     fs::create_dir_all(repo.0.join("flat/legacy")).unwrap();
     fs::write(repo.0.join("flat/legacy/mod.rs"), "mod heavy;\n").unwrap();
     fs::write(repo.0.join("flat/legacy/heavy.rs"),
-        "struct Recorder;\nimpl Recorder {\nfn record_start() { missing(); }\nfn record_stop() {}\nfn other() {}\n#[cfg(unknown)] fn record_hidden() {}\n}\n").unwrap();
+        "struct Recorder;\nimpl Recorder {\nfn record_start() { missing(); self.record_stop(); }\nfn record_stop() {}\nfn other() {}\n#[cfg(unknown)] fn record_hidden() {}\n}\n").unwrap();
     let mut request = repo.request();
     request.source_path = "flat/legacy/heavy.rs".into();
     request.limits.diagnostic_count = 100_000;

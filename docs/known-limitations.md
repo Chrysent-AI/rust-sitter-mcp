@@ -29,6 +29,18 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Advice-tier boundaries
 
+- Ownership cores use written SCCs, unique nominal/impl associations and bounded
+  same-owner member/signature-payload seeds, not names or inferred architectural
+  ownership. Companions and impl/member alternatives are inspection-only and never
+  expand selection. Shared/public/import/unsupported/uncertain nodes stop traversal.
+- `observed_exclusive` means completed admitted written observations only. Macro,
+  inline-module, forwarded named-route, receiver and unadmitted/generated contexts
+  remain unproved. Boundary observations disclose separate coverage and candidates;
+  they neither change local blocker forecasts nor assess destination/batch repairability.
+- Completed analysis without a supported core reports `no_credible_written_partition`
+  with no balanced primary. Existing balanced alternatives remain available when
+  structural advice exists until the separately announced default cutover.
+
 - Inventory includes overlapping whole impl and member descriptors, with explicit
   containment and cross-group links. Non-additive size labels preserve original
   descriptor byte/line values and sums; no unique-byte or generated-module-size

@@ -50,7 +50,7 @@ pub(super) fn scope_trivia(
     }
     Ok(())
 }
-fn signal(kind: &str, members: Vec<String>, evidence: Vec<SourceSlice>) -> Signal {
+pub(super) fn signal(kind: &str, members: Vec<String>, evidence: Vec<SourceSlice>) -> Signal {
     Signal {
         id: String::new(),
         kind: kind.into(),
@@ -65,7 +65,7 @@ fn signal(kind: &str, members: Vec<String>, evidence: Vec<SourceSlice>) -> Signa
         limitations: Vec::new(),
     }
 }
-fn push(result: &mut SuggestSplitEnvelope, value: Signal) -> Result<(), DomainError> {
+pub(super) fn push(result: &mut SuggestSplitEnvelope, value: Signal) -> Result<(), DomainError> {
     if result.signals.len() >= 100_000 {
         return Err(DomainError::new(
             "reference_work_limit",
@@ -365,9 +365,11 @@ fn references(
     let mut edges: BTreeMap<(usize, usize), Vec<ByteRange>> = BTreeMap::new();
     let mut ambiguous_edges = BTreeSet::new();
     let mut test_edges = BTreeSet::new();
+    let mut signature_edges = BTreeSet::new();
     for owner in 0..result.inventory.len() {
         controls.check()?;
         let item = &result.inventory[owner];
+        let enclosing_impl_id = item.enclosing_impl_id.clone();
         let root = item_node(data, item);
         let tests = items::test_scope(
             item,
@@ -433,7 +435,11 @@ fn references(
                         }
                         (target, Some(first))
                     }
-                } else if simple && segments.first() == Some(&"self") && segments.len() == 2 {
+                } else if simple
+                    && segments.len() == 2
+                    && (segments.first() == Some(&"self")
+                        || (segments.first() == Some(&"Self") && enclosing_impl_id.is_some()))
+                {
                     (segments[1], None)
                 } else if simple
                     && segments.first() == Some(&"crate")
@@ -541,6 +547,18 @@ fn references(
                     } else if lexical == items::LexicalBinding::Absent {
                         for target in targets.expect("candidate targets") {
                             controls.check()?;
+                            if segments.first() == Some(&"Self")
+                                && result.inventory[*target].enclosing_impl_id != enclosing_impl_id
+                            {
+                                continue;
+                            }
+                            if node.kind() == "type_identifier"
+                                && root
+                                    .child_by_field_name("body")
+                                    .is_some_and(|b| node.end_byte() <= b.start_byte())
+                            {
+                                signature_edges.insert((owner, *target));
+                            }
                             result.counts.reference_candidates += 1;
                             if result.counts.reference_candidates
                                 > result.effective_work_limits.reference_candidates
@@ -618,6 +636,10 @@ fn references(
         value.to_item_id = Some(result.inventory[to].id.clone());
         value.count = occurrences.len();
         value.facts.insert("occurrences".into(), occurrences.len());
+        value.facts.insert(
+            "signature_type".into(),
+            usize::from(signature_edges.contains(&(from, to))),
+        );
         let ambiguous = ambiguous_edges.contains(&(from, to));
         value
             .facts
@@ -670,6 +692,7 @@ pub(super) fn collect(
     sections(result, controls)?;
     shared_headings(&source.source, result, controls)?;
     references(source, data, module, routes, lines, controls, result)?;
+    super::ownership::structural_signals(source, data, lines, controls, result)?;
     for index in 0..result.inventory.len() {
         controls.check()?;
         let item = &result.inventory[index];

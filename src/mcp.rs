@@ -273,7 +273,9 @@ impl Server {
 Use for:
 - Inventory functions, types, whole impl blocks and their direct written associated units in a large file; supported inherent methods/consts can enter draft sibling groups.
 - Compare up to two draft partitions, with reasons, original-range sizes, explicit impl/member containment and cross-group overlap links. Affected sizes are labeled non_additive; exact-once item IDs are not a disjoint byte partition or generated module size estimate.
-- Choose items to submit later as an explicit move_item batch.
+- Inspect ranked structural ownership_candidates separately from inspection companions and whole-impl/member alternatives; weak naming/section/attribute facts never join cores.
+- Observe admitted-file incoming/outgoing written routes through separately scoped boundary_observations; not symbol resolution, repairability or a change to local forecasts.
+- Choose items to submit later as an explicit move_item batch. Completed analysis with no supported core reports partition_outcome no_credible_written_partition, not a balanced primary; incomplete analysis cannot establish that negative.
 Does NOT:
 - Execute a split, extract inline-module bodies, or return an applicable move plan.
 - Resolve a call graph or trait methods, perform semantic rename, expand macros, or evaluate cfg/types.

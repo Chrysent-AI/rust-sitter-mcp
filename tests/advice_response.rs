@@ -91,10 +91,11 @@ fn assert_groups(compact: &Value, full: &Value) {
 #[test]
 fn default_counts_first_advice_keeps_full_drafts_and_exact_risk_links() {
     let source = format!(
-        "fn retained() {{}}\n{}",
+        "fn retained() {{ risky_0(0); }}\n{}",
         (0..140)
             .map(|i| format!(
-                "fn risky_{i}(value: u8) {{ {} }}\n",
+                "fn risky_{i}(value: u8) {{ {} {} }}\n",
+                if i == 0 { "let _ = retained;" } else { "" },
                 "value.method();".repeat(12)
             ))
             .collect::<String>()
@@ -321,7 +322,7 @@ fn stdio_advice_exposes_containment_without_changing_descriptor_sizes() {
 
 #[test]
 fn exact_file_scope_still_honestly_reports_unadmitted_sibling_destinations() {
-    let repo = fixture("fn retained() {}\nfn moved() {}\n");
+    let repo = fixture("fn retained() { moved(); }\nfn moved() { retained(); }\n");
     let mut args = request(&repo);
     args["paths"] = json!(["cases/advice/lib.rs"]);
     let mut client = Client::new();

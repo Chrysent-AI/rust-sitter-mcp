@@ -9,6 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add structural `ownership_candidates`, inspection-only companions and explicit
+  whole-impl/member alternatives with deterministic integer ranking; disclose
+  separately scoped admitted-file `boundary_observations` without move-safety claims.
+
 * Link inventory members to enclosing impl IDs and expose original-range containment
   and cross-group overlap records in `suggest_split`; label affected sizes as
   non-additive without changing descriptor sizes or exact-once draft membership.
@@ -45,6 +49,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Stop forming credible advice cores from weak naming/section/attribute/adjacency
+  signals; completed analysis with no supported core reports
+  `no_credible_written_partition` rather than a balanced primary. Existing balancing
+  remains an alternative when structural advice exists, pending the announced cutover.
 * Explain every `BUSY` rejection: the analysis slot is occupied, the rejected call
   starts no analysis and is not queued; wait for active work or cancellation to
   settle, then retry serially, without a retry deadline or another request's identity.
