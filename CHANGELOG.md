@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add explicit private `new_child` extraction plans through the existing planner
+  for ordinary flat-file, `mod.rs` and crate-root parents, including one absent
+  conventional flat-parent directory. Child-containing batches use schema 3 with
+  linked directory preconditions and complete all-or-nothing artifacts; preserve
+  legacy schema 2, strict proof boundaries and read-only behavior. Inactive request
+  export accepts caller-selected child geometry without executing the planner.
+
 * Add read-only `export_move_request` for one complete inactive ordinary request
   from explicit retained unit/destination entries, with exact item/header bytes,
   separate review/provenance and current observational corpus/scope/ignore/mode/

@@ -11,7 +11,7 @@ use std::{
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 pub struct Fixture(pub PathBuf);
 impl Fixture {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         let root = std::env::temp_dir().join(format!(
             "rust-sitter-fixture-{}-{}",
             std::process::id(),

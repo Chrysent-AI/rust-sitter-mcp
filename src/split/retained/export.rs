@@ -413,14 +413,16 @@ fn validate_destination(
                 check(a)?;
             }
         }
-        Destination::NewSibling { parent_path, .. } => {
+        Destination::NewSibling { parent_path, .. } | Destination::NewChild { parent_path, .. } => {
             scope::normalized_path(parent_path).map_err(|_| invalid())?;
             if !parent_path.ends_with(".rs") {
                 return Err(invalid());
             }
             let name = items::module_name(path).map_err(|_| invalid())?;
             let root = normalized["crate_root"].as_str().ok_or_else(invalid)?;
-            if Path::new(path).parent() != Path::new(&source.path).parent()
+            let child = matches!(destination, Destination::NewChild { .. });
+            if (child && parent_path != &source.path)
+                || (!child && Path::new(path).parent() != Path::new(&source.path).parent())
                 || items::child_path(parent_path, root, name) != path
             {
                 return Err(invalid());

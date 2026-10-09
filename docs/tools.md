@@ -720,7 +720,7 @@ that anchor, the whole impl `range`, unchanged `header`, nominal `written_type` 
 impls, cfg/unexamined member attributes, generic members and macro-generated members
 remain excluded. Generic/where impl headers can be copied unchanged when their
 written dependencies and type identity are preserved; no header transformation is
-supported. Existing/new-sibling destinations synthesize audited `impl_wrapper`
+supported. Existing/new-sibling/new-child file destinations synthesize audited `impl_wrapper`
 rewrites without reindentation. `{"kind":"existing_impl","path":"src/target.rs",
 "implementation":<whole impl anchor>,"before_item":<optional member anchor>}`
 merges only into a byte-identical header resolving to the same written type; an
@@ -738,9 +738,45 @@ The ordinary chain audit uses the same identity-inert lint/doc classifier as con
 
 For `move_item`, one uniquely configured `semantic_configuration` entry matching `crate_root` can also admit active `cfg`/`cfg_attr` chain attributes, without requiring semantic resolution, under its explicitly listed ON features/cfg atoms. All operands must be known; unlisted atoms remain unknown, not OFF, even in a Boolean expression with a determining operand. Known-OFF declarations do not supply edges. Invalid matching edition/cfg data or duplicate matching roots, unknown/unsupported payloads, path remapping, prelude controls, parser recovery and competing declarations/layouts retain their vetoes. The root's `ModuleEvidence.assumptions` discloses positive cfg use; this is not Cargo discovery or compilation. `suggest_split` has no configuration opt-in and still refuses condition-dependent edges.
 
-A new destination must be an absent literal `.rs` sibling of every assigned source, in an existing directory. Its basename is an ASCII identifier, not `_`, `mod`, a raw identifier, or any Rust strict/reserved/contextual keyword (including `gen`, `raw`, `safe`, `union` and `macro_rules`). No directory creation or same-file reordering is supported. Symlinks, hard exclusions, nested repositories, ignores, caller filters, existing entries, case-folded aliases, competing `name/mod.rs` layouts and declaration conflicts fail closed. Use an admitted existing directory in `paths`, not an absent path.
+A `new_sibling` destination must be an absent literal `.rs` sibling of every assigned source, in an existing directory. Its basename is an ASCII identifier, not `_`, `mod`, a raw identifier, or any Rust strict/reserved/contextual keyword (including `gen`, `raw`, `safe`, `union` and `macro_rules`). The server never creates directories or reorders items within one file; only `new_child` can disclose the bounded external directory prerequisite below. Symlinks, hard exclusions, nested repositories, ignores, caller filters, existing entries, case-folded aliases, competing `name/mod.rs` layouts and declaration conflicts fail closed. Use an admitted existing directory in `paths`, not an absent path.
 
 Ordinary children of the root or an existing `mod.rs` reside in that file's directory. Children of non-root `foo.rs` reside in `foo/`. Thus moving `src/source.rs` → `src/moved.rs` usually needs parent `src/lib.rs`, **not** `src/source.rs`. Existing legacy layouts are supported with ordinary evidence, but `mod.rs` is never created or restructured. One matching declaration with admitted chain attributes is reused without a parent edit unless a necessary visibility repair is separately linked. Relative/re-scoped restrictions, unverified access and public exposure requiring an API decision remain blockers. Incompatible layouts cannot be acknowledged away.
+
+### Private direct-child extraction (`new_child`)
+
+```json
+{"repo_path":"/absolute/project","crate_root":"src/lib.rs","paths":["src"],"moves":[{"item":{"path":"src/worker.rs","range":{"start_byte":0,"end_byte":14},"expected_text":"fn helper() {}"},"destination":{"kind":"new_child","parent_path":"src/worker.rs","path":"src/worker/detail.rs"}}]}
+```
+
+Every assigned unit must originate in the existing admitted `parent_path`. The
+path must exactly match that parent's evidenced ordinary child geometry:
+`foo.rs` → `foo/detail.rs`, `foo/mod.rs` → `foo/detail.rs`, or a child beside
+an evidenced crate root. The basename rules above still apply. No new `mod.rs`,
+inline parent, layout conversion, invented ancestor chain or unrelated-source
+aggregation is supported. Admit an existing higher directory in `paths`, such as
+`src`, not the absent `src/worker` or future filename. Positive globs must admit
+the future file. Generic `new_sibling` admission remains strict.
+
+For a non-root flat-file parent, exactly one absent conventional directory can
+be disclosed; its higher ancestors must already safely exist. Existing directories
+also work. In-root inherited ignore rules are checked prospectively for both the
+directory and leaf; negation cannot reopen a pruned ancestor. Hard exclusions,
+symlinks, non-directories, nested repositories, case aliases, competing
+`detail.rs`/`detail/mod.rs` layouts and batch conflicts fail closed. An absent
+directory is never read, traversed or created by the server.
+
+The planner synthesizes one private ordinary `mod detail;`, or reuses one unique
+compatible private dangling declaration under the existing admitted attribute and
+positive configuration rules. Public/restricted, inline, remapped, ambiguous or
+unproved declarations refuse rather than convert. The child module is never
+widened to support consumers outside its parent's access region. Retain public
+facades explicitly by omitting them from moves; no re-export shim is synthesized.
+Child code does not inherit parent imports: only evidenced explicit import/path
+repairs and audited verbatim inherent-member wrappers are generated. The same
+original/final binding, public-path, syntax, trivia, module and narrow-visibility
+audits apply. Field/constructor/concrete-type/receiver and macro/trait/generic
+uncertainty remains blocking; common historical extractions are not promised to
+be applicable merely because this layout is expressible.
 
 ### Known structural limitations
 
@@ -933,11 +969,28 @@ Place that object in `rewrite_overrides:[…]`, not in a separate apply call. Th
 
 For decision field meanings and display-only labels, see [Consuming decisions and member labels](#consuming-decisions-and-member-labels).
 
-`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `decision_groups`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Default outcomes disclose `semantic:"not_performed"`; explicitly configured opt-in resolution uses the scoped evidence/label described above. Only an applicable plan has all three non-null artifacts; blocked/failed/incomplete results set **edits, creations and patch to null**, never a safe subset. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
+`plan` contains `state`, `applicable`, `selected_count`, `moves`, `trivia_decisions`, `decisions`, `decision_groups`, `chain_diagnostics`, `rewrites`, `origins`, `base_files`, `blockers`, `edits`, `created_files`, `patch` and `integrity`. Default outcomes disclose `semantic:"not_performed"`; explicitly configured opt-in resolution uses the scoped evidence/label described above. Legacy-only batches use schema 2 and its unchanged serialized shape: an applicable plan has all three non-null artifacts, and unsuccessful results set edits, creations and patch to null. Every typed batch containing `new_child` uses **schema 3**, including mixed, blocked, failed, cancelled and incomplete results, selected before analysis. Schema 3 adds `directory_preconditions` and `directory_diagnostics` to `plan`, and `directory_precondition_ids` to each created file. Applicable schema-3 results have all four artifact members non-null; unsuccessful results set **edits, created_files, directory_preconditions and patch to null together**. Reject unknown/unsupported artifact versions before interpreting or applying any artifact; never partially apply a mixed batch. `moves:[]` is an explicit checked no-op with empty edits/creations/patch and no virtual syntax claim; stray overrides are rejected.
 
 Creations have complete `content`, `must_be_absent:true`, mode `100644`, parent and provenance links. `declaration_link` is discriminated: `{kind:"synthesized",rewrite_id}` resolves to a module rewrite, or `{kind:"reused",path,span}` resolves to the original declaration. Reuse alone adds no parent base/edit or fictitious rewrite. `declaration_visibility_rewrite_id`, when present, resolves to the separately audited required visibility repair on either a synthesized or reused declaration. Root-private modules ordinarily already admit descendant consumers and are not blanket-widened. Source files remain present even when emptied.
 
-Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
+Schema-3 `directory_preconditions` are deduplicated records with `id`, root-relative
+`path` (`.` for the repository root), `observed_state:absent|existing_directory`,
+`required_state:absent_then_directory|existing_directory`,
+`basis:{kind,parent_path,crate_root,parent_module_segments}`, and
+`dependent_created_file_ids`. Basis kinds are `flat_file_child`, `mod_rs_child`,
+`crate_root_child`, or `new_sibling` for a legacy creation in a mixed batch.
+Created-file `directory_precondition_ids` and dependent creation IDs resolve in
+both directions. There is **no directory mode, content, source range or empty-directory
+Git artifact**; permissions are caller policy. Existing-directory records are
+preconditions, not recreation instructions. Failure `directory_diagnostics`
+contain `id`, `reason`, `path`, `parent_path`, `expected_state` and `observed_state`,
+without any creation instruction or invented range. Directory state/identity
+races use `CREATION_RACE` with `directory_creation_race`; file appearance uses
+`file_creation_race`, and competing layouts use `competing_file_layout`. Unsupported
+admission uses existing typed errors with `directory_context_unproved` diagnostics;
+missing higher ancestors disclose `directory_creation_unsupported_layout`.
+
+Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. For schema 3, first recheck source/parent bytes and modes, directory captured states and identities, effective in-root ignore inputs, and competing layouts; then externally create only the disclosed `absent_then_directory` paths with caller-chosen permissions. Any appearance of a previously absent directory invalidates the plan, even if now safe. A Git patch instead creates the nested file (and necessary directory) without a separate directory artifact; `git apply --check` alone does not prove these freshness inputs. The server observationally repeats these checks before publication, never executes Cargo, formatters, builds or caller scripts, and creates nothing. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
 
 Blocked, failed and incomplete move previews are counts-first: `decision_groups`
 contains complete analyzed counts, blocking flags and one routing summary for
@@ -1507,8 +1560,10 @@ candidate/group ID or implicit companion closure. Required identity is the retai
 `analysis_handle` and expected `snapshot_id`; optional top-level `analysis_id` and
 `scope_input_digest` must match when supplied. Every entry requires an
 `analysis_id`-qualified `unit_ref` and a complete caller-chosen ordinary
-`Destination`: `existing`, `new_sibling` or `existing_impl`. No `new_child` variant
-is supported. IDs are bounded to 512 bytes; analysis identity strings to 200 bytes.
+`Destination`: `existing`, `new_sibling`, `new_child` or `existing_impl`. For
+`new_child`, `parent_path` must equal the selected unit's source and the path must
+match its ordinary direct-child geometry. This syntax check does not run the
+planner or prove prospective directory admission. IDs are bounded to 512 bytes; analysis identity strings to 200 bytes.
 Duplicate IDs, unknown IDs, cross-analysis qualifiers and overlapping original
 ranges (including whole-impl/member alternatives) refuse instead of pruning.
 Supported whole-impl alternatives are distinct from the advisory instruction to
@@ -1516,7 +1571,7 @@ partition their members; member exclusions and syntax recovery still refuse.
 
 All objects are strict: unknown fields, missing destinations and unsupported
 variants fail. Destination validation checks normalized root-relative Rust paths,
-literal sibling/name/parent geometry, member-only `existing_impl`, and internally
+literal sibling or explicit child/name/parent geometry (including child source/parent equality), member-only `existing_impl`, and internally
 consistent complete caller `implementation`/`before_item` anchors. It does **not**
 prove destination admission/absence, declaration identity, bindings, privacy,
 trivia ownership or batch applicability. Those remain ordinary `move_item` audits.
@@ -1683,7 +1738,7 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
 - `blocks_applicability` says whether the concern blocks a move (or represents a
   prospective execution concern in advice). Neither a choice nor a complete
   advice envelope implies an applicable move. Require `plan.applicable:true` and
-  non-null `edits`, `created_files` and `patch` before treating a move as applicable.
+  non-null `edits`, `created_files` and `patch`, plus non-null `directory_preconditions` for schema 3, before treating a move as applicable.
 
 Both tools also publish `decision_groups[]` (inside `plan` for moves). Each group
 contains `category`, `reason`, `route`, `blocks_applicability`, `decision_ids` and
@@ -1694,8 +1749,10 @@ contiguous runs, e.g. `decision_ids:[{"first_id":"d/0","count":2},
 A run increments the numeric suffix of the first ID; run counts sum to group count.
 This run encoding applies to **every** `move_item` response (blocked and
 applicable), full `suggest_split` responses and compact manifest decision groups.
-Move and full advice publish `schema_version:2` (v1 listed group decision IDs as
-plain strings); manifest/detail envelopes separately publish schema 1. Search tools
+Legacy-only moves and full advice publish `schema_version:2` (v1 listed group
+decision IDs as plain strings); typed moves containing `new_child` publish schema 3
+for the whole batch, including failures. Manifest/detail/scaffold envelopes
+separately publish schema 1. Search tools
 remain on schema version 1. Draft/risk decision IDs remain individual strings and can be joined to
 the exact runs even when per-occurrence detail is omitted.
 Both tools' groups additionally contain `unresolved_consequence` and `actions[]`: one

@@ -234,6 +234,162 @@ impl Scope {
         deadline: Instant,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<(), DomainError> {
+        self.admit_candidate(path, None, None, deadline, cancelled)
+            .map(|_| ())
+    }
+    /// Only the planner's evidenced direct child may propose its conventional directory.
+    /// This policy never changes strict admission for other creation classes.
+    pub(crate) fn admit_child_path(
+        &self,
+        path: &str,
+        policy: ChildDirectoryPolicy,
+        deadline: Instant,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<ChildPathObservation, DomainError> {
+        normalized_path(path)?;
+        let directory = Path::new(path).parent().expect("normalized child parent");
+        let mut inputs = ScopeInputManifest::default();
+        let identity = self.admit_candidate(
+            path,
+            matches!(policy, ChildDirectoryPolicy::ConventionalFlatFile).then_some(directory),
+            Some(&mut inputs),
+            deadline,
+            cancelled,
+        )?;
+        Ok(ChildPathObservation {
+            directory: if directory.as_os_str().is_empty() {
+                ".".into()
+            } else {
+                directory.to_str().expect("normalized UTF-8 path").into()
+            },
+            identity,
+            inputs,
+        })
+    }
+    /// Observe both ordinary module spellings without following a competing symlink.
+    pub(crate) fn competing_child_layout(
+        &self,
+        path: &str,
+        deadline: Instant,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<bool, DomainError> {
+        let directory = self
+            .root
+            .join(Path::new(path).parent().expect("normalized parent"));
+        let name = Path::new(path).file_stem().expect("Rust filename");
+        match fs::symlink_metadata(&directory) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => {
+                return Err(DomainError::new(
+                    "scan_incomplete",
+                    "cannot observe competing layout directory",
+                ));
+            }
+            Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
+                return Err(DomainError::new(
+                    "MODULE_DECLARATION_CONFLICT",
+                    "unsafe competing layout ancestor",
+                ));
+            }
+            Ok(_) => {}
+        }
+        match fs::read_dir(&directory) {
+            Ok(entries) => {
+                for entry in entries {
+                    crate::items::check(deadline, cancelled)?;
+                    let entry = entry.map_err(|_| {
+                        DomainError::new(
+                            "scan_incomplete",
+                            "cannot inspect competing layout aliases",
+                        )
+                    })?;
+                    if let (Some(found), Some(wanted)) = (entry.file_name().to_str(), name.to_str())
+                        && found != wanted
+                        && found.to_lowercase() == wanted.to_lowercase()
+                    {
+                        return Err(DomainError::new(
+                            "MODULE_DECLARATION_CONFLICT",
+                            "case-folded competing module directory",
+                        ));
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => {
+                return Err(DomainError::new(
+                    "scan_incomplete",
+                    "cannot observe competing layout",
+                ));
+            }
+        }
+        let alternative = directory.join(name);
+        match fs::symlink_metadata(&alternative) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => {
+                return Err(DomainError::new(
+                    "scan_incomplete",
+                    "cannot observe competing layout",
+                ));
+            }
+            Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
+                return Err(DomainError::new(
+                    "MODULE_DECLARATION_CONFLICT",
+                    "unsafe competing module directory",
+                ));
+            }
+            Ok(_) => {}
+        }
+        match fs::symlink_metadata(alternative.join(".git")) {
+            Ok(_) => {
+                return Err(DomainError::new(
+                    "MODULE_DECLARATION_CONFLICT",
+                    "nested repository competing layout",
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(DomainError::new(
+                    "scan_incomplete",
+                    "cannot inspect competing repository boundary",
+                ));
+            }
+        }
+        match fs::symlink_metadata(alternative.join("mod.rs")) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(DomainError::new(
+                "scan_incomplete",
+                "cannot inspect competing module file",
+            )),
+        }
+    }
+    pub(crate) fn recheck_child_directory(
+        &self,
+        observation: &ChildPathObservation,
+    ) -> Result<(&'static str, bool), DomainError> {
+        match fs::symlink_metadata(self.root.join(&observation.directory)) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => Ok((
+                "existing_directory",
+                observation.identity == Some((meta.dev(), meta.ino(), meta.mode())),
+            )),
+            Ok(_) => Ok(("unsafe_or_non_directory", false)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(("absent", observation.identity.is_none()))
+            }
+            Err(_) => Err(DomainError::new(
+                "scan_incomplete",
+                "cannot recheck child directory state",
+            )),
+        }
+    }
+    fn admit_candidate(
+        &self,
+        path: &str,
+        prospective_directory: Option<&Path>,
+        mut inputs: Option<&mut ScopeInputManifest>,
+        deadline: Instant,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<(u64, u64, u32)>, DomainError> {
         normalized_path(path)?;
         let relative = Path::new(path);
         if !self.admits(relative) {
@@ -245,6 +401,8 @@ impl Scope {
         let parts: Vec<_> = relative.components().collect();
         let mut current = self.root.clone();
         let mut ignores = Vec::new();
+        let mut missing_directory = false;
+        let mut directory_identity = None;
         for (index, component) in parts.iter().enumerate() {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(DomainError::new("CANCELLED", "request cancelled"));
@@ -255,8 +413,22 @@ impl Scope {
                     "new-path observation deadline",
                 ));
             }
+            if !missing_directory && let Some(manifest) = inputs.as_deref_mut() {
+                let meta = fs::symlink_metadata(&current).map_err(|_| {
+                    DomainError::new("scan_incomplete", "cannot inspect ancestor identity")
+                })?;
+                manifest.identity(&current, &self.root, &meta)?;
+                manifest.observe(&current, &self.root)?;
+                if index + 1 == parts.len() {
+                    directory_identity = Some((meta.dev(), meta.ino(), meta.mode()));
+                }
+            }
             let ignore_path = current.join(".gitignore");
-            match fs::symlink_metadata(&ignore_path) {
+            match if missing_directory {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            } else {
+                fs::symlink_metadata(&ignore_path)
+            } {
                 Ok(meta) => {
                     if !meta.is_file() || meta.file_type().is_symlink() {
                         return Err(DomainError::new(
@@ -290,9 +462,14 @@ impl Scope {
                 ));
             }
             // Conservatively reject differently cased spellings, even on case-sensitive hosts.
-            let entries = fs::read_dir(&current)
-                .map_err(|_| DomainError::new("scan_incomplete", "cannot inspect path aliases"))?;
-            for entry in entries {
+            let entries = if missing_directory {
+                None
+            } else {
+                Some(fs::read_dir(&current).map_err(|_| {
+                    DomainError::new("scan_incomplete", "cannot inspect path aliases")
+                })?)
+            };
+            for entry in entries.into_iter().flatten() {
                 crate::items::check(deadline, cancelled)?;
                 let entry = entry.map_err(|_| {
                     DomainError::new("scan_incomplete", "directory observation failed")
@@ -364,10 +541,23 @@ impl Scope {
                     }
                 }
                 Err(e) if !is_dir && e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        && prospective_directory
+                            .is_some_and(|dir| self.root.join(dir) == current)
+                        && index + 2 == parts.len()
+                        && !missing_directory =>
+                {
+                    missing_directory = true;
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     return Err(DomainError::new(
                         "INVALID_DESTINATION",
-                        "no directory creation is supported",
+                        if prospective_directory.is_some() {
+                            "directory_creation_unsupported_layout: higher ancestors must exist"
+                        } else {
+                            "no directory creation is supported"
+                        },
                     ));
                 }
                 Err(_) => {
@@ -378,7 +568,7 @@ impl Scope {
                 }
             }
         }
-        Ok(())
+        Ok(directory_identity)
     }
     fn admits(&self, path: &Path) -> bool {
         self.paths
@@ -389,6 +579,15 @@ impl Scope {
                 .as_ref()
                 .is_none_or(|globs| globs.matched(path, false).is_whitelist())
     }
+}
+pub(crate) enum ChildDirectoryPolicy {
+    Existing,
+    ConventionalFlatFile,
+}
+pub(crate) struct ChildPathObservation {
+    pub directory: String,
+    pub identity: Option<(u64, u64, u32)>,
+    pub inputs: ScopeInputManifest,
 }
 pub fn normalized_path(path: &str) -> Result<(), DomainError> {
     if path.is_empty()

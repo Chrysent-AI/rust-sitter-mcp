@@ -13,7 +13,18 @@ pub fn anchor(repo: &Fixture, path: &str, text: &str) -> Value {
     json!({"path":path,"range":{"start_byte":start,"end_byte":start+text.len()},"expected_text":text})
 }
 
+pub fn require_schema(envelope: &Value, supported: &[u64]) -> Result<u64, &'static str> {
+    let version = envelope["schema_version"]
+        .as_u64()
+        .ok_or("missing artifact schema")?;
+    if supported.contains(&version) {
+        Ok(version)
+    } else {
+        Err("unsupported artifact schema")
+    }
+}
 pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
+    let version = require_schema(envelope, &[2, 3]).expect("supported artifact schema");
     let plan = &envelope["plan"];
     assert_eq!(envelope["status"], "complete", "{envelope}");
     assert_eq!(plan["applicable"], true, "{envelope}");
@@ -41,6 +52,7 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
         assert!(!patch.contains(forbidden));
     }
     let copy = repo.copy();
+    let reconstructed = repo.copy();
     let edits = plan["edits"].as_array().unwrap();
     let mut expected = tree(&repo.0);
     for base in plan["base_files"].as_array().unwrap() {
@@ -78,6 +90,55 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
         }
         entry.bytes = output.into_bytes();
     }
+    if version == 3 {
+        for directory in plan["directory_preconditions"]
+            .as_array()
+            .expect("schema-3 obligations")
+        {
+            let path = directory["path"].as_str().unwrap();
+            assert!(directory.get("mode").is_none());
+            let required = directory["required_state"].as_str().unwrap();
+            if required == "absent_then_directory" {
+                assert_eq!(directory["observed_state"], "absent");
+                assert!(!repo.0.join(path).exists());
+                assert!(repo.0.join(path).parent().unwrap().is_dir());
+                fs::create_dir(reconstructed.0.join(path)).unwrap();
+                expected.insert(
+                    Path::new(path).to_owned(),
+                    tree(&reconstructed.0).remove(Path::new(path)).unwrap(),
+                );
+            } else {
+                assert_eq!(required, "existing_directory");
+                assert_eq!(directory["observed_state"], "existing_directory");
+                assert!(repo.0.join(path).is_dir());
+            }
+            for id in directory["dependent_created_file_ids"].as_array().unwrap() {
+                let file = plan["created_files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|f| &f["id"] == id)
+                    .unwrap();
+                let parent = Path::new(file["path"].as_str().unwrap()).parent().unwrap();
+                assert_eq!(
+                    if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    },
+                    Path::new(path)
+                );
+                assert!(
+                    file["directory_precondition_ids"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&directory["id"])
+                );
+            }
+        }
+    } else {
+        assert!(plan.get("directory_preconditions").is_none());
+    }
     let mut new_paths = Vec::new();
     for file in plan["created_files"].as_array().unwrap() {
         let path = file["path"].as_str().unwrap();
@@ -87,12 +148,32 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
         assert!(!edits.iter().any(|e| e["path"] == path));
         new_paths.push(path.to_owned());
         // Build the independent JSON tree in a disposable copy, not the caller tree.
-        fs::write(copy.0.join(path), file["content"].as_str().unwrap()).unwrap();
+        if version == 3 {
+            let ids = file["directory_precondition_ids"].as_array().unwrap();
+            assert_eq!(ids.len(), 1);
+            assert!(
+                plan["directory_preconditions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["id"] == ids[0]
+                        && d["dependent_created_file_ids"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&file["id"]))
+            );
+        } else {
+            assert!(file.get("directory_precondition_ids").is_none());
+        }
+        fs::write(
+            reconstructed.0.join(path),
+            file["content"].as_str().unwrap(),
+        )
+        .unwrap();
         expected.insert(
             Path::new(path).to_owned(),
-            tree(&copy.0).remove(Path::new(path)).unwrap(),
+            tree(&reconstructed.0).remove(Path::new(path)).unwrap(),
         );
-        fs::remove_file(copy.0.join(path)).unwrap();
         let link = &file["declaration_link"];
         if link["kind"] == "synthesized" {
             assert!(
@@ -113,6 +194,7 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
             );
         }
     }
+    let before_check = tree(&copy.0);
     for args in [
         ["apply", "--check", "-"].as_slice(),
         ["apply", "-"].as_slice(),
@@ -137,6 +219,9 @@ pub fn apply(repo: &Fixture, envelope: &Value) -> Fixture {
             "{}\n{patch}",
             String::from_utf8_lossy(&output.stderr)
         );
+        if args.contains(&"--check") {
+            assert_eq!(tree(&copy.0), before_check);
+        }
     }
     assert_eq!(tree(&copy.0), expected);
     for path in new_paths {

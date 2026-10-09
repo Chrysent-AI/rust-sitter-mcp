@@ -37,6 +37,10 @@ pub enum Destination {
         path: String,
         parent_path: String,
     },
+    NewChild {
+        parent_path: String,
+        path: String,
+    },
     ExistingImpl {
         path: String,
         implementation: SourceAnchor,
@@ -48,6 +52,7 @@ impl Destination {
         match self {
             Self::Existing { path, .. }
             | Self::NewSibling { path, .. }
+            | Self::NewChild { path, .. }
             | Self::ExistingImpl { path, .. } => path,
         }
     }
@@ -201,6 +206,17 @@ pub struct MoveRequest {
     pub semantic_configuration: Option<semantic::Configuration>,
 }
 impl MoveRequest {
+    pub(crate) fn artifact_schema_version(&self) -> u8 {
+        if self
+            .moves
+            .iter()
+            .any(|m| matches!(m.destination, Destination::NewChild { .. }))
+        {
+            3
+        } else {
+            2
+        }
+    }
     /// One positive-only configuration for this root, shared by written audits.
     pub(crate) fn declared_cfg(&self) -> Option<items::DeclaredCfg> {
         let config = self.semantic_configuration.as_ref()?;
@@ -453,10 +469,40 @@ pub struct CreatedFile {
     pub declaration_link: DeclarationLink,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub declaration_visibility_rewrite_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_precondition_ids: Option<Vec<String>>,
     pub item_ids: Vec<String>,
     pub trivia_ids: Vec<String>,
     pub rewrite_ids: Vec<String>,
     pub origins: Vec<MoveOrigin>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DirectoryBasis {
+    pub kind: String,
+    pub parent_path: String,
+    pub crate_root: String,
+    pub parent_module_segments: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DirectoryPrecondition {
+    pub id: String,
+    pub path: String,
+    pub observed_state: String,
+    pub required_state: String,
+    pub basis: DirectoryBasis,
+    pub dependent_created_file_ids: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DirectoryDiagnostic {
+    pub id: String,
+    pub reason: String,
+    pub path: String,
+    pub parent_path: String,
+    pub expected_state: String,
+    pub observed_state: String,
 }
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -512,6 +558,11 @@ pub struct MovePlan {
     pub blockers: Vec<Blocker>,
     pub edits: Option<Vec<Edit>>,
     pub created_files: Option<Vec<CreatedFile>>,
+    /// Omitted in schema 2, null on unsuccessful schema-3 plans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_preconditions: Option<Option<Vec<DirectoryPrecondition>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_diagnostics: Option<Vec<DirectoryDiagnostic>>,
     pub patch: Option<String>,
     pub origins: Vec<MoveOrigin>,
     pub integrity: Integrity,
@@ -580,6 +631,8 @@ impl MoveEnvelope {
                 blockers: Vec::new(),
                 edits: None,
                 created_files: None,
+                directory_preconditions: None,
+                directory_diagnostics: None,
                 patch: None,
                 origins: Vec::new(),
                 integrity: Integrity {
@@ -591,10 +644,21 @@ impl MoveEnvelope {
         }
     }
     pub fn failed(limits: Limits, error: DomainError) -> Self {
+        Self::failed_version(limits, error, 2)
+    }
+    pub(crate) fn failed_version(limits: Limits, error: DomainError, schema: u8) -> Self {
         let mut result = Self::empty(limits);
+        result.select_schema(schema);
         result.status = "failed".into();
         result.error = Some(error);
         result
+    }
+    fn select_schema(&mut self, schema: u8) {
+        self.schema_version = schema;
+        if schema == 3 {
+            self.plan.directory_preconditions = Some(None);
+            self.plan.directory_diagnostics = Some(Vec::new());
+        }
     }
     fn semantic_refusal(
         &mut self,
@@ -982,7 +1046,45 @@ impl MoveEnvelope {
         self.plan.applicable = false;
         self.plan.edits = None;
         self.plan.created_files = None;
+        if self.schema_version == 3 {
+            self.plan.directory_preconditions = Some(None);
+        }
         self.plan.patch = None;
+    }
+    fn directory_issue(
+        &mut self,
+        file_path: &str,
+        parent: &str,
+        reason: &str,
+        expected: &str,
+        observed: &str,
+    ) -> Result<(), DomainError> {
+        if self.schema_version != 3 {
+            return Ok(());
+        }
+        let path = Path::new(file_path)
+            .parent()
+            .and_then(Path::to_str)
+            .filter(|p| !p.is_empty())
+            .unwrap_or(".");
+        let record = DirectoryDiagnostic {
+            id: format!(
+                "directory_diagnostic/{}",
+                self.plan.directory_diagnostics.as_ref().map_or(0, Vec::len)
+            ),
+            reason: reason.into(),
+            path: path.into(),
+            parent_path: parent.into(),
+            expected_state: expected.into(),
+            observed_state: observed.into(),
+        };
+        self.account(descriptor_bytes(&record)?)?;
+        self.plan
+            .directory_diagnostics
+            .as_mut()
+            .expect("schema-3 diagnostics")
+            .push(record);
+        Ok(())
     }
     fn blocker(&mut self, code: &str, message: &str, path: Option<&str>, range: Option<ByteRange>) {
         self.withhold();
@@ -1185,6 +1287,7 @@ fn run_with_recheck(
 ) -> MoveEnvelope {
     let started = Instant::now();
     let mut result = MoveEnvelope::empty(request.limits.clone().into());
+    result.select_schema(request.artifact_schema_version());
     result.effective_work_limits.max_moves = request.max_moves;
     if let Err(error) = build(launch, &request, cancelled, before_recheck, &mut result) {
         if matches!(
@@ -1277,6 +1380,9 @@ struct Insertion {
 }
 struct Creation {
     parent: String,
+    private_child: bool,
+    directory: Option<scope::ChildPathObservation>,
+    directory_basis: Option<DirectoryBasis>,
     link: Option<DeclarationLink>,
     visibility_id: Option<String>,
     selections: Vec<usize>,
@@ -1378,7 +1484,14 @@ fn build(
     };
     let scope = Scope::new(root, &scan_request)?;
     let mut scan = SearchEnvelope::empty(request.limits.clone().into());
-    let (files, snapshot) = scope::discover(&scope, &mut scan, deadline, cancelled)?;
+    let mut inputs = scope::ScopeInputManifest::default();
+    let (files, snapshot) = scope::discover_observed(
+        &scope,
+        &mut scan,
+        deadline,
+        cancelled,
+        (result.schema_version == 3).then_some(&mut inputs),
+    )?;
     result.coverage.scan = scan.coverage;
     result.skipped = scan.skipped;
     result.truncation_reasons = scan.truncation_reasons;
@@ -1390,6 +1503,7 @@ fn build(
         result.incomplete("scan_incomplete");
         return Ok(());
     }
+    result.account(inputs.accounted_allocation())?;
     let files: BTreeMap<_, _> = files.into_iter().map(|f| (f.path.clone(), f)).collect();
     if !files.contains_key(&request.crate_root) {
         let mut diagnostic = items::ChainDiagnostic::boundary(
@@ -1664,15 +1778,24 @@ fn build(
                     }
                 }
             }
-            Destination::NewSibling { path, parent_path } => {
+            Destination::NewSibling { path, parent_path }
+            | Destination::NewChild { path, parent_path } => {
+                let private_child = matches!(entry.destination, Destination::NewChild { .. });
                 let name = items::module_name(path).map_err(|mut e| {
                     e.field = Some(format!("moves[{index}].destination.path"));
                     e
                 })?;
-                if Path::new(path).parent() != Path::new(&entry.item.path).parent() {
+                if (private_child && parent_path != &entry.item.path)
+                    || (!private_child
+                        && Path::new(path).parent() != Path::new(&entry.item.path).parent())
+                {
                     return Err(error(
                         "INVALID_DESTINATION",
-                        "new path must be a literal sibling of every assigned source",
+                        if private_child {
+                            "new_child units must originate in their existing parent"
+                        } else {
+                            "new path must be a literal sibling of every assigned source"
+                        },
                         &format!("moves[{index}].destination.path"),
                     ));
                 }
@@ -1706,18 +1829,62 @@ fn build(
                     result.chain_decisions(vec![diagnostic], &entry.item, &files)?;
                     return Err(error(
                         "INVALID_DECLARATION_PARENT",
-                        "ordinary 2018 child path does not equal requested sibling",
+                        if private_child {
+                            "ordinary child path does not equal requested direct child"
+                        } else {
+                            "ordinary 2018 child path does not equal requested sibling"
+                        },
                         &format!("moves[{index}].destination.parent_path"),
                     ));
                 }
-                scope
-                    .admit_new_path(path, deadline, cancelled)
-                    .map_err(|mut e| {
-                        e.field = Some(format!("moves[{index}].destination.path"));
-                        e
-                    })?;
+                let directory = if result.schema_version == 3 {
+                    let allow_absent = private_child
+                        && parent_path != &request.crate_root
+                        && Path::new(parent_path)
+                            .file_name()
+                            .is_some_and(|n| n != "mod.rs");
+                    match scope.admit_child_path(
+                        path,
+                        if allow_absent {
+                            scope::ChildDirectoryPolicy::ConventionalFlatFile
+                        } else {
+                            scope::ChildDirectoryPolicy::Existing
+                        },
+                        deadline,
+                        cancelled,
+                    ) {
+                        Ok(observation) => {
+                            result.account(observation.inputs.accounted_allocation())?;
+                            Some(observation)
+                        }
+                        Err(mut e) => {
+                            result.directory_issue(
+                                path,
+                                parent_path,
+                                "directory_context_unproved",
+                                "safe_ordinary_directory",
+                                "unproved",
+                            )?;
+                            e.field = Some(format!("moves[{index}].destination.path"));
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    scope
+                        .admit_new_path(path, deadline, cancelled)
+                        .map_err(|mut e| {
+                            e.field = Some(format!("moves[{index}].destination.path"));
+                            e
+                        })?;
+                    None
+                };
                 let competing = format!("{}/mod.rs", path.trim_end_matches(".rs"));
-                if items::present(&scope, &competing)? {
+                let competing_present = if result.schema_version == 3 {
+                    scope.competing_child_layout(path, deadline, cancelled)?
+                } else {
+                    items::present(&scope, &competing)?
+                };
+                if competing_present {
                     let mut diagnostic = items::ChainDiagnostic::boundary(
                         &request.crate_root,
                         path,
@@ -1763,11 +1930,34 @@ fn build(
                 }
                 let creation = creations.entry(path.clone()).or_insert(Creation {
                     parent: parent_path.clone(),
+                    private_child,
+                    directory,
+                    directory_basis: (result.schema_version == 3).then(|| DirectoryBasis {
+                        kind: if !private_child {
+                            "new_sibling"
+                        } else if parent_path == &request.crate_root {
+                            "crate_root_child"
+                        } else if Path::new(parent_path)
+                            .file_name()
+                            .is_some_and(|n| n == "mod.rs")
+                        {
+                            "mod_rs_child"
+                        } else {
+                            "flat_file_child"
+                        }
+                        .into(),
+                        parent_path: parent_path.clone(),
+                        crate_root: request.crate_root.clone(),
+                        parent_module_segments: contexts
+                            .get(parent_path)
+                            .map(|c| c.module_segments.clone())
+                            .unwrap_or_default(),
+                    }),
                     link: None,
                     visibility_id: None,
                     selections: Vec::new(),
                 });
-                if creation.parent != *parent_path {
+                if creation.parent != *parent_path || creation.private_child != private_child {
                     let mut diagnostic = items::ChainDiagnostic::boundary(
                         &request.crate_root,
                         path,
@@ -1861,7 +2051,10 @@ fn build(
                 declaration,
                 cfg.as_ref(),
             );
-            if matches.len() != 1 || declaration.kind != "mod_item" {
+            if matches.len() != 1
+                || declaration.kind != "mod_item"
+                || (creation.private_child && declaration.visibility_key != "private")
+            {
                 reasons.push(items::ChainReason::CompetingDeclarations);
             }
             if !reasons.is_empty() {
@@ -1986,7 +2179,8 @@ fn build(
                 Destination::Existing { path, .. } | Destination::ExistingImpl { path, .. } => {
                     (path, items::ChainRole::Destination)
                 }
-                Destination::NewSibling { parent_path, .. } => {
+                Destination::NewSibling { parent_path, .. }
+                | Destination::NewChild { parent_path, .. } => {
                     (parent_path, items::ChainRole::DeclarationParent)
                 }
             };
@@ -2320,6 +2514,9 @@ fn build(
         &result.plan.origins,
         &result.plan.created_files,
     ))?)?;
+    if result.schema_version == 3 {
+        result.account(descriptor_bytes(&result.plan.directory_preconditions)?)?;
+    }
     items::check(deadline, cancelled)?;
     if !result.plan.blockers.is_empty() {
         result.plan.integrity.syntax = "blocked".into();
@@ -2327,17 +2524,87 @@ fn build(
     }
     before_recheck();
     // Check absence first so a newly discovered .rs file is explicitly a creation race.
-    for path in creations.keys() {
-        match scope.admit_new_path(path, deadline, cancelled) {
+    for (path, creation) in &creations {
+        let admission = if let Some(observation) = &creation.directory {
+            let (observed_state, unchanged) = scope.recheck_child_directory(observation)?;
+            if !unchanged {
+                result.directory_issue(
+                    path,
+                    &creation.parent,
+                    "directory_creation_race",
+                    if observation.identity.is_none() {
+                        "absent"
+                    } else {
+                        "existing_directory"
+                    },
+                    observed_state,
+                )?;
+                result.incomplete("CREATION_RACE");
+                result.blocker(
+                    "CREATION_RACE",
+                    "directory_creation_race: captured directory state or identity changed",
+                    Some(&observation.directory),
+                    None,
+                );
+                return Ok(());
+            }
+            scope
+                .admit_child_path(
+                    path,
+                    if observation.identity.is_none() {
+                        scope::ChildDirectoryPolicy::ConventionalFlatFile
+                    } else {
+                        scope::ChildDirectoryPolicy::Existing
+                    },
+                    deadline,
+                    cancelled,
+                )
+                .and_then(|fresh| {
+                    result.account(fresh.inputs.accounted_allocation())?;
+                    let base = snapshot.as_deref().expect("complete snapshot");
+                    if observation
+                        .inputs
+                        .digest(&scope, base, (deadline, cancelled))?
+                        != fresh.inputs.digest(&scope, base, (deadline, cancelled))?
+                    {
+                        return Err(DomainError::new(
+                            "SOURCE_CHANGED",
+                            "effective prospective ignore inputs or ancestor identities changed",
+                        ));
+                    }
+                    Ok(())
+                })
+        } else {
+            scope.admit_new_path(path, deadline, cancelled)
+        };
+        match admission {
             Ok(()) => {}
             Err(e) if e.code == "DESTINATION_ALREADY_EXISTS" => {
+                result.directory_issue(
+                    path,
+                    &creation.parent,
+                    "file_creation_race",
+                    "absent_file",
+                    "present_or_case_alias",
+                )?;
                 result.incomplete("CREATION_RACE");
+                if result.schema_version == 3 {
+                    result.blocker(
+                        "CREATION_RACE",
+                        "file_creation_race: destination or alias appeared",
+                        Some(path),
+                        None,
+                    );
+                }
                 return Ok(());
             }
             Err(e)
                 if matches!(
                     e.code.as_str(),
-                    "CANCELLED" | "planning_deadline" | "scan_incomplete"
+                    "CANCELLED"
+                        | "planning_deadline"
+                        | "scan_incomplete"
+                        | "analysis_descriptor_bytes"
                 ) =>
             {
                 return Err(e);
@@ -2347,14 +2614,58 @@ fn build(
                 return Ok(());
             }
         }
-        if items::present(&scope, &format!("{}/mod.rs", path.trim_end_matches(".rs")))? {
+        let competing = if result.schema_version == 3 {
+            match scope.competing_child_layout(path, deadline, cancelled) {
+                Ok(present) => present,
+                Err(e) if e.code == "MODULE_DECLARATION_CONFLICT" => true,
+                Err(e) => return Err(e),
+            }
+        } else {
+            items::present(&scope, &format!("{}/mod.rs", path.trim_end_matches(".rs")))?
+        };
+        if competing {
+            result.directory_issue(
+                path,
+                &creation.parent,
+                "competing_file_layout",
+                "absent_competing_layout",
+                "present",
+            )?;
             result.incomplete("CREATION_RACE");
+            if result.schema_version == 3 {
+                result.blocker(
+                    "CREATION_RACE",
+                    "competing_file_layout appeared",
+                    Some(path),
+                    None,
+                );
+            }
             return Ok(());
         }
     }
     let mut recheck = SearchEnvelope::empty(request.limits.clone().into());
-    let (_, fresh) = scope::discover(&scope, &mut recheck, deadline, cancelled)?;
-    if fresh != snapshot || !recheck.coverage.scope_exhaustive {
+    let mut fresh_inputs = scope::ScopeInputManifest::default();
+    let (_, fresh) = scope::discover_observed(
+        &scope,
+        &mut recheck,
+        deadline,
+        cancelled,
+        (result.schema_version == 3).then_some(&mut fresh_inputs),
+    )?;
+    result.account(fresh_inputs.accounted_allocation())?;
+    if fresh != snapshot
+        || !recheck.coverage.scope_exhaustive
+        || (result.schema_version == 3
+            && inputs.digest(
+                &scope,
+                snapshot.as_deref().expect("snapshot"),
+                (deadline, cancelled),
+            )? != fresh_inputs.digest(
+                &scope,
+                fresh.as_deref().expect("fresh snapshot"),
+                (deadline, cancelled),
+            )?)
+    {
         result.incomplete("SOURCE_CHANGED");
         return Ok(());
     }
@@ -2796,7 +3107,7 @@ fn rewrite(
             "literal ordinary declaration or minimum line boundary; no semantic evidence".into(),
         ],
         rationale: if kind == "module_declaration" {
-            "link the admitted new sibling through one private ordinary declaration in its validated parent"
+            if request.artifact_schema_version() == 3 { "link the admitted new file through one private ordinary declaration in its validated parent" } else { "link the admitted new sibling through one private ordinary declaration in its validated parent" }
         } else {
             "prevent a line comment/token boundary from swallowing or attaching inserted payload"
         }.into(),
@@ -2822,6 +3133,18 @@ fn add_separator(
     boundary: (&str, &str, String),
 ) -> Result<(), DomainError> {
     let (eol, role, identity) = boundary;
+    // A copied CRLF line comment owns its CR, but not the LF. Complete that
+    // terminator instead of changing the trivia node by inserting a second CR.
+    let eol = if eol == "\r\n"
+        && insertion.text.ends_with('\r')
+        && contributors
+            .iter()
+            .any(|i| matches!(selected[*i].destination, Destination::NewChild { .. }))
+    {
+        "\n"
+    } else {
+        eol
+    };
     let ids: Vec<_> = contributors
         .iter()
         .map(|i| selected[*i].item.id.clone())
@@ -3016,7 +3339,7 @@ fn assemble(
                     implementation.range.end_byte - 1
                 }
             }
-            Destination::NewSibling { .. } => 0,
+            Destination::NewSibling { .. } | Destination::NewChild { .. } => 0,
         };
         groups
             .entry((s.destination.path().into(), at))
@@ -3723,6 +4046,10 @@ fn assemble(
             parent_path: creation.parent.clone(),
             declaration_link: creation.link.clone().expect("linked declaration"),
             declaration_visibility_rewrite_id: creation.visibility_id.clone(),
+            directory_precondition_ids: creation
+                .directory
+                .as_ref()
+                .map(|d| vec![format!("dir/{}", d.directory)]),
             item_ids: insertion.item_ids.clone(),
             trivia_ids: Vec::new(),
             rewrite_ids: insertion
@@ -3840,6 +4167,49 @@ fn assemble(
     if result.plan.blockers.is_empty() {
         result.plan.edits = Some(edits);
         result.plan.created_files = Some(created);
+        if result.schema_version == 3 {
+            let mut directories: BTreeMap<String, DirectoryPrecondition> = BTreeMap::new();
+            for (path, creation) in creations.iter() {
+                items::check(deadline, cancelled)?;
+                let observation = creation
+                    .directory
+                    .as_ref()
+                    .expect("schema-3 directory observation");
+                let absent = observation.identity.is_none();
+                let record = directories
+                    .entry(observation.directory.clone())
+                    .or_insert_with(|| DirectoryPrecondition {
+                        id: format!("dir/{}", observation.directory),
+                        path: observation.directory.clone(),
+                        observed_state: if absent {
+                            "absent"
+                        } else {
+                            "existing_directory"
+                        }
+                        .into(),
+                        required_state: if absent {
+                            "absent_then_directory"
+                        } else {
+                            "existing_directory"
+                        }
+                        .into(),
+                        basis: creation
+                            .directory_basis
+                            .clone()
+                            .expect("directory layout basis"),
+                        dependent_created_file_ids: Vec::new(),
+                    });
+                if (record.observed_state == "absent") != absent {
+                    return Err(error(
+                        "CREATION_RACE",
+                        "inconsistent captured directory states",
+                        "moves.destination",
+                    ));
+                }
+                record.dependent_created_file_ids.push(format!("c/{path}"));
+            }
+            result.plan.directory_preconditions = Some(Some(directories.into_values().collect()));
+        }
         result.plan.patch = Some(sections.into_values().collect());
     }
     Ok(())
@@ -3908,6 +4278,8 @@ fn sort_rewrites(result: &mut MoveEnvelope, edits: &mut [Edit], created: &mut [C
     }
 }
 
+#[cfg(test)]
+mod child_tests;
 #[cfg(test)]
 #[path = "move_plan_tests.rs"]
 mod tests;

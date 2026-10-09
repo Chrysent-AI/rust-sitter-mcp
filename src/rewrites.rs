@@ -918,6 +918,15 @@ impl Analyzer<'_> {
             return false;
         };
         let using = consumer;
+        // A private-child extraction cannot become a wider module-building operation.
+        if self.request.moves.iter().any(|m| {
+            matches!(&m.destination,
+            crate::move_plan::Destination::NewChild { path, parent_path }
+                if path == &final_path && self.final_contexts.get(parent_path)
+                    .is_none_or(|parent| !using.starts_with(&parent.module_segments)))
+        }) {
+            return false;
+        }
         // Each edge is declared in its parent scope, not inside the child it introduces.
         // Synthesized edges have no fictional source anchor and remain explicit evidence.
         for (index, declaration) in defining.declaration_anchors.iter().enumerate() {
@@ -936,6 +945,7 @@ impl Analyzer<'_> {
                 .iter()
                 .find_map(|m| match &m.destination {
                     crate::move_plan::Destination::NewSibling { path, parent_path }
+                    | crate::move_plan::Destination::NewChild { path, parent_path }
                         if parent_path == &declaration.path
                             && self.final_contexts.get(path).is_some_and(|c| {
                                 c.declaration_anchors.last() == Some(declaration)

@@ -131,6 +131,34 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   uncertain layouts; member-aware drafts (v0.4.1) removed the blanket refusal on ordinary
   files.
 
+## Private-child planning boundaries
+
+- Explicit `new_child:{parent_path,path}` supports only direct ordinary children
+  of the admitted selected source: flat `foo.rs`, existing `foo/mod.rs`, or an
+  evidenced crate root. One absent conventional directory is supported only for
+  the non-root flat layout, with all higher ancestors safe and existing. No
+  arbitrary directory chains, new `mod.rs`, layout conversion, inline-parent
+  extraction or mixed-source aggregation is planned. The server creates nothing.
+- Private declarations are synthesized or uniquely reused under the existing
+  admitted attribute/configuration rules; public/restricted, inline, remapped,
+  ambiguous or unproved declarations refuse. Parent imports are not inherited,
+  and the child declaration is not widened for outside consumers. Keep public
+  facades explicitly; public-path, macro/trait/generic, private-field/constructor,
+  concrete-type, receiver and every other original/final proof veto stays intact.
+- Every typed child-containing batch uses schema 3, including mixed batches and
+  failures. Older file-only clients must reject that version, not ignore directory
+  obligations or apply a subset. Legacy-only requests keep schema 2. Schema-3
+  directory preconditions link complete created files, captured absent/existing
+  states and ordinary layout basis; directory permissions are caller policy,
+  not Git modes. All four artifacts are withheld on any failure/incompleteness.
+- Source/parent bytes and modes, effective ignore inputs, ancestor/directory
+  identities, absence and competing layouts are observationally rechecked before
+  publication. A previously absent directory appearing invalidates the plan.
+  Publication is not an atomic or application-time guarantee: callers must repeat
+  prechecks. JSON reconstruction creates only disclosed required directories;
+  Git patches encode nested files, never empty directories. Expressible layout
+  does not imply all historical extractions become applicable.
+
 ## Post-move polish boundaries
 
 - Dead-import detection is advisory (nonblocking decisions), text-scan based; renamed and

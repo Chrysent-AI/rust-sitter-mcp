@@ -1,8 +1,8 @@
 use super::*;
 #[path = "../tests/support/fixture_gen.rs"]
-mod fixture_gen;
+pub(super) mod fixture_gen;
 #[path = "../tests/support/move_artifacts.rs"]
-mod move_artifacts;
+pub(super) mod move_artifacts;
 use fixture_gen::{Fixture, observe};
 use serde_json::json;
 use std::{fs, os::unix::fs::PermissionsExt, sync::atomic::Ordering};
