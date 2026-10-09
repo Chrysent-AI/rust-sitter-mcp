@@ -90,29 +90,35 @@ fn full_display_caps_do_not_cap_the_retained_canonical_inventory_or_decisions() 
 #[test]
 fn aggregate_allocation_capacity_is_independent_of_record_count() {
     let repo = Fixture::new(SOURCE);
-    let probe = Store::default();
     let (full, evidence) = repo.analyze(&repo.request());
-    let accounted = probe
-        .prepare(&full, evidence, &repo.request(), Instant::now())
-        .unwrap()
-        .retention
-        .accounted_bytes;
+    let reserved = preparation_allocation(
+        &full,
+        &evidence,
+        &repo.request(),
+        usize::MAX,
+        controls(&AtomicBool::new(false)),
+    )
+    .unwrap();
     let store = Store::new(RetentionLimits {
         records: 2,
-        aggregate_bytes: accounted + 4096,
+        aggregate_bytes: reserved,
         ..RetentionLimits::default()
     });
     let retention = retain(&store, &repo, &repo.request(), Instant::now());
     let (full, evidence) = repo.analyze(&repo.request());
-    let second = store
-        .prepare(&full, evidence, &repo.request(), Instant::now())
-        .unwrap();
     assert_eq!(
         store
-            .publish(second, controls(&AtomicBool::new(false)), Instant::now())
-            .unwrap_err(),
-        "capacity"
+            .prepare(
+                &full,
+                evidence,
+                &repo.request(),
+                Instant::now(),
+                controls(&AtomicBool::new(false))
+            )
+            .err(),
+        Some("capacity")
     );
+    assert_eq!(store.materializations.load(Ordering::Relaxed), 1);
     assert_eq!(store.accounted_allocation(), (1, retention.accounted_bytes));
     assert!(
         store
@@ -195,7 +201,13 @@ fn scope_is_normalized_and_source_modes_participate_in_provenance() {
     let (full, evidence) = repo.analyze(&request);
     let store = Store::default();
     let prepared = store
-        .prepare(&full, evidence, &request, Instant::now())
+        .prepare(
+            &full,
+            evidence,
+            &request,
+            Instant::now(),
+            controls(&AtomicBool::new(false)),
+        )
         .unwrap();
     assert_eq!(
         prepared.retention.normalized_request.as_ref().unwrap()["paths"],

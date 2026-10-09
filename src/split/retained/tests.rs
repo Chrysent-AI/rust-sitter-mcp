@@ -1,6 +1,8 @@
 use super::*;
 use crate::engine::Engine;
 use std::{fs, path::PathBuf, process::Command};
+#[path = "admission_tests.rs"]
+mod admission_tests;
 #[path = "budget_tests.rs"]
 mod budget_tests;
 
@@ -80,7 +82,15 @@ fn page(collection: Collection, count: usize) -> Selector {
 }
 fn retain(store: &Store, repo: &Fixture, request: &SuggestSplitRequest, now: Instant) -> Retention {
     let (full, evidence) = repo.analyze(request);
-    let record = store.prepare(&full, evidence, request, now).unwrap();
+    let record = store
+        .prepare(
+            &full,
+            evidence,
+            request,
+            now,
+            controls(&AtomicBool::new(false)),
+        )
+        .unwrap();
     store
         .publish(record, controls(&AtomicBool::new(false)), now)
         .unwrap()
@@ -98,7 +108,13 @@ fn every_page_union_is_uncapped_canonical_evidence_and_retries_are_identical() {
     let (full, evidence) = repo.analyze(&request);
     assert!(!full.decisions.is_empty() && !full.advice_decisions.is_empty());
     let record = store
-        .prepare(&full, evidence, &request, Instant::now())
+        .prepare(
+            &full,
+            evidence,
+            &request,
+            Instant::now(),
+            controls(&AtomicBool::new(false)),
+        )
         .unwrap();
     let canonical = record.canonical.clone();
     let retained = store
@@ -225,7 +241,13 @@ fn fixed_expiry_starts_at_publication_and_does_not_slide_after_navigation() {
     let initial = store.origin;
     let (full, evidence) = repo.analyze(&repo.request());
     let record = store
-        .prepare(&full, evidence, &repo.request(), initial)
+        .prepare(
+            &full,
+            evidence,
+            &repo.request(),
+            initial,
+            controls(&AtomicBool::new(false)),
+        )
         .unwrap();
     let published = initial + Duration::from_secs(2);
     let retention = store
@@ -270,15 +292,19 @@ fn capacity_release_restart_and_inflight_accounting_do_not_silently_evict() {
     let detail = identity(&retention, page(Collection::Inventory, 2));
     let inflight = store.obtain(&detail, Instant::now()).unwrap();
     let (full, evidence) = repo.analyze(&request);
-    let extra = store
-        .prepare(&full, evidence, &request, Instant::now())
-        .unwrap();
     assert_eq!(
         store
-            .publish(extra, controls(&AtomicBool::new(false)), Instant::now())
-            .unwrap_err(),
-        "capacity"
+            .prepare(
+                &full,
+                evidence,
+                &request,
+                Instant::now(),
+                controls(&AtomicBool::new(false))
+            )
+            .err(),
+        Some("capacity")
     );
+    assert_eq!(store.materializations.load(Ordering::Relaxed), 1);
     assert!(
         store
             .detail(detail.clone(), &AtomicBool::new(false))
@@ -299,6 +325,20 @@ fn capacity_release_restart_and_inflight_accounting_do_not_silently_evict() {
         store.detail(detail, &AtomicBool::new(false)),
         "ADVICE_SNAPSHOT_UNKNOWN",
     );
+    let (full, evidence) = repo.analyze(&request);
+    assert_eq!(
+        store
+            .prepare(
+                &full,
+                evidence,
+                &request,
+                Instant::now(),
+                controls(&AtomicBool::new(false))
+            )
+            .err(),
+        Some("capacity")
+    );
+    assert_eq!(store.materializations.load(Ordering::Relaxed), 1);
     drop(inflight);
     assert_eq!(store.accounted_allocation(), (0, 0));
     let next = retain(&store, &repo, &request, Instant::now());
@@ -344,8 +384,16 @@ fn cancelled_preparation_publication_and_detail_leave_no_partial_record_or_ancho
     let request = repo.request();
     let (full, evidence) = repo.analyze(&request);
     let record = store
-        .prepare(&full, evidence, &request, Instant::now())
+        .prepare(
+            &full,
+            evidence,
+            &request,
+            Instant::now(),
+            controls(&AtomicBool::new(false)),
+        )
         .unwrap();
+    assert_eq!(store.accounted_allocation().0, 1);
+    assert!(store.accounted_allocation().1 >= record.retention.accounted_bytes);
     let handle = record.retention.clone();
     assert_eq!(
         store
