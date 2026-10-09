@@ -1030,11 +1030,11 @@ The primary proposal uses structurally supported `ownership_candidates`, never u
 
 `ownership_candidates[]` exists independently of draft layout. Each record has a response-local `id` (`candidate/N`, in ranked order), `core_item_ids`, `structural_signal_ids`, `companions`, `alternatives`, `ranking`, `observation_scope` and `selection_policy`. Each companion has a unique response-local `id` (`companion/N`, ordered by target path/range/kind, then candidate order for repeated targets), target inventory `item_id`, `role`, `review_obligation`, `classification`, original evidence through signal/observation IDs, observed consumer IDs, exclusions and stopped-edge reasons. Boundary records' `ownership_candidate_ids` link to these `candidate/N` IDs. IDs are deterministic for the same analysis inputs, not persistent identities or execution anchors. Worklist traversal uses a visited set and existing guards; it stops at imports, exposed/public boundaries, shared nodes, unsupported contexts and uncertain identity. Companions never change core membership. Whole-impl and member alternatives expose overlap IDs and excluded IDs; explicitly choose one shape, never both. A type core does not silently select all of its methods.
 
-Companion `review_obligation` is a separate dimension:
+Companion `review_obligation` derives from candidate-to-companion association evidence, independently of consumer `classification`, traversal stops and move eligibility:
 
-- `selection_completeness`: a supported, unstopped written type/impl bundle requires review of the complete-impl versus explicit-member selection shape.
-- `boundary_dependency`: an established written dependency may remain accessible in the parent, subject to independent move audits. Shared/exposed/import boundaries and ordinary payload/helper/constant references use this value; even observed-exclusive consumers do not prove mandatory co-location.
-- `association_unproved`: ambiguous identity/consumer attribution, unsupported context or incomplete observations cannot establish the obligation. Do not infer completeness or a retainable dependency from this association.
+- `selection_completeness`: a supported written type/impl association requires review of the complete-impl versus explicit-member selection shape, retaining any exclusions.
+- `boundary_dependency`: an established written dependency may remain accessible in the parent, subject to independent move audits. Written references across shared/exposed/import boundaries and ordinary payload/helper/constant references use this value; even observed-exclusive consumers do not prove mandatory co-location.
+- `association_unproved`: no supported written evidence establishes the candidate-to-companion association, for example because its binding identity is ambiguous. Do not infer completeness or a retainable dependency from this association. Uncertain consumer attribution alone does not erase a supported association.
 
 None of these values selects a companion, proves access/repairability or waives exclusions.
 

@@ -431,10 +431,68 @@ fn competing_nominal_imports_and_uncertain_consumers_do_not_gain_ownership_claim
         companion(&response, &response["ownership_candidates"][0], "validate")["classification"],
         "undetermined"
     );
-    assert_eq!(
-        companion(&response, &response["ownership_candidates"][0], "validate")["review_obligation"],
-        "association_unproved"
-    );
+    let dependency = companion(&response, &response["ownership_candidates"][0], "validate");
+    assert_eq!(dependency["review_obligation"], "boundary_dependency");
+    assert!(response["signals"].as_array().unwrap().iter().any(|s| {
+        dependency["signal_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&s["id"])
+            && s["kind"] == "reference_candidate"
+            && s["facts"]["ambiguous_binding"] == 0
+    }));
+}
+
+#[test]
+fn ambiguous_companion_association_is_unproved_with_or_without_other_consumers() {
+    for other_consumer in ["", "fn other() { dependency(); }\n"] {
+        let repo = fixture(&format!(
+            "use crate::outside::dependency;\nfn a() {{ b(); dependency(); }}\nfn b() {{ a(); }}\nfn dependency() {{}}\n{other_consumer}"
+        ));
+        repo.write("cases/ownership/outside.rs", "pub fn dependency() {}\n");
+        let response = advice(&repo, json!({}));
+        complete(&response);
+        let candidate = &response["ownership_candidates"][0];
+        assert_eq!(
+            core_names(&response, candidate),
+            BTreeSet::from(["a".into(), "b".into()])
+        );
+        let dependency = companion(&response, candidate, "dependency");
+        assert_eq!(dependency["review_obligation"], "association_unproved");
+        assert_eq!(dependency["classification"], "undetermined");
+        assert!(
+            dependency["stop_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("uncertain_identity"))
+        );
+        let associations: Vec<_> = response["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| {
+                dependency["signal_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&s["id"])
+            })
+            .collect();
+        assert!(!associations.is_empty());
+        assert!(associations.iter().all(|s| s["kind"] == "reference_candidate" && s["facts"]["ambiguous_binding"] == 1));
+        assert_eq!(
+            dependency["observed_consumer_item_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            if other_consumer.is_empty() { 1 } else { 2 }
+        );
+        assert!(
+            !candidate["core_item_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&dependency["item_id"])
+        );
+    }
 }
 
 #[test]
@@ -510,7 +568,20 @@ fn trait_wrapper_discloses_excluded_impl_and_concrete_component_without_semantic
         .find(|c| c["role"] == "implementation")
         .unwrap();
     assert_eq!(implementation["classification"], "undetermined");
-    assert_eq!(implementation["review_obligation"], "association_unproved");
+    assert_eq!(
+        implementation["review_obligation"],
+        "selection_completeness"
+    );
+    assert!(response["signals"].as_array().unwrap().iter().any(|s| {
+        implementation["signal_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&s["id"])
+            && s["kind"] == "impl_owner_bundle"
+            && s["basis"] == "written_type"
+            && s["facts"]["ambiguous_binding"] == 0
+            && s["facts"]["excluded_impl"] == 1
+    }));
     assert!(
         candidate["alternatives"]
             .as_array()
