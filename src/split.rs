@@ -1,6 +1,11 @@
 //! Request-local advisory inventories and partitions; never an execution plan.
 mod boundary;
+mod consequences;
 mod drafts;
+pub use consequences::{
+    ConsequenceAdviceDecision, ConsequenceDecisionRef, ConsequenceEvidenceRef,
+    ConsequenceMembership, ConsequenceSummary, UnmappedConsequences,
+};
 mod ownership;
 mod signals;
 mod test_observations;
@@ -287,6 +292,7 @@ pub struct Group {
     pub signal_ids: Vec<String>,
     pub facts: BTreeMap<String, usize>,
     pub expected_to_block: ExpectedBlocks,
+    pub consequence_summary: ConsequenceSummary,
     pub test_coupled: bool,
     pub assessment_scope: AssessmentScope,
     pub warnings: Vec<String>,
@@ -313,6 +319,7 @@ pub struct DraftMembership {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GroupMembership {
+    pub consequence_summary: ConsequenceSummary,
     pub kind: String,
     pub destination_path: Option<String>,
     pub item_ids: Vec<String>,
@@ -341,6 +348,7 @@ pub struct AdviceCounts {
     pub reference_candidates: usize,
     pub signals: usize,
     pub decisions: usize,
+    pub advice_decisions: usize,
     pub drafts: usize,
     pub ownership_candidates: usize,
     pub boundary_observations: usize,
@@ -385,6 +393,7 @@ pub struct SuggestSplitEnvelope {
     pub impl_contexts: Vec<ImplContext>,
     pub signals: Vec<Signal>,
     pub decisions: Vec<AdviceDecision>,
+    pub advice_decisions: Vec<ConsequenceAdviceDecision>,
     pub decision_groups: Vec<AdviceDecisionGroup>,
     pub drafts: Vec<Draft>,
     pub ownership_candidates: Vec<OwnershipCandidate>,
@@ -430,6 +439,7 @@ impl SuggestSplitEnvelope {
             impl_contexts: Vec::new(),
             signals: Vec::new(),
             decisions: Vec::new(),
+            advice_decisions: Vec::new(),
             decision_groups: Vec::new(),
             drafts: Vec::new(),
             ownership_candidates: Vec::new(),
@@ -500,6 +510,15 @@ impl SuggestSplitEnvelope {
         }
     }
     fn shape_decisions(&mut self, limits: &AdviceLimits) {
+        let advice_before = self.advice_decisions.len();
+        self.advice_decisions.truncate(limits.diagnostic_count);
+        self.omit(
+            "advice_decisions",
+            advice_before - self.advice_decisions.len(),
+        );
+        if advice_before != self.advice_decisions.len() {
+            self.truncation_reasons.push("diagnostic_count".into());
+        }
         let before = self.decisions.len();
         let chain_links: usize = self
             .decisions
@@ -735,6 +754,7 @@ impl SuggestSplitEnvelope {
                         .groups
                         .iter()
                         .map(|group| GroupMembership {
+                            consequence_summary: group.consequence_summary.clone(),
                             kind: group.kind.clone(),
                             destination_path: group.destination.as_ref().map(|d| d.path.clone()),
                             item_ids: group.item_ids.clone(),
@@ -757,6 +777,8 @@ impl SuggestSplitEnvelope {
         self.omit_test_observations();
         self.omit("signals", self.signals.len());
         self.omit("decisions", self.decisions.len());
+        self.omit("advice_decisions", self.advice_decisions.len());
+        self.advice_decisions.clear();
         self.omit("chain_diagnostics", self.chain_diagnostics.len());
         self.omit(
             "chain_diagnostic_references",
@@ -987,6 +1009,8 @@ fn run_with_recheck(
                 .sum(),
         );
         result.decisions.clear();
+        result.omit("advice_decisions", result.advice_decisions.len());
+        result.advice_decisions.clear();
         result.omit("ownership_candidates", result.ownership_candidates.len());
         result.ownership_candidates.clear();
         result.omit(

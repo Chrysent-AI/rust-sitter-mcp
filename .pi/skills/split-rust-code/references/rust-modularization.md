@@ -92,6 +92,13 @@ exclusions and overlap links. Boundary observations show admitted written consum
 not symbol resolution, move repairability or architectural ownership. An observed-
 exclusive classification is restricted to the completed admitted observation scope.
 
+Use each candidate/group's `consequence_summary` to route inspection, not to
+score move safety. Counts are uncapped distinct decision records per class with
+exact collection-qualified links; classes overlap and unknown reasons remain in
+`unmapped`. Selection-completeness asks for explicit impl/member-shape review,
+not automatic co-location. Broader boundary/test observations are advice-only;
+zero counts do not assess destination/batch applicability or prove repairability.
+
 ## Inspecting test coupling
 
 Read the separate `test_observations` projection before deciding test placement.

@@ -20,6 +20,15 @@ Accepting unrelated rewrites does not clear independent blockers; unsupported de
 
 Decision groups may encode `decision_ids` as `{first_id, count}` runs rather than one entry per decision. Read group counts and omissions; `diagnostic_count` controls returned full exemplars, not the underlying decision count.
 
+Candidate/group `consequence_summary` links exact runs qualified by `decisions`
+or `advice_decisions`; never merge their `d/N` and `ad/N` namespaces. Counts are
+uncapped distinct records per class, non-additive across classes. `unmapped` keeps
+unknown reasons visible and needs inspection, not an invented override. Omitted
+advice detail requires diagnostic/response expansion; no saved retrieval handle
+exists. Selection-completeness and outside/test observations remain prospective
+review, not proof the edited batch is incomplete or unrepairable. Local lower
+bounds and unassessed destination/batch applicability remain unchanged.
+
 ## Common error codes
 
 | Error code | Meaning | Recovery |

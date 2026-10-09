@@ -1130,6 +1130,86 @@ block relocation in `move_item`. The separate explicit `acknowledge_test_consume
 option above discloses supported consumer risks instead; advice itself never
 acknowledges them. No cfg evaluation or safe-relocation guarantee is introduced.
 
+### Consequence routing
+
+Every `ownership_candidates[]` record and every draft group (including retain
+sets) carries `consequence_summary`, computed once from finalized **uncapped**
+evidence before diagnostic shaping and response fitting:
+
+```json
+{
+  "basis": "uncapped_written_evidence",
+  "count_unit": "distinct_decision_records_per_class",
+  "non_additive": true,
+  "classes": {
+    "advice_only_review_risk": {"count": 1, "decision_refs": [{"collection": "advice_decisions", "id_runs": [{"first_id": "ad/0", "count": 1}]}]},
+    "selection_incomplete": {"count": 1, "decision_refs": [{"collection": "advice_decisions", "id_runs": [{"first_id": "ad/0", "count": 1}]}]},
+    "written_context_unprovable": {"count": 0, "decision_refs": []},
+    "public_path_change": {"count": 0, "decision_refs": []},
+    "consumer_outside_supported_repair": {"count": 0, "decision_refs": []},
+    "missing_evidence": {"count": 0, "decision_refs": []}
+  },
+  "unmapped": {"count": 0, "reasons": [], "decision_refs": []},
+  "destination_and_batch_applicability": "not_assessed"
+}
+```
+
+Counts are distinct decision **records per class**, not additive blocker/unit
+counts. One record can contribute to multiple classes and to `unmapped` alongside
+known reasons. Exact runs never bridge interleaved causes; collection names
+separate legacy `d/N` decisions from new response-local `ad/N` advice decisions.
+Unknown reasons appear in `unmapped.reasons` with exact links, never silently zero.
+This is routing, not a safe/unsafe badge or an execution selection. Zero counts
+still leave destination/batch applicability unassessed; legacy `expected_to_block`
+lower bounds and `assessment_scope` are unchanged.
+
+`advice_decisions[]` projects each companion, boundary record, test record or test
+limitation without adding local blockers. Records carry `id`, `reasons[]`, affected
+`item_ids`, `evidence_refs:[{collection,id}]` and `applicability:"not_assessed"`.
+Evidence collections are `companions`, `boundary_observations`, `test_observations`
+and `test_limitations`. IDs resolve to the original records; `test_limitations`
+uses the zero-based array index and boundary-wide unsupported context uses
+`{collection:"boundary_observations",id:"coverage"}`. A companion record concerns
+its candidate's core IDs; boundary/test records concern their linked target IDs.
+Empty item IDs mean source-wide uncertainty and apply to every candidate/group.
+Candidate summaries use core membership, draft summaries use group membership;
+companions/alternatives are not silently added. Selection-completeness routing
+asks for explicit whole-impl/member review, not proof the caller's edited batch
+omits a required item. A missing-evidence decision counts one reported limitation,
+not the number of missing files or unseen consumers.
+
+The reason-to-class mapping is explicit (multiple rows can apply to a record):
+
+| Reasons | Classes |
+|---|---|
+| `selection_completeness` | advice-only review risk + selection incomplete |
+| `boundary_dependency`, `boundary_observation_review`, `test_coupling_review`, `cross_group_reference_review`, `test_consumer_acknowledged`, `ordinary_trivia_choice`, `removal_gap_choice`, `post_move_import_review`, `public_or_exposed_boundary`, `import_boundary`, `observed_shared_node` | advice-only review risk |
+| `association_unproved`, `uncertain_identity`, `unsupported_context`, `boundary_identity_unproved`, `attributed_import`, `competing_written_binding`, `ambiguous_import_routes`, `glob_binding_candidate`, `lexical_macro_context_unproved`, `field_attributes_unproved`, `scope_attributes_or_syntax_unproved`, `ambiguous_target_identity`, `target_unresolved`, `macro_tokens_not_expanded_or_bound`, `enclosing_attributes_unproved`, `method_identity_unproved`, `token_shape_only` | advice-only review risk + written context unprovable |
+| `unexamined_context`, `boundary_context_unexamined`, `unlinked_test_root`, `unsupported_attributes_or_remapping`, `competing_layouts`, `competing_module_routes`, `unsupported_test_cfg`, `unsupported_scope_attributes` | advice-only review risk + written context unprovable + missing evidence |
+| `missing_test_file`, `unadmitted_test_file` | advice-only review risk + missing evidence |
+| `module_chain_failure`, `external_or_missing_binding` | written context unprovable + missing evidence |
+| `lexical_context_unproved`, `source_binding_ambiguous`, `destination_binding_conflict`, `final_alias_conflict`, `member_or_constructor_unproved`, `visibility_scope_unproved`, `conditional_or_inherited_context`, `macro_context_unexamined`, `glob_binding_unproved`, `unsupported_construct`, `trivia_preservation_unproved` | written context unprovable |
+| `public_path_change` | public-path change |
+| `glob_consumer_unrepaired` | written context unprovable + consumer outside supported repair |
+| `unsupported_unit_kind`, `required_rewrite_retained` | selection incomplete |
+| Any other reason | unmapped, preserving the reason and membership |
+
+Only the existing typed `glob_consumer_unrepaired` decision maps to consumer
+outside supported repair, prospectively under that execution contract. Arbitrary
+outside/test observations (including glob candidates) never establish that a
+caller-selected batch needs an unsupported repair; their repairability stays
+unassessed. Severity/category prose does not select classes.
+
+`counts.advice_decisions` reports the uncapped projection total. Display returns
+at most `limits.diagnostic_count` advice records in ID order (default 64), with
+exact `counts.omissions.advice_decisions`; zero/default/full expansion cannot
+change summary counts or links. Omitted records are not currently retrievable by
+handle: expand diagnostic and response budgets for details. Response fitting
+preserves each group's summary in `draft_summaries` if full drafts are withheld.
+At final overflow tiers candidates/membership summaries may themselves be
+withheld with their existing omission counts; surviving summaries are never
+recomputed from the reduced display, and partial output is not complete evidence.
+
 ### Advisory test observations
 
 `test_observations` is a separate schema-2 advice object with `coverage`, `routes`,
@@ -1209,7 +1289,8 @@ rather than assuming that every detail record is present. `choice_available` ide
 
 When output fitting withholds full drafts, `draft_summaries[]` retains each draft's
 ID, source snapshot, group kind/destination path, complete `item_ids`, `overlap_ids`,
-non-additive `size_interpretation` where present, and unresolved decision IDs.
+non-additive `size_interpretation` where present, uncapped `consequence_summary`,
+and unresolved decision IDs.
 If overlap records are withheld, `counts.omissions.overlaps` and
 `overlap_draft_group_links` account for them; surviving links and labels do not
 promise that omitted records or display inventory are locally available.

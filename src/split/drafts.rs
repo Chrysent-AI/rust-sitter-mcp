@@ -478,6 +478,7 @@ fn make_draft(
                 decision_ids: Vec::new(),
                 note: "observed lower bound, not a move plan or safe-move verdict; move_item adds consumer/destination/batch/module-chain/trivia checks and may deduplicate or repair written dependencies".into(),
             },
+            consequence_summary: ConsequenceSummary::default(),
             test_coupled: false,
             assessment_scope: AssessmentScope {
                 assessed: "local_only".into(),
@@ -812,5 +813,5 @@ pub(super) fn finalize(
     }
     result.account(descriptor_bytes(&result.drafts)?)?;
     result.account(descriptor_bytes(&result.overlaps)?)?;
-    Ok(())
+    consequences::attach(result, controls)
 }
