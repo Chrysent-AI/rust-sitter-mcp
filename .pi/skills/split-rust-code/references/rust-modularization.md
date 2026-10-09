@@ -73,6 +73,16 @@ Rules:
 - Legacy `mod.rs` trees are valid — the engine works with them but never creates new ones
 - Root files (`lib.rs`, `main.rs`) can contain logic, not just declarations
 
+## Reading structural ownership advice
+
+Name prefixes, banners, shared attributes and adjacency are displayed weak facts,
+not core-forming edges. Inspect the ranked written core and its separately disclosed
+impl/payload/helper/constant companions. Shared orchestrators/helpers are boundaries,
+not joining hubs. Compare whole-impl versus explicit member alternatives, respecting
+exclusions and overlap links. Boundary observations show admitted written consumers,
+not symbol resolution, move repairability or architectural ownership. An observed-
+exclusive classification is restricted to the completed admitted observation scope.
+
 ## What to keep together
 
 - A type and its inherent `impl` blocks

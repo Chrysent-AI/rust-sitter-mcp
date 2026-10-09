@@ -92,7 +92,10 @@ fn workspace_member_metadata_allows_advice_but_cfg_edges_remain_unknown() {
     let root = "cases/member/src/lib.rs";
     let source = "cases/member/src/leaf.rs";
     repo.write(root, "#![doc = include_str!(\"missing.md\")]\n#![cfg_attr(docsrs, feature(doc_cfg))]\n#![forbid(unsafe_code)]\n#[cfg_attr(unknown, doc(hidden))]\nmod leaf;\n");
-    repo.write(source, "fn one() {}\nfn two() {}\nfn three() {}\n");
+    repo.write(
+        source,
+        "fn one() { two(); }\nfn two() { one(); }\nfn three() {}\n",
+    );
     let args = json!({"repo_path":repo.0,"crate_root":root,"source_path":source,"paths":["cases/member/src"]});
     let before = observe(&repo.0);
     let result = run(&repo, args.clone());
@@ -373,24 +376,8 @@ fn planted_cohesion_balanced_alternative_and_weak_fallback() {
     );
     let weak = run(&repo, args(&repo, "src/weak.rs"));
     advice_flow::complete(&weak);
-    assert_eq!(weak["drafts"].as_array().unwrap().len(), 1);
-    assert!(
-        weak["drafts"][0]["rationale"]
-            .as_str()
-            .unwrap()
-            .contains("balanced")
-    );
-    assert!(
-        weak["drafts"][0]["groups"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|g| g["confidence"]["level"] == "low")
-    );
-    assert_eq!(
-        weak["drafts"][0]["groups"][0]["item_ids"],
-        json!([item(&weak, "apple")["id"]])
-    );
+    assert_eq!(weak["drafts"], json!([]));
+    assert_eq!(weak["partition_outcome"], "no_credible_written_partition");
 }
 #[test]
 fn common_prefixes_duplicate_names_and_indivisible_size_are_honest() {
@@ -400,12 +387,8 @@ fn common_prefixes_duplicate_names_and_indivisible_size_are_honest() {
         "fn get_one() {}\nfn get_two() {}\nfn get_three() {}\n",
     );
     let common = run(&repo, args(&repo, "src/weak.rs"));
-    assert!(
-        common["drafts"][0]["rationale"]
-            .as_str()
-            .unwrap()
-            .contains("balanced")
-    );
+    assert_eq!(common["drafts"], json!([]));
+    assert_eq!(common["partition_outcome"], "no_credible_written_partition");
     repo.write(
         "src/weak.rs",
         "fn same() {}\nfn same() {}\nfn consumer() { same(); }\n",
@@ -421,17 +404,15 @@ fn common_prefixes_duplicate_names_and_indivisible_size_are_honest() {
             .count(),
         2
     );
-    assert!(
-        duplicates["drafts"][0]["groups"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|g| g["confidence"]["level"] == "low")
+    assert_eq!(duplicates["drafts"], json!([]));
+    assert_eq!(
+        duplicates["partition_outcome"],
+        "no_credible_written_partition"
     );
     repo.write(
         "src/weak.rs",
         &format!(
-            "fn huge() {{ let _ = \"{}\"; }}\nfn small() {{}}\n",
+            "fn huge() {{ let _ = \"{}\"; small(); }}\nfn small() {{ huge(); }}\n",
             "x".repeat(65 * 1024)
         ),
     );
@@ -450,7 +431,8 @@ fn expected_block_counts_match_written_risks_and_move_replay() {
     let repo = Fixture::generate();
     repo.write(
         "src/weak.rs",
-        r#"fn retained() {}
+        r#"fn retained() { companion(); }
+fn companion() { retained(); }
 fn risk_member<T>(value: T) { value.first(); value.second(); }
 fn risk_macro() { opaque!(); }
 fn risk_external() { Missing(); }
@@ -484,7 +466,7 @@ mod tests {
         group["expected_to_block"]["counts"],
         json!({
             "member_call":2, "macro_context":1, "external_binding":1,
-            "conditional_or_derive":2, "cfg_test_consumer":2, "other_local":0
+            "conditional_or_derive":3, "cfg_test_consumer":2, "other_local":2
         })
     );
     assert_eq!(group["test_coupled"], true);
@@ -606,6 +588,10 @@ mod ordinary { #[cfg(test)] fn check() { super::uncoupled(); } }
 #[test]
 fn zero_risk_groups_still_explicitly_leave_move_safety_unassessed() {
     let repo = Fixture::generate();
+    repo.write(
+        "src/weak.rs",
+        "fn apple() { zebra(); }\nfn zebra() { apple(); }\nfn retained() {}\n",
+    );
     let advice = run(&repo, args(&repo, "src/weak.rs"));
     advice_flow::complete(&advice);
     for group in advice["drafts"][0]["groups"].as_array().unwrap() {
@@ -718,7 +704,10 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     assert_eq!(alpha["destination"]["path"], "src/alpha_5.rs");
     // A parent's ordinary child formula, not the source's basename, determines the sibling parent.
     repo.write("src/lib.rs", "mod legacy;\n");
-    repo.write("src/legacy/source.rs", "fn apple() {}\nfn zebra() {}\n");
+    repo.write(
+        "src/legacy/source.rs",
+        "fn apple() { zebra(); }\nfn zebra() { apple(); }\n",
+    );
     let legacy = run(&repo, args(&repo, "src/legacy/source.rs"));
     advice_flow::complete(&legacy);
     assert_eq!(
@@ -771,7 +760,12 @@ fn incomplete_membership_and_wire_caps_never_leave_drafts_or_dangling_links() {
     assert!(result["drafts"].as_array().unwrap().is_empty());
     // Required membership/decision evidence, not merely source text, exceeds a small wire cap.
     let source: String = (0..150)
-        .map(|i| format!("// --- section {i} ---\nfn unit_{i}() {{}}\n"))
+        .map(|i| {
+            format!(
+                "// --- section {i} ---\nfn unit_{i}() {{ unit_{}(); }}\n",
+                i ^ 1
+            )
+        })
         .collect();
     repo.write("src/weak.rs", &source);
     let mut args = args(&repo, "src/weak.rs");
@@ -802,7 +796,7 @@ fn display_only_wire_projection_preserves_drafts_and_context_coordinates() {
     repo.write(
         "src/weak.rs",
         &format!(
-            "fn alpha_one() {{ let _ = \"{}\"; }}\nfn alpha_two() {{}}\nfn retained() {{}}",
+            "fn alpha_one() {{ let _ = \"{}\"; alpha_two(); }}\nfn alpha_two() {{ alpha_one(); }}\nfn retained() {{}}",
             "x".repeat(40 * 1024)
         ),
     );
@@ -833,7 +827,10 @@ fn display_only_wire_projection_preserves_drafts_and_context_coordinates() {
 fn reused_declaration_and_root_filename_fallback_are_evidenced() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source;\nmod source_part;\n");
-    repo.write("cases/layout/source.rs", "fn one() {}\nfn two() {}\n");
+    repo.write(
+        "cases/layout/source.rs",
+        "fn one() { two(); }\nfn two() { one(); }\n",
+    );
     let advice = run(
         &repo,
         json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","source_path":"cases/layout/source.rs","paths":["cases/layout"]}),
@@ -847,7 +844,10 @@ fn reused_declaration_and_root_filename_fallback_are_evidenced() {
         advice["drafts"][0]["groups"][1]["destination"]["existing_declaration"]["span"]["text"],
         "mod source_part;"
     );
-    repo.write("cases/layout/type.rs", "fn one() {}\nfn two() {}\n");
+    repo.write(
+        "cases/layout/type.rs",
+        "fn one() { two(); }\nfn two() { one(); }\n",
+    );
     let root = run(
         &repo,
         json!({"repo_path":repo.0,"crate_root":"cases/layout/type.rs","source_path":"cases/layout/type.rs","paths":["cases/layout"]}),
@@ -1086,7 +1086,10 @@ fn inner_attribute_advice_names_root_and_nested_scope_vetoes() {
         assert_eq!(observe(&repo.0), before);
     }
     repo.write(root, "#![allow(dead_code)]\nmod branch;\n");
-    repo.write(source, "fn selected() {}\nfn retained() {}\n");
+    repo.write(
+        source,
+        "fn selected() { retained(); }\nfn retained() { selected(); }\n",
+    );
     let clean = run(&repo, request);
     assert!(clean["chain_diagnostics"].as_array().unwrap().is_empty());
     assert!(!clean["drafts"].as_array().unwrap().is_empty());
@@ -1097,6 +1100,11 @@ fn wrong_binary_root_names_the_exhausted_boundary_and_correct_root_drafts() {
     use chain_fixture::*;
     let repo = Fixture::generate();
     install(&repo);
+    let original = fs::read_to_string(repo.0.join(SOURCE)).unwrap();
+    repo.write(
+        SOURCE,
+        &format!("{original}\nfn seam_a() {{ seam_b(); }}\nfn seam_b() {{ seam_a(); }}\n"),
+    );
     let before = observe(&repo.0);
     let mut request = json!({"repo_path":repo.0,"crate_root":BIN_ROOT,"source_path":SOURCE,"paths":["cases/chain"],"limits":{"text_bytes":0,"diagnostic_count":100000}});
     let mut client = Client::new();
@@ -1302,6 +1310,7 @@ fn missing_unadmitted_and_inherited_hops_name_evidence_not_leaf_guesses() {
         root,
         "mod branch;\nmod absent;\n#[cfg(any())] mod unrelated;\n",
     );
+    repo.write(source, "fn one() { two(); }\nfn two() { one(); }\n");
     let good = run(&repo, request.clone());
     assert!(!good["drafts"].as_array().unwrap().is_empty());
     assert!(good["chain_diagnostics"].as_array().unwrap().is_empty());

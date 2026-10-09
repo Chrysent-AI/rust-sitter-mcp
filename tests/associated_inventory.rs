@@ -194,7 +194,11 @@ fn every_written_impl_member_has_context_and_excluded_members_are_retained() {
                 );
             }
         }
-        assert!(!result["drafts"].as_array().unwrap().is_empty());
+        if result["drafts"].as_array().unwrap().is_empty() {
+            assert_eq!(result["partition_outcome"], "no_credible_written_partition");
+            assert_eq!(result["ownership_candidates"], json!([]));
+            continue;
+        }
         for item in inventory {
             let start = item["span"]["range"]["start_byte"].as_u64().unwrap() as usize;
             let end = item["span"]["range"]["end_byte"].as_u64().unwrap() as usize;

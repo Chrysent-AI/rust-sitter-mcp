@@ -321,10 +321,10 @@ mod child { fn descendant() -> u8 { super::private() } }
 const RETAIN: u8 = 1;
 // --- alpha section ---
 fn alpha_read() -> u8 { alpha_parse() }
-fn alpha_parse() -> u8 { helper() }
+fn alpha_parse() -> u8 { let _ = alpha_read; helper() }
 // --- beta section ---
 fn beta_write() -> u8 { beta_flush() + alpha_parse() }
-fn beta_flush() -> u8 { RETAIN }
+fn beta_flush() -> u8 { let _ = beta_write; RETAIN }
 struct Marker;
 impl Marker { fn retained_member() {} }
 impl Default for Marker { fn default() -> Self { Marker } }

@@ -74,6 +74,15 @@ Consumer-side named, unconditioned or declared-active `pub use`/`pub(crate) use`
 
 ### Advice-completeness states (suggest_split)
 
+`partition_outcome:"no_credible_written_partition"` is a completed negative result,
+not a failure or a reason to force byte balancing. Review inventory/weak evidence
+and choose a boundary externally if needed. `incomplete_analysis` cannot establish
+that negative; inspect guards, omissions and coverage before retrying. Candidates
+may still exist when ordinary layout cannot produce complete drafts. Companions and
+impl/member alternatives are never automatic selections. Read the separate
+`boundary_observations.coverage`; zero observed consumers is not proof of no others,
+and uncertain routes cannot waive execution blockers or test acknowledgment rules.
+
 | `draft_eligibility.state` / reason | Meaning | Recovery |
 |---|---|---|
 | `incomplete` + `response_bytes` | Drafts/decisions withheld at the response cap | Retry with `limits: {"response_bytes": 8388608}` (≤16 MiB). Membership may still be complete — the inventory is usable. |

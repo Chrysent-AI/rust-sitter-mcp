@@ -217,11 +217,11 @@ fn failed_alias_and_private_visibility_alternatives_link_the_real_target() {
 #[test]
 fn banners_root_scope_and_cross_group_routes_are_honest_analysis_or_review() {
     let repo = fixture(
-        "fn keep() {}\n// --- banner ---\n\nfn alpha_one() { beta_one(); }\nfn beta_one() {}\nfn alpha_two() {}\n",
+        "fn keep() {}\n// --- banner ---\n\nfn alpha_one() { beta_one(); }\nfn beta_one() { let _ = alpha_one; keep(); }\nfn alpha_two() {}\n",
     );
     repo.write("cases/layout/main.rs", "fn main() {}\n");
     let mut client = Client::new();
-    let advice = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","source_path":"cases/layout/source.rs","paths":["cases/layout"],"limits":{"text_bytes":0}});
+    let advice = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","source_path":"cases/layout/source.rs","paths":["cases/layout"],"limits":{"text_bytes":0,"diagnostic_count":100000}});
     let split = client.call("suggest_split", advice.clone());
     groups(&split);
     let cross = split["decisions"]
@@ -299,7 +299,16 @@ fn overflow_preserves_complete_membership_and_root_and_schemas_publish_all_route
         assert!(schema.contains(field));
     }
     let source = (0..180)
-        .map(|i| format!("fn item_{i}(x: u8) {{ x.foo(); x.bar(); }}\n"))
+        .map(|i| {
+            format!(
+                "fn item_{i}(x: u8) {{ x.foo(); x.bar(); {} }}\n",
+                if i < 2 {
+                    format!("let _ = item_{};", i ^ 1)
+                } else {
+                    String::new()
+                }
+            )
+        })
         .collect::<String>();
     let repo = fixture(&source);
     let mut client = Client::new();
@@ -333,7 +342,13 @@ fn overflow_preserves_complete_membership_and_root_and_schemas_publish_all_route
     assert!(advice["decisions"].as_array().unwrap().is_empty());
     assert!(advice["root"].is_string() && advice["snapshot_id"].is_string());
     assert!(advice["counts"]["omissions"]["decision_groups"].is_null());
-    assert_eq!(advice["decision_groups"][0]["count"], 360);
+    let member_group = advice["decision_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["reason"] == "member_or_constructor_unproved")
+        .unwrap();
+    assert_eq!(member_group["count"], 360);
     assert!(advice["drafts"].as_array().unwrap().is_empty());
     assert!(!advice["draft_summaries"].as_array().unwrap().is_empty());
     for summary in advice["draft_summaries"].as_array().unwrap() {

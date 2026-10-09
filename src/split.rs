@@ -1,6 +1,12 @@
 //! Request-local advisory inventories and partitions; never an execution plan.
+mod boundary;
 mod drafts;
+mod ownership;
 mod signals;
+pub use boundary::{BoundaryCoverage, BoundaryObservation, BoundaryObservations};
+pub use ownership::{
+    InspectionCompanion, OwnershipAlternative, OwnershipCandidate, OwnershipRanking,
+};
 #[cfg(test)]
 mod tests;
 
@@ -331,6 +337,8 @@ pub struct AdviceCounts {
     pub signals: usize,
     pub decisions: usize,
     pub drafts: usize,
+    pub ownership_candidates: usize,
+    pub boundary_observations: usize,
     pub analysis_descriptor_bytes: usize,
     pub omissions: BTreeMap<String, usize>,
 }
@@ -373,6 +381,9 @@ pub struct SuggestSplitEnvelope {
     pub decisions: Vec<AdviceDecision>,
     pub decision_groups: Vec<AdviceDecisionGroup>,
     pub drafts: Vec<Draft>,
+    pub ownership_candidates: Vec<OwnershipCandidate>,
+    pub boundary_observations: BoundaryObservations,
+    pub partition_outcome: String,
     /// Non-executable membership summaries when output fitting withholds full drafts.
     pub draft_summaries: Vec<DraftMembership>,
     pub draft_eligibility: DraftEligibility,
@@ -414,6 +425,9 @@ impl SuggestSplitEnvelope {
             decisions: Vec::new(),
             decision_groups: Vec::new(),
             drafts: Vec::new(),
+            ownership_candidates: Vec::new(),
+            boundary_observations: BoundaryObservations::default(),
+            partition_outcome: "incomplete_analysis".into(),
             draft_summaries: Vec::new(),
             draft_eligibility: DraftEligibility {
                 state: "no_draft".into(),
@@ -467,6 +481,7 @@ impl SuggestSplitEnvelope {
     pub fn failed(limits: Limits, error: DomainError) -> Self {
         let mut result = Self::empty(limits);
         result.status = "failed".into();
+        result.partition_outcome = "failed_analysis".into();
         result.error = Some(error);
         result.draft_eligibility.reasons.push("failed_call".into());
         result
@@ -530,6 +545,13 @@ impl SuggestSplitEnvelope {
     }
     fn incomplete(&mut self, reason: &str) {
         self.withhold();
+        self.partition_outcome = "incomplete_analysis".into();
+        self.boundary_observations.coverage.completed = false;
+        for candidate in &mut self.ownership_candidates {
+            for companion in &mut candidate.companions {
+                companion.classification = "undetermined".into();
+            }
+        }
         self.status = "partial".into();
         self.coverage.scope_exhaustive = false;
         self.draft_eligibility.state = "incomplete".into();
@@ -640,6 +662,25 @@ impl SuggestSplitEnvelope {
                 }
             }
         }
+        for record in &mut self.boundary_observations.records {
+            controls.check()?;
+            omitted += omit_text(&mut record.anchor.span);
+            for anchor in record
+                .enclosing_unit
+                .iter_mut()
+                .chain(&mut record.counterpart)
+                .chain(&mut record.route_evidence)
+            {
+                omitted += omit_text(&mut anchor.span);
+            }
+        }
+        for anchor in &mut self
+            .boundary_observations
+            .coverage
+            .unsupported_context_examples
+        {
+            omitted += omit_text(&mut anchor.span);
+        }
         self.omit("display_text_fields", omitted);
         controls.check()?;
         if self.wire_bytes() <= self.limits.response_bytes {
@@ -684,6 +725,13 @@ impl SuggestSplitEnvelope {
                 .collect();
         }
         self.incomplete("response_bytes");
+        self.omit("ownership_candidates", self.ownership_candidates.len());
+        self.ownership_candidates.clear();
+        self.omit(
+            "boundary_observations",
+            self.boundary_observations.records.len(),
+        );
+        self.boundary_observations.records.clear();
         self.omit("signals", self.signals.len());
         self.omit("decisions", self.decisions.len());
         self.omit("chain_diagnostics", self.chain_diagnostics.len());
@@ -916,6 +964,14 @@ fn run_with_recheck(
                 .sum(),
         );
         result.decisions.clear();
+        result.omit("ownership_candidates", result.ownership_candidates.len());
+        result.ownership_candidates.clear();
+        result.omit(
+            "boundary_observations",
+            result.boundary_observations.records.len(),
+        );
+        result.boundary_observations.records.clear();
+        result.boundary_observations.coverage.completed = false;
         if error.code != "STALE_SELECTION" {
             result.omit("chain_diagnostics", result.chain_diagnostics.len());
             result.chain_diagnostics.clear();
@@ -936,6 +992,7 @@ fn run_with_recheck(
         } else {
             result.withhold();
             result.status = "failed".into();
+            result.partition_outcome = "failed_analysis".into();
             result.coverage.scope_exhaustive = false;
             result.draft_eligibility.state = "no_draft".into();
             result.draft_eligibility.evidence_complete = false;
@@ -1234,8 +1291,20 @@ fn build(
         result,
     )?;
     signals::risks(source, &parsed[&source.path], &lines, controls, result)?;
+    boundary::collect(
+        request,
+        &files,
+        &parsed,
+        contexts,
+        &glob_routes,
+        controls,
+        result,
+    )?;
+    ownership::build(result, controls)?;
+    boundary::link(result, controls)?;
     result.draft_eligibility.evidence_complete = true;
     if !clean {
+        result.partition_outcome = "unsupported_input".into();
         result
             .draft_eligibility
             .reasons
@@ -1299,6 +1368,8 @@ fn build(
         &result.scope_trivia,
         &result.item_contexts,
         &result.impl_contexts,
+        &result.ownership_candidates,
+        &result.boundary_observations,
         &result.source,
     ))?)?;
     Ok(())

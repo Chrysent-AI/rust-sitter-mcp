@@ -19,182 +19,6 @@ struct GroupFacts {
     signal_ids: Vec<String>,
     prefix: Option<String>,
 }
-struct Cluster {
-    members: Vec<usize>,
-    internal: usize,
-    prefixes: usize,
-    agreements: usize,
-}
-struct Union {
-    parents: Vec<usize>,
-}
-impl Union {
-    fn new(n: usize) -> Self {
-        Self {
-            parents: (0..n).collect(),
-        }
-    }
-    fn root(&mut self, mut i: usize) -> usize {
-        while self.parents[i] != i {
-            self.parents[i] = self.parents[self.parents[i]];
-            i = self.parents[i];
-        }
-        i
-    }
-    fn join(&mut self, a: usize, b: usize) {
-        let a = self.root(a);
-        let b = self.root(b);
-        // The earliest source member is the deterministic representative.
-        self.parents[a.max(b)] = a.min(b);
-    }
-}
-fn cluster_signals(
-    result: &SuggestSplitEnvelope,
-    controls: Controls<'_>,
-) -> Result<Vec<Cluster>, DomainError> {
-    let index: BTreeMap<_, _> = result
-        .inventory
-        .iter()
-        .enumerate()
-        .map(|(i, item)| (item.id.as_str(), i))
-        .collect();
-    let eligible: Vec<_> = result.inventory.iter().map(draftable).collect();
-    let mut union = Union::new(result.inventory.len());
-    let mut graph = vec![Vec::new(); result.inventory.len()];
-    let mut reverse = graph.clone();
-    for signal in &result.signals {
-        controls.check()?;
-        if signal.kind == "reference_candidate" && signal.facts.get("ambiguous_binding") != Some(&1)
-        {
-            let a = index[signal.from_item_id.as_deref().expect("directed source")];
-            let b = index[signal.to_item_id.as_deref().expect("directed target")];
-            if eligible[a] && eligible[b] && a != b {
-                graph[a].push(b);
-                reverse[b].push(a);
-            }
-        } else if matches!(
-            signal.kind.as_str(),
-            "name_prefix" | "banner_section" | "shared_attribute" | "doc_heading"
-        ) && signal.facts.get("common_prefix") != Some(&1)
-            && signal.facts.get("duplicate_names").copied().unwrap_or(0) == 0
-        {
-            let mut first = None;
-            for id in &signal.item_ids {
-                controls.check()?;
-                let i = index[id.as_str()];
-                if eligible[i] {
-                    if let Some(a) = first {
-                        union.join(a, i);
-                    } else {
-                        first = Some(i);
-                    }
-                }
-            }
-        }
-    }
-    // Iterative Kosaraju over the sparse candidate graph. One-way references do not join clusters.
-    let mut visited = vec![false; graph.len()];
-    let mut finish = Vec::new();
-    for start in 0..graph.len() {
-        controls.check()?;
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        let mut stack = vec![(start, 0)];
-        while let Some((node, child)) = stack.last_mut() {
-            controls.check()?;
-            if *child < graph[*node].len() {
-                let next = graph[*node][*child];
-                *child += 1;
-                if !visited[next] {
-                    visited[next] = true;
-                    stack.push((next, 0));
-                }
-            } else {
-                finish.push(*node);
-                stack.pop();
-            }
-        }
-    }
-    visited.fill(false);
-    for start in finish.into_iter().rev() {
-        controls.check()?;
-        if visited[start] {
-            continue;
-        }
-        let mut stack = vec![start];
-        visited[start] = true;
-        while let Some(node) = stack.pop() {
-            controls.check()?;
-            if eligible[start] && eligible[node] {
-                union.join(start, node);
-            }
-            for next in &reverse[node] {
-                controls.check()?;
-                if !visited[*next] {
-                    visited[*next] = true;
-                    stack.push(*next);
-                }
-            }
-        }
-    }
-    let mut clusters: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for (index, is_eligible) in eligible.iter().enumerate() {
-        controls.check()?;
-        if *is_eligible {
-            clusters.entry(union.root(index)).or_default().push(index);
-        }
-    }
-    let mut out = Vec::new();
-    for members in clusters.into_values() {
-        controls.check()?;
-        if members.len() < 2 {
-            continue;
-        }
-        let ids: BTreeSet<_> = members
-            .iter()
-            .map(|i| result.inventory[*i].id.as_str())
-            .collect();
-        let mut cluster = Cluster {
-            members,
-            internal: 0,
-            prefixes: 0,
-            agreements: 0,
-        };
-        for signal in &result.signals {
-            controls.check()?;
-            if signal.item_ids.iter().all(|id| ids.contains(id.as_str())) {
-                match signal.kind.as_str() {
-                    "reference_candidate"
-                        if signal.from_item_id != signal.to_item_id
-                            && signal.facts.get("ambiguous_binding") != Some(&1) =>
-                    {
-                        cluster.internal += signal.count
-                    }
-                    "name_prefix" if signal.facts.get("common_prefix") != Some(&1) => {
-                        cluster.prefixes = cluster.prefixes.max(signal.count)
-                    }
-                    "banner_section" | "shared_attribute" | "doc_heading" => {
-                        cluster.agreements += signal.count.saturating_sub(1)
-                    }
-                    _ => {}
-                }
-            }
-        }
-        out.push(cluster);
-    }
-    controls.check()?;
-    out.sort_by_key(|c| {
-        (
-            std::cmp::Reverse(c.internal),
-            std::cmp::Reverse(c.prefixes),
-            std::cmp::Reverse(c.agreements),
-            c.members[0],
-        )
-    });
-    Ok(out)
-}
 fn balanced(
     result: &SuggestSplitEnvelope,
     controls: Controls<'_>,
@@ -235,17 +59,25 @@ fn primary(
     result: &SuggestSplitEnvelope,
     controls: Controls<'_>,
 ) -> Result<(Vec<Vec<usize>>, bool), DomainError> {
-    let clusters = cluster_signals(result, controls)?;
-    if clusters.is_empty() {
-        return Ok((balanced(result, controls)?, true));
-    }
+    let index: BTreeMap<_, _> = result
+        .inventory
+        .iter()
+        .enumerate()
+        .map(|(i, item)| (&item.id, i))
+        .collect();
     let mut groups = vec![Vec::new()];
     let mut moved: BTreeSet<usize> = BTreeSet::new();
-    for cluster in clusters.iter().take(2) {
+    for candidate in &result.ownership_candidates {
         controls.check()?;
-        let members = cluster.members.clone();
+        let members: Vec<_> = candidate.core_item_ids.iter().map(|id| index[id]).collect();
+        if members.iter().any(|m| moved.contains(m)) {
+            continue;
+        }
         moved.extend(members.iter().copied());
         groups.push(members);
+        if groups.len() == 3 {
+            break;
+        }
     }
     for i in 0..result.inventory.len() {
         controls.check()?;
@@ -722,7 +554,7 @@ fn make_draft(
         }
     }
     Ok(Some(Draft { id: String::new(), advisory: true, source_snapshot_id: result.snapshot_id.clone().expect("complete snapshot"), groups,
-        rationale: if fallback { "low-confidence original-order balanced alternative; no semantic boundary claimed" } else { "rank clusters by descending internal candidate occurrences, same-prefix members, then section/attribute/doc agreements; earliest original range breaks ties" }.into(),
+        rationale: if fallback { "low-confidence original-order balanced alternative; no semantic boundary claimed" } else { "rank written cores by structural support, distinct unit relationships, fewer boundary costs/uncertainties, weak agreements, then source order; companions are not selected" }.into(),
         cross_group_signal_ids, unresolved_decision_ids: Vec::new(),
     }))
 }
@@ -747,6 +579,9 @@ pub(super) fn build(
     let parent = match supported_parent(&layout)? {
         ParentOutcome::Supported(parent) => parent,
         ParentOutcome::Unsupported(diagnostics) => {
+            if result.partition_outcome == "credible_written_candidates" {
+                result.partition_outcome = "unsupported_layout".into();
+            }
             result
                 .draft_eligibility
                 .reasons
@@ -794,6 +629,13 @@ pub(super) fn build(
             return Ok(());
         }
     };
+    if result.ownership_candidates.is_empty() {
+        result
+            .draft_eligibility
+            .reasons
+            .push(result.partition_outcome.clone());
+        return Ok(());
+    }
     let (a, fallback) = primary(result, controls)?;
     let b = balanced(result, controls)?;
     let Some(first) = make_draft(a.clone(), fallback, &layout, parent, result)? else {
