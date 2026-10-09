@@ -550,6 +550,7 @@ impl SuggestSplitEnvelope {
         for candidate in &mut self.ownership_candidates {
             for companion in &mut candidate.companions {
                 companion.classification = "undetermined".into();
+                companion.review_obligation = "association_unproved".into();
             }
         }
         self.status = "partial".into();

@@ -77,6 +77,102 @@ fn complete(response: &Value) {
         .iter()
         .map(|i| i["id"].as_str().unwrap())
         .collect();
+    let signals: BTreeSet<_> = response["signals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    let observations = response["boundary_observations"]["records"]
+        .as_array()
+        .unwrap();
+    let observation_ids: BTreeSet<_> = observations
+        .iter()
+        .map(|o| o["id"].as_str().unwrap())
+        .collect();
+    let candidates = response["ownership_candidates"].as_array().unwrap();
+    let mut companion_order = Vec::new();
+    for (i, candidate) in candidates.iter().enumerate() {
+        assert_eq!(candidate["id"], format!("candidate/{i}"));
+        for target in candidate["core_item_ids"].as_array().unwrap() {
+            assert!(inventory.contains(target.as_str().unwrap()));
+        }
+        for signal in candidate["structural_signal_ids"].as_array().unwrap() {
+            assert!(signals.contains(signal.as_str().unwrap()));
+        }
+        for alternative in candidate["alternatives"].as_array().unwrap() {
+            for target in alternative["item_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(alternative["excluded_item_ids"].as_array().unwrap())
+            {
+                assert!(inventory.contains(target.as_str().unwrap()));
+            }
+        }
+        for companion in candidate["companions"].as_array().unwrap() {
+            let item = response["inventory"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == companion["item_id"])
+                .unwrap();
+            companion_order.push((
+                (
+                    item["path"].as_str().unwrap(),
+                    item["span"]["range"]["start_byte"].as_u64().unwrap(),
+                    item["span"]["range"]["end_byte"].as_u64().unwrap(),
+                    item["kind"].as_str().unwrap(),
+                    i,
+                ),
+                companion["id"].as_str().unwrap(),
+            ));
+            assert!(matches!(
+                companion["review_obligation"].as_str().unwrap(),
+                "selection_completeness" | "boundary_dependency" | "association_unproved"
+            ));
+            for signal in companion["signal_ids"].as_array().unwrap() {
+                assert!(signals.contains(signal.as_str().unwrap()));
+            }
+            for observation in companion["boundary_observation_ids"].as_array().unwrap() {
+                assert!(observation_ids.contains(observation.as_str().unwrap()));
+            }
+            for consumer in companion["observed_consumer_item_ids"].as_array().unwrap() {
+                assert!(inventory.contains(consumer.as_str().unwrap()));
+            }
+        }
+    }
+    companion_order.sort_unstable();
+    for (i, (_, id)) in companion_order.into_iter().enumerate() {
+        assert_eq!(id, format!("companion/{i}"));
+    }
+    for observation in observations {
+        let targets = observation["item_ids"].as_array().unwrap();
+        for target in targets {
+            assert!(inventory.contains(target.as_str().unwrap()));
+        }
+        let expected: BTreeSet<_> = candidates
+            .iter()
+            .filter(|candidate| {
+                targets.iter().any(|target| {
+                    candidate["core_item_ids"]
+                        .as_array()
+                        .unwrap()
+                        .contains(target)
+                        || candidate["companions"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|companion| companion["item_id"] == *target)
+                })
+            })
+            .map(|candidate| candidate["id"].as_str().unwrap())
+            .collect();
+        let links = observation["ownership_candidate_ids"].as_array().unwrap();
+        let actual: BTreeSet<_> = links.iter().map(|id| id.as_str().unwrap()).collect();
+        assert_eq!(links.len(), actual.len());
+        assert_eq!(actual, expected);
+    }
     for draft in response["drafts"].as_array().unwrap() {
         let ids: Vec<_> = draft["groups"]
             .as_array()
@@ -120,6 +216,10 @@ fn collect_families_have_distinct_consumers_without_prefix_mergers() {
         assert_eq!(
             companion(&response, candidate, "shared")["classification"],
             "observed_shared"
+        );
+        assert_eq!(
+            companion(&response, candidate, "shared")["review_obligation"],
+            "boundary_dependency"
         );
         assert!(
             !candidate["core_item_ids"]
@@ -183,6 +283,23 @@ fn state_impl_payload_validators_and_constants_are_inspection_not_closure() {
         companion(&response, candidate, "LIMIT")["classification"],
         "observed_shared"
     );
+    let implementation = candidate["companions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["role"] == "implementation")
+        .unwrap();
+    assert_eq!(implementation["classification"], "observed_exclusive");
+    assert_eq!(
+        implementation["review_obligation"],
+        "selection_completeness"
+    );
+    for name in ["Payload", "validate", "LIMIT"] {
+        assert_eq!(
+            companion(&response, candidate, name)["review_obligation"],
+            "boundary_dependency"
+        );
+    }
     assert_eq!(candidate["core_item_ids"], json!([id(&response, "State")]));
     assert!(
         candidate["alternatives"]
@@ -221,6 +338,10 @@ fn infrastructural_verb_does_not_join_unrelated_members_or_owner_hubs() {
     assert_eq!(
         companion(&response, top, "Request")["classification"],
         "observed_exclusive"
+    );
+    assert_eq!(
+        companion(&response, top, "Request")["review_obligation"],
+        "boundary_dependency"
     );
     assert_eq!(top["alternatives"][0]["kind"], "whole_impl");
     let negative = fixture("fn persist_clock() {}\nfn persist_flush() {}\nfn persist_probe() {}\n");
@@ -310,6 +431,31 @@ fn competing_nominal_imports_and_uncertain_consumers_do_not_gain_ownership_claim
         companion(&response, &response["ownership_candidates"][0], "validate")["classification"],
         "undetermined"
     );
+    assert_eq!(
+        companion(&response, &response["ownership_candidates"][0], "validate")["review_obligation"],
+        "association_unproved"
+    );
+}
+
+#[test]
+fn exposed_companion_is_a_boundary_even_with_exclusive_observed_consumers() {
+    let repo =
+        fixture("fn a() { b(); public_helper(); }\nfn b() { a(); }\npub fn public_helper() {}\n");
+    let response = advice(&repo, json!({}));
+    complete(&response);
+    let dependency = companion(
+        &response,
+        &response["ownership_candidates"][0],
+        "public_helper",
+    );
+    assert_eq!(dependency["classification"], "observed_exclusive");
+    assert_eq!(dependency["review_obligation"], "boundary_dependency");
+    assert!(
+        dependency["stop_reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("public_or_exposed_boundary"))
+    );
 }
 
 #[test]
@@ -353,13 +499,18 @@ fn trait_wrapper_discloses_excluded_impl_and_concrete_component_without_semantic
         companion(&response, candidate, "Sink")["role"],
         "payload_or_type"
     );
-    assert!(
-        candidate["companions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["role"] == "implementation" && c["classification"] == "undetermined")
+    assert_eq!(
+        companion(&response, candidate, "Sink")["review_obligation"],
+        "boundary_dependency"
     );
+    let implementation = candidate["companions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["role"] == "implementation")
+        .unwrap();
+    assert_eq!(implementation["classification"], "undetermined");
+    assert_eq!(implementation["review_obligation"], "association_unproved");
     assert!(
         candidate["alternatives"]
             .as_array()

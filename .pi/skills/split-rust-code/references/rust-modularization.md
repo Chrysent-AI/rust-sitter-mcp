@@ -77,8 +77,14 @@ Rules:
 
 Name prefixes, banners, shared attributes and adjacency are displayed weak facts,
 not core-forming edges. Inspect the ranked written core and its separately disclosed
-impl/payload/helper/constant companions. Shared orchestrators/helpers are boundaries,
-not joining hubs. Compare whole-impl versus explicit member alternatives, respecting
+impl/payload/helper/constant companions. Candidate `candidate/N` and companion
+`companion/N` IDs are response-local, not move anchors. Read each companion's
+`review_obligation`: `selection_completeness` calls for review of a supported
+unstopped type/impl bundle's selection shape; `boundary_dependency` allows review
+of retaining a written dependency in the parent; `association_unproved` cannot
+establish either obligation. Consumer `classification` is separate: an exclusive
+payload/helper reference does not mandate co-location or prove access repairs.
+Shared orchestrators/helpers are boundaries, not joining hubs. Compare whole-impl versus explicit member alternatives, respecting
 exclusions and overlap links. Boundary observations show admitted written consumers,
 not symbol resolution, move repairability or architectural ownership. An observed-
 exclusive classification is restricted to the completed admitted observation scope.

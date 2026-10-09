@@ -63,6 +63,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Distinguish inspection companions' selection-completeness, boundary-dependency
+  and unproved-association review obligations from observed-consumer classification;
+  emit `candidate/N` IDs and deterministic unique response-local `companion/N` IDs.
 * Keep competing nominal imports and uncertain local written consumers from
   gaining credible ownership seeds or exclusive companion classifications.
 * Emit narrow ancestor-scoped visibility repairs (`pub(super)` or

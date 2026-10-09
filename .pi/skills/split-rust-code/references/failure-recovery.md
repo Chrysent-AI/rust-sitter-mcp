@@ -79,7 +79,12 @@ not a failure or a reason to force byte balancing. Review inventory/weak evidenc
 and choose a boundary externally if needed. `incomplete_analysis` cannot establish
 that negative; inspect guards, omissions and coverage before retrying. Candidates
 may still exist when ordinary layout cannot produce complete drafts. Companions and
-impl/member alternatives are never automatic selections. Read the separate
+impl/member alternatives are never automatic selections. Companion
+`review_obligation:"association_unproved"` means the available evidence cannot
+establish a selection-completeness or retainable-dependency obligation; inspect
+its signal/boundary links and stop reasons rather than guessing from consumer
+`classification`. Candidate `candidate/N` and companion `companion/N` IDs are
+response-local only; execution still requires complete current anchors. Read the separate
 `boundary_observations.coverage`; zero observed consumers is not proof of no others,
 and uncertain routes cannot waive execution blockers or test acknowledgment rules.
 
