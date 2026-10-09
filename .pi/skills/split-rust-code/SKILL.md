@@ -138,6 +138,16 @@ Already sufficient visibility is preserved, and moved private members retain acc
 from their original defining region. Supported private/restricted internal choices
 are rechecked against the merged requirement; an insufficient narrower choice blocks
 with `visibility_scope_unproved`, never a silently accepted broken access.
+Inspect each visibility rewrite's `visibility` object: exact `consumers[].anchor`
+with `access_reason` and original/final consumer module regions, original/final
+`defining_region` fields, preserved access requirements and
+`narrowest_covering_region` (module-segment arrays; `[]` means crate root).
+The defining fields are `original_defining_region` and `final_defining_region`;
+the original is null for a synthesized module declaration. A preservation-only
+repair has empty consumers and explicitly says no new observed caller. The computed
+minimum stays visible even when `after_text` reflects a broader supported override.
+This disclosure does not unlock private fields, constructors, unproved concrete types
+or uncertain receivers; their anchored blockers still apply.
 Associated batches share context evaluations at plan level; per-proof context arrays
 are empty. Keep enclosing impl inventory units in the retain set when moving members.
 

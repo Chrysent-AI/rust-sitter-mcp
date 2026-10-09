@@ -2,7 +2,7 @@
 mod associated;
 use crate::{
     items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile},
-    move_plan::{MoveRequest, RewriteTarget},
+    move_plan::{MoveRequest, RewriteTarget, VisibilityConsumer, VisibilityExplanation},
     plan::SourceAnchor,
     result::{ByteRange, DomainError},
     scope::FileSnapshot,
@@ -21,6 +21,7 @@ pub(crate) struct Repair {
     pub item_ids: Vec<String>,
     pub anchors: Vec<SourceAnchor>,
     pub rationale: String,
+    pub visibility: Option<VisibilityExplanation>,
     /// A visibility operation on the declaration linking this proposed file.
     pub declaration_for: Option<String>,
     pub references: Vec<SourceAnchor>,
@@ -44,6 +45,21 @@ fn anchor(files: &BTreeMap<String, FileSnapshot>, path: &str, range: &ByteRange)
         path: path.into(),
         range: range.clone(),
         expected_text: files[path].source[range.start_byte..range.end_byte].into(),
+    }
+}
+fn access(
+    files: &BTreeMap<String, FileSnapshot>,
+    path: &str,
+    range: &ByteRange,
+    reason: &str,
+    original: &[String],
+    final_region: &[String],
+) -> VisibilityConsumer {
+    VisibilityConsumer {
+        anchor: anchor(files, path, range),
+        access_reason: reason.into(),
+        original_module_region: original.to_vec(),
+        final_module_region: final_region.to_vec(),
     }
 }
 fn import_text(target: &str, binding: &str) -> String {
@@ -116,6 +132,12 @@ impl VisibilityRegion {
         }
     }
 }
+#[derive(Default)]
+struct VisibilityObservations {
+    consumers: Vec<VisibilityConsumer>,
+    preserved_original_access_regions: Vec<Vec<String>>,
+}
+type VisibilitySubject = (String, usize, Option<String>);
 type VisibilityKey = (String, usize, usize, Option<String>);
 fn visibility_key(repair: &Repair) -> VisibilityKey {
     (
@@ -289,6 +311,7 @@ struct Analyzer<'a> {
     final_contexts: &'a BTreeMap<String, ModuleEvidence>,
     repairs: Vec<Repair>,
     visibility_regions: BTreeMap<VisibilityKey, VisibilityRegion>,
+    visibility_observations: BTreeMap<VisibilitySubject, VisibilityObservations>,
     imports: Vec<ImportBinding>,
     descriptor_bytes: usize,
     reference_candidates: &'a mut usize,
@@ -330,6 +353,11 @@ impl Analyzer<'_> {
         self.descriptor_bytes += repair.path.len()
             + repair.after.len()
             + repair.rationale.len()
+            + repair.visibility.as_ref().map_or(0, |v| {
+                serde_json::to_vec(v)
+                    .expect("visibility evidence JSON")
+                    .len()
+            })
             + repair
                 .anchors
                 .iter()
@@ -398,6 +426,11 @@ impl Analyzer<'_> {
                 required: required.to_vec(),
             });
         region.required = common_region(&region.required, required);
+        repair
+            .visibility
+            .as_mut()
+            .expect("visibility evidence")
+            .narrowest_covering_region = region.required.clone();
         repair.after = region.text();
         if repair.range.start_byte == repair.range.end_byte {
             repair.after.push(' ');
@@ -410,8 +443,62 @@ impl Analyzer<'_> {
                 && r.declaration_for == repair.declaration_for
         }) {
             existing.after.clone_from(&repair.after);
+            existing
+                .visibility
+                .as_mut()
+                .expect("visibility evidence")
+                .narrowest_covering_region = region.required.clone();
         }
         self.add(repair);
+    }
+    fn explain_visibility(&mut self) -> Result<(), DomainError> {
+        for repair in &mut self.repairs {
+            items::check(self.controls.0, self.controls.1)?;
+            let Some(explanation) = &mut repair.visibility else {
+                continue;
+            };
+            let subject = (
+                repair.path.clone(),
+                repair.range.start_byte,
+                repair.declaration_for.clone(),
+            );
+            let observations = &self.visibility_observations[&subject];
+            explanation.consumers = observations.consumers.clone();
+            explanation.consumers.sort();
+            explanation.preserved_original_access_regions =
+                observations.preserved_original_access_regions.clone();
+            explanation.preserved_original_access_regions.sort();
+            explanation.basis = if explanation.consumers.is_empty() {
+                "preserve original defining-region access; no new observed caller".into()
+            } else {
+                "cover the exact observed written accesses and preserved access requirements".into()
+            };
+            if !explanation.consumers.is_empty()
+                && !explanation.preserved_original_access_regions.is_empty()
+            {
+                explanation.basis.push_str(
+                    "; preserve original defining-region access without inferring outside callers",
+                );
+            }
+            explanation.basis.push_str("; the narrowest covering region is their deepest common evidenced ancestor, not exhaustive caller discovery or semantic verification");
+            repair.rationale.clone_from(&explanation.basis);
+            repair.references = explanation
+                .consumers
+                .iter()
+                .map(|c| c.anchor.clone())
+                .collect();
+            self.descriptor_bytes += serde_json::to_vec(explanation)
+                .expect("visibility explanation JSON")
+                .len()
+                + repair.rationale.len()
+                + repair
+                    .references
+                    .iter()
+                    .map(|a| a.path.len() + a.expected_text.len() + 128)
+                    .sum::<usize>();
+            self.exceeded |= self.descriptor_bytes > 128 * 1024 * 1024;
+        }
+        Ok(())
     }
     fn contributors(&self, ids: &[String]) -> Vec<SourceAnchor> {
         self.request
@@ -818,7 +905,14 @@ impl Analyzer<'_> {
             .collect();
         (matching.len() == 1).then(|| matching[0].clone())
     }
-    fn visibility(&mut self, path: &str, item: &Item, consumer: &[String], ids: &[String]) -> bool {
+    fn visibility(
+        &mut self,
+        path: &str,
+        item: &Item,
+        consumer: &[String],
+        ids: &[String],
+        access: &VisibilityConsumer,
+    ) -> bool {
         let final_path = self.final_path(path, item).to_owned();
         let Some(defining) = self.final_contexts.get(&final_path).cloned() else {
             return false;
@@ -858,6 +952,7 @@ impl Analyzer<'_> {
                 using,
                 ids,
                 created,
+                Some(access),
             ) {
                 return false;
             }
@@ -876,6 +971,7 @@ impl Analyzer<'_> {
                 using,
                 ids,
                 Some(final_path.clone()),
+                Some(access),
             )
         {
             return false;
@@ -887,6 +983,7 @@ impl Analyzer<'_> {
             using,
             ids,
             None,
+            Some(access),
         )
     }
     fn visibility_need(
@@ -896,12 +993,13 @@ impl Analyzer<'_> {
         item: &Item,
         using: &[String],
         facade_access: bool,
+        access: VisibilityConsumer,
     ) -> bool {
         // Attribute-only semantic evidence cannot substitute for binding access.
         // Keep all required visibility/module repairs even if context is discharged later.
         if !facade_access
             && self.request.resolve_semantic
-            && !self.visibility(path, item, using, &need.item_ids)
+            && !self.visibility(path, item, using, &need.item_ids, &access)
         {
             need.reason = DecisionReason::VisibilityScopeUnproved;
             need.category = "visibility_context";
@@ -947,7 +1045,7 @@ impl Analyzer<'_> {
         }
         if facade_access
             || self.request.resolve_semantic
-            || self.visibility(path, item, using, &need.item_ids)
+            || self.visibility(path, item, using, &need.item_ids, &access)
         {
             return true;
         }
@@ -958,6 +1056,7 @@ impl Analyzer<'_> {
                 .into();
         false
     }
+    #[allow(clippy::too_many_arguments)] // Access evidence accompanies the unchanged visibility calculation.
     fn widen(
         &mut self,
         path: &str,
@@ -966,7 +1065,44 @@ impl Analyzer<'_> {
         using: &[String],
         ids: &[String],
         declaration_for: Option<String>,
+        access: Option<&VisibilityConsumer>,
     ) -> bool {
+        let at = item
+            .map(|i| i.span.range.start_byte)
+            .unwrap_or(self.files[path].source.len());
+        let subject = (path.to_owned(), at, declaration_for.clone());
+        let observations = self.visibility_observations.entry(subject).or_default();
+        if let Some(access) = access {
+            if !observations.consumers.contains(access) {
+                self.descriptor_bytes += serde_json::to_vec(access)
+                    .expect("visibility access JSON")
+                    .len()
+                    + path.len()
+                    + 128;
+                observations.consumers.push(access.clone());
+            }
+        } else if !observations
+            .preserved_original_access_regions
+            .iter()
+            .any(|r| r == using)
+        {
+            self.descriptor_bytes +=
+                using.iter().map(|s| s.len() + 32).sum::<usize>() + path.len() + 128;
+            observations
+                .preserved_original_access_regions
+                .push(using.to_vec());
+        }
+        self.exceeded |= self.descriptor_bytes > 128 * 1024 * 1024;
+        let explanation = |preserved: &[String]| VisibilityExplanation {
+            consumers: Vec::new(),
+            original_defining_region: item
+                .and_then(|_| self.contexts.get(path).map(|c| c.module_segments.clone())),
+            final_defining_region: defining.to_vec(),
+            preserved_access_region: preserved.to_vec(),
+            preserved_original_access_regions: Vec::new(),
+            narrowest_covering_region: Vec::new(),
+            basis: String::new(),
+        };
         let visibility = item.map(|i| i.visibility_key).unwrap_or("private");
         if using.starts_with(defining) || matches!(visibility, "pub" | "pub(crate)") {
             return true;
@@ -1018,6 +1154,7 @@ impl Analyzer<'_> {
                 anchors: vec![a],
                 rationale: "known ancestor restriction is insufficient for a proven final access; preserve its existing region and cover all proven callers at their deepest common ancestor"
                     .into(),
+                visibility: Some(explanation(&scope)),
                 declaration_for,
                 references: Vec::new(),
                 caller_override: false,
@@ -1044,6 +1181,7 @@ impl Analyzer<'_> {
             target: RewriteTarget::Synthesis { path: path.into(), slot: "visibility_insert".into(), items: self.contributors(ids), boundary_role: None, parent_path: None, binding: Some(parts.join("::")) },
             item_ids: ids.to_vec(), anchors: item.map(|i| vec![anchor(self.files, path, &i.span.range)]).unwrap_or_default(),
             rationale: "proven access is outside the declaration's parent scope; cover all proven callers at their deepest common ancestor".into(),
+            visibility: Some(explanation(defining)),
             declaration_for,
             references: Vec::new(), caller_override: false, import_module: None, import_scope: None,
         }, defining, &common_region(defining, using));
@@ -1159,6 +1297,7 @@ impl Analyzer<'_> {
             item_ids: ids.to_vec(),
             anchors,
             rationale: format!("{rationale}; boundary ending {eol:?} is separately audited"),
+            visibility: None,
             declaration_for: None,
             references,
             caller_override: false,
@@ -1267,6 +1406,7 @@ impl Analyzer<'_> {
             item_ids: need.item_ids.clone(),
             anchors: vec![a],
             rationale: "complete written binding in a verified ordinary lexical context".into(),
+            visibility: None,
             declaration_for: None,
             references: Vec::new(),
             caller_override: false,
@@ -1601,9 +1741,23 @@ impl Analyzer<'_> {
                 };
                 if let Some(replacement) = replacement {
                     self.source_repair(need, prefix_range.clone(), replacement, "use_path");
-                    for (declaration, facade) in &declarations {
+                    for (leaf, (declaration, facade)) in leaves.iter().zip(&declarations) {
                         if let Some((p, i)) = declaration
-                            && !self.visibility_need(need, p, i, &using, *facade)
+                            && !self.visibility_need(
+                                need,
+                                p,
+                                i,
+                                &using,
+                                *facade,
+                                access(
+                                    self.files,
+                                    &need.path,
+                                    &leaf.path_range,
+                                    "written_import",
+                                    &module,
+                                    &using,
+                                ),
+                            )
                         {
                             return false;
                         }
@@ -1618,7 +1772,21 @@ impl Analyzer<'_> {
         {
             if old == new && module == using {
                 if let Some((p, i)) = declaration
-                    && !self.visibility_need(need, &p, &i, &using, facade)
+                    && !self.visibility_need(
+                        need,
+                        &p,
+                        &i,
+                        &using,
+                        facade,
+                        access(
+                            self.files,
+                            &need.path,
+                            &leaf.path_range,
+                            "written_import",
+                            &module,
+                            &using,
+                        ),
+                    )
                 {
                     return false;
                 }
@@ -1683,7 +1851,7 @@ impl Analyzer<'_> {
                         .unwrap_or_default();
                     if !node.parent().is_some_and(|p| p.kind() == "source_file") {
                         let scope = node.parent().expect("use scope");
-                        let repair = Repair { path:need.path.clone(),range:span(node.end_byte(), node.end_byte()),after:import_text(&new, &leaf.binding),kind:"import_insert",written_reexport:false,target:RewriteTarget::Synthesis {path:consumer.clone(),slot:"import".into(),items:self.contributors(&need.item_ids),boundary_role:None,parent_path:None,binding:Some(format!("{}@{}", leaf.binding, node.start_byte()))},item_ids:need.item_ids.clone(),anchors:vec![anchor(self.files, &need.path, &leaf.leaf_range)],rationale:"extract only the changed leaf into an explicit binding in its original lexical scope".into(),declaration_for:None,references,caller_override:false,import_module:Some(using.clone()),import_scope:Some(span(scope.start_byte(),scope.end_byte())) };
+                        let repair = Repair { path:need.path.clone(),range:span(node.end_byte(), node.end_byte()),after:import_text(&new, &leaf.binding),kind:"import_insert",written_reexport:false,target:RewriteTarget::Synthesis {path:consumer.clone(),slot:"import".into(),items:self.contributors(&need.item_ids),boundary_role:None,parent_path:None,binding:Some(format!("{}@{}", leaf.binding, node.start_byte()))},item_ids:need.item_ids.clone(),anchors:vec![anchor(self.files, &need.path, &leaf.leaf_range)],rationale:"extract only the changed leaf into an explicit binding in its original lexical scope".into(),visibility:None,declaration_for:None,references,caller_override:false,import_module:Some(using.clone()),import_scope:Some(span(scope.start_byte(),scope.end_byte())) };
                         if self.binding_collision(&repair, &leaf.binding, &using) {
                             need.reason = DecisionReason::LexicalContextUnproved;
                             need.category = "binding_collision";
@@ -1708,7 +1876,21 @@ impl Analyzer<'_> {
                 }
             }
             if let Some((p, i)) = declaration
-                && !self.visibility_need(need, &p, &i, &using, facade)
+                && !self.visibility_need(
+                    need,
+                    &p,
+                    &i,
+                    &using,
+                    facade,
+                    access(
+                        self.files,
+                        &need.path,
+                        &leaf.path_range,
+                        "written_import",
+                        &module,
+                        &using,
+                    ),
+                )
             {
                 return false;
             }
@@ -1869,6 +2051,14 @@ impl Analyzer<'_> {
             &binding,
             &using,
             !resolved.evidence.fallback.is_empty(),
+            access(
+                self.files,
+                &need.path,
+                &span(node.start_byte(), node.end_byte()),
+                "written_path",
+                &old_module,
+                &using,
+            ),
         )
     }
     fn constructor_unknown(&self, item: &Item, reference: Node<'_>) -> bool {
@@ -2545,7 +2735,21 @@ impl Analyzer<'_> {
                 return false;
             };
             return if let Some((p, i)) = self.declaration(&resolved.terminal) {
-                self.visibility_need(need, &p, &i, &using, !resolved.evidence.fallback.is_empty())
+                self.visibility_need(
+                    need,
+                    &p,
+                    &i,
+                    &using,
+                    !resolved.evidence.fallback.is_empty(),
+                    access(
+                        self.files,
+                        &need.path,
+                        &span(node.start_byte(), node.end_byte()),
+                        "written_binding",
+                        &module,
+                        &using,
+                    ),
+                )
             } else if resolved.terminal.starts_with("crate::") {
                 self.missing_target(need, &resolved.terminal)
             } else {
@@ -2685,7 +2889,21 @@ impl Analyzer<'_> {
             }
         }
         if let Some((p, i)) = self.declaration(&old) {
-            self.visibility_need(need, &p, &i, &using, facade)
+            self.visibility_need(
+                need,
+                &p,
+                &i,
+                &using,
+                facade,
+                access(
+                    self.files,
+                    &need.path,
+                    &span(node.start_byte(), node.end_byte()),
+                    "written_binding",
+                    &module,
+                    &using,
+                ),
+            )
         } else if old.starts_with("crate::") {
             self.missing_target(need, &old)
         } else {
@@ -2715,6 +2933,7 @@ pub(crate) fn analyze(
         final_contexts,
         repairs: Vec::new(),
         visibility_regions: BTreeMap::new(),
+        visibility_observations: BTreeMap::new(),
         imports: Vec::new(),
         descriptor_bytes: 0,
         reference_candidates,
@@ -2820,6 +3039,7 @@ pub(crate) fn analyze(
             ));
         }
     }
+    analyzer.explain_visibility()?;
     remaining.extend(analyzer.choices()?);
     items::check(controls.0, controls.1)?;
     if analyzer.exceeded {

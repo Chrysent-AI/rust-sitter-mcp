@@ -119,6 +119,14 @@ impl Analyzer<'_> {
                             &declaration,
                             &new_module,
                             !resolved.evidence.fallback.is_empty(),
+                            access(
+                                self.files,
+                                &path,
+                                &span(node.start_byte(), node.end_byte()),
+                                "impl_header_dependency",
+                                &old_module,
+                                &new_module,
+                            ),
                         );
                         let carried = if written.contains("::") {
                             written.starts_with("crate::") && resolved.route == written
@@ -227,7 +235,22 @@ impl Analyzer<'_> {
                 needs.push(need);
                 continue;
             }
-            if !self.visibility_need(&mut need, &type_path, &ty, &new_module, false) {
+            let type_node = impl_node.child_by_field_name("type").expect("impl type");
+            if !self.visibility_need(
+                &mut need,
+                &type_path,
+                &ty,
+                &new_module,
+                false,
+                access(
+                    self.files,
+                    &path,
+                    &span(type_node.start_byte(), type_node.end_byte()),
+                    "impl_self_type",
+                    &old_module,
+                    &new_module,
+                ),
+            ) {
                 needs.push(need);
                 continue;
             }
@@ -239,6 +262,7 @@ impl Analyzer<'_> {
                 &new_module,
                 &old_module,
                 &need.item_ids,
+                None,
                 None,
             ) {
                 needs.push(need.clone());
@@ -367,6 +391,14 @@ impl Analyzer<'_> {
                         let (p, member) = matches.remove(0);
                         let final_path = self.final_path(&p, &member).to_owned();
                         let defining = self.final_contexts[&final_path].module_segments.clone();
+                        let witness = access(
+                            self.files,
+                            &path,
+                            &span(node.start_byte(), node.end_byte()),
+                            "same_type_inherent_access",
+                            &old_module,
+                            &new_module,
+                        );
                         if !member.reasons.is_empty()
                             || !self.widen(
                                 &p,
@@ -375,6 +407,7 @@ impl Analyzer<'_> {
                                 &new_module,
                                 &need.item_ids,
                                 None,
+                                Some(&witness),
                             )
                         {
                             let mut veto = need.clone();

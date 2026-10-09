@@ -47,9 +47,13 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   multi-binding use lines are only flagged conservatively.
 - Gap collapse applies to interior batch-removal gaps only; BOF/EOF-touching gaps default
   to byte-identical retention; single-item plans keep legacy serialized shapes.
-- Visibility repairs support private/`pub(crate)`/`pub(super)`/`pub(in path)` minimal-region
-  computation for cross-module inherent calls; other widening shapes still escalate to
-  `pub(crate)` review.
+- Supported visibility repairs compute the narrowest ancestor region covering
+  preserved access and proven final consumers, not a blanket `pub(crate)` escalation.
+  Their `visibility` evidence identifies exact written access anchors/reasons,
+  original/final module regions and the computed covering region. Preservation-only
+  moved-member repairs explicitly report no new observed caller. This is not exhaustive
+  caller discovery or a new privacy capability: unsupported private fields/constructors,
+  concrete types and uncertain receivers retain anchored refusals.
 
 ## Measured state (oss-benchmark run 6, 2026-10-08)
 

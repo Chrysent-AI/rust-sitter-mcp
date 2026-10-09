@@ -172,6 +172,40 @@ fn inaccessible_private_method_remains_a_named_blocker() {
     assert!(value["plan"]["patch"].is_null());
 }
 
+fn assert_anchored_access_refusal(value: &Value) {
+    assert_eq!(value["plan"]["applicable"], false, "{value}");
+    for field in ["edits", "created_files", "patch"] {
+        assert!(value["plan"][field].is_null(), "{value}");
+    }
+    assert!(
+        value["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| {
+                d["reason"] == "member_or_constructor_unproved"
+                    && d["blocks_applicability"] == true
+                    && d["anchors"].as_array().unwrap().iter().any(|a| {
+                        a["path"] == "cases/layout/source.rs"
+                            && !a["expected_text"].as_str().unwrap().is_empty()
+                    })
+            }),
+        "{value}"
+    );
+}
+
+#[test]
+fn private_field_access_is_not_unlocked_by_a_type_visibility_explanation() {
+    let text = "fn selected(value: Value) -> u32 { value.number }";
+    let repo = fixture(text);
+    repo.write(
+        "cases/layout/source.rs",
+        &format!("struct Value {{ number: u32 }}\n{text}"),
+    );
+    let value = resolved(&repo, request(&repo, text));
+    assert_anchored_access_refusal(&value);
+}
+
 #[test]
 fn generic_and_trait_object_receivers_refuse_without_candidate_shortcuts() {
     for text in [
@@ -183,9 +217,7 @@ fn generic_and_trait_object_receivers_refuse_without_candidate_shortcuts() {
         let repo = fixture(text);
         repo.write("cases/layout/lib.rs", "mod source; pub trait Read { fn read(&self) -> u32; fn trait_read(&self) -> u32; } pub struct Value; impl Read for Value { fn read(&self) -> u32 { 1 } fn trait_read(&self) -> u32 { 1 } }");
         let value = resolved(&repo, request(&repo, text));
-        assert_eq!(value["plan"]["applicable"], false, "{value}");
-        assert!(reason(&value, "member_or_constructor_unproved"), "{value}");
-        assert!(value["plan"]["patch"].is_null());
+        assert_anchored_access_refusal(&value);
     }
 }
 
@@ -222,8 +254,7 @@ fn inaccessible_constructor_fields_and_recovered_dependency_text_refuse() {
         &format!("pub struct Value {{ number: u32 }}\n{text}"),
     );
     let value = resolved(&repo, request(&repo, text));
-    assert_eq!(value["plan"]["applicable"], false, "{value}");
-    assert!(reason(&value, "member_or_constructor_unproved"), "{value}");
+    assert_anchored_access_refusal(&value);
     let text = "fn selected(value: crate::Value) -> u32 { value.read() }";
     let repo = fixture(text);
     repo.write("cases/layout/lib.rs", "mod source; pub struct Value; impl Value { pub fn read(&self) -> u32 { 7 } } fn recovered() { @ }");

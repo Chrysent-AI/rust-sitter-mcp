@@ -72,6 +72,14 @@ fn compile(repo: &Fixture) {
         String::from_utf8_lossy(&result.stderr)
     );
 }
+fn nested_anchor(repo: &Fixture, outer: &str, occurrence: &str) -> Value {
+    let mut result = anchor(repo, SOURCE, outer);
+    let start =
+        result["range"]["start_byte"].as_u64().unwrap() as usize + outer.find(occurrence).unwrap();
+    result["range"] = json!({"start_byte":start,"end_byte":start + occurrence.len()});
+    result["expected_text"] = json!(occurrence);
+    result
+}
 fn read_repair(result: &Value) -> &Value {
     let repairs: Vec<_> = result["plan"]["rewrites"]
         .as_array()
@@ -111,6 +119,66 @@ fn inherent_call_uses_parent_mid_region_or_crate_as_required_by_all_callers() {
             repair["item_ids"].as_array().unwrap().len(),
             if second.is_some() { 2 } else { 1 }
         );
+        let visibility = &repair["visibility"];
+        assert_eq!(
+            visibility["original_defining_region"],
+            json!(["scheduler", "work", "source"])
+        );
+        assert_eq!(
+            visibility["final_defining_region"],
+            visibility["original_defining_region"]
+        );
+        assert_eq!(
+            visibility["preserved_access_region"],
+            visibility["original_defining_region"]
+        );
+        let expected_region = match second {
+            None => json!(["scheduler", "work"]),
+            Some("cases/layout/scheduler/observe/target.rs") => json!(["scheduler"]),
+            Some(_) => json!([]),
+        };
+        assert_eq!(visibility["narrowest_covering_region"], expected_region);
+        let consumers = visibility["consumers"].as_array().unwrap();
+        assert_eq!(consumers.len(), if second.is_some() { 2 } else { 1 });
+        for (index, consumer) in consumers.iter().enumerate() {
+            assert_eq!(
+                consumer["anchor"],
+                nested_anchor(&repo, if index == 0 { FIRST } else { SECOND }, "self.read")
+            );
+            assert_eq!(consumer["access_reason"], "same_type_inherent_access");
+            assert_eq!(
+                consumer["original_module_region"],
+                json!(["scheduler", "work", "source"])
+            );
+            let final_region = if index == 0 || second.is_none() {
+                json!(["scheduler", "work", "target"])
+            } else if second == Some("cases/layout/scheduler/observe/target.rs") {
+                json!(["scheduler", "observe", "target"])
+            } else {
+                json!(["outside", "target"])
+            };
+            assert_eq!(consumer["final_module_region"], final_region);
+        }
+        if second == Some("cases/layout/outside/target.rs") {
+            let type_repair = result["plan"]["rewrites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| {
+                    r["kind"] == "visibility" && r["target"]["binding"] == "crate::scheduler::Core"
+                })
+                .unwrap();
+            let callers = type_repair["visibility"]["consumers"].as_array().unwrap();
+            assert_eq!(callers.len(), 2);
+            for caller in callers {
+                assert_eq!(caller["anchor"], nested_anchor(&repo, "impl Core ", "Core"));
+                assert_eq!(caller["access_reason"], "impl_self_type");
+            }
+            assert_eq!(
+                type_repair["visibility"]["narrowest_covering_region"],
+                json!([])
+            );
+        }
         compile(&apply(&repo, &result));
         // Caller order must not change the covering region or create overlapping splices.
         if second.is_some() {
@@ -118,6 +186,10 @@ fn inherent_call_uses_parent_mid_region_or_crate_as_required_by_all_callers() {
             reversed["moves"].as_array_mut().unwrap().reverse();
             let reverse_result = run(&repo, reversed);
             assert_eq!(read_repair(&reverse_result)["after_text"], expected);
+            assert_eq!(
+                read_repair(&reverse_result)["visibility"],
+                repair["visibility"]
+            );
             compile(&apply(&repo, &reverse_result));
         }
     }
@@ -132,6 +204,19 @@ fn insufficient_restriction_escalates_and_insufficient_override_blocks() {
     assert_eq!(result["plan"]["applicable"], true, "{result}");
     let repair = read_repair(&result);
     assert_eq!(repair["after_text"], "pub(in crate::scheduler)");
+    assert_eq!(
+        repair["visibility"]["preserved_access_region"],
+        json!(["scheduler", "work"])
+    );
+    assert_eq!(
+        repair["visibility"]["narrowest_covering_region"],
+        json!(["scheduler"])
+    );
+    // Include the caller already covered by the original restriction, not only the widening trigger.
+    assert_eq!(
+        repair["visibility"]["consumers"].as_array().unwrap().len(),
+        2
+    );
     compile(&apply(&repo, &result));
     for text in [
         "pub(super)",
@@ -161,6 +246,10 @@ fn insufficient_restriction_escalates_and_insufficient_override_blocks() {
         alternative["rewrite_overrides"] =
             json!([{"target":repair["target"],"action":"replace","replacement_text":text}]);
         let accepted = run(&repo, alternative);
+        assert_eq!(
+            read_repair(&accepted)["visibility"]["narrowest_covering_region"],
+            json!(["scheduler"])
+        );
         compile(&apply(&repo, &accepted));
     }
 }
@@ -226,6 +315,25 @@ fn new_module_declaration_uses_parent_region_and_rechecks_its_override() {
         .find(|r| r["id"] == file["declaration_visibility_rewrite_id"])
         .unwrap();
     assert_eq!(repair["after_text"], "pub(super) ");
+    let visibility = &repair["visibility"];
+    assert!(visibility["original_defining_region"].is_null());
+    assert_eq!(
+        visibility["final_defining_region"],
+        json!(["scheduler", "work"])
+    );
+    assert_eq!(
+        visibility["narrowest_covering_region"],
+        json!(["scheduler"])
+    );
+    assert_eq!(visibility["consumers"][0]["access_reason"], "written_path");
+    assert_eq!(
+        visibility["consumers"][0]["anchor"],
+        anchor(
+            &repo,
+            "cases/layout/scheduler/observe/target.rs",
+            "crate::scheduler::work::source::selected"
+        )
+    );
     for text in ["pub(super) ", "pub(in crate::scheduler) "] {
         let mut alternative = args.clone();
         alternative["rewrite_overrides"] =
@@ -277,4 +385,101 @@ fn visibility_overrides_reject_public_nonancestor_and_injected_tokens() {
     alternative["rewrite_overrides"] =
         json!([{"target":moved["target"],"action":"replace","replacement_text":"pub(super) "}]);
     compile(&apply(&repo, &run(&repo, alternative)));
+}
+
+#[test]
+fn private_member_preservation_reports_no_new_observed_caller() {
+    let repo = fixture("");
+    let method = "fn isolated(&self) -> u8 { 1 }";
+    let mut args = request(&repo, None);
+    repo.write(
+        SOURCE,
+        &format!("use crate::scheduler::Core; impl Core {{ {method} }}"),
+    );
+    args["moves"] = json!([movement(
+        &repo,
+        method,
+        "cases/layout/scheduler/work/target.rs"
+    )]);
+    compile(&repo);
+    let result = run(&repo, args);
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    let repair = result["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            r["kind"] == "visibility"
+                && r["target"]["binding"] == "crate::scheduler::work::target::isolated"
+        })
+        .unwrap();
+    let explanation = &repair["visibility"];
+    assert_eq!(explanation["consumers"], json!([]));
+    assert_eq!(
+        explanation["original_defining_region"],
+        json!(["scheduler", "work", "source"])
+    );
+    assert_eq!(
+        explanation["final_defining_region"],
+        json!(["scheduler", "work", "target"])
+    );
+    assert_eq!(
+        explanation["preserved_original_access_regions"],
+        json!([["scheduler", "work", "source"]])
+    );
+    assert_eq!(
+        explanation["narrowest_covering_region"],
+        json!(["scheduler", "work"])
+    );
+    assert!(
+        repair["rationale"]
+            .as_str()
+            .unwrap()
+            .contains("no new observed caller")
+    );
+    assert_eq!(repair["after_text"], "pub(super) ");
+    compile(&apply(&repo, &result));
+}
+
+#[test]
+fn free_binding_visibility_names_the_exact_moving_consumer() {
+    let repo = fixture("");
+    let selected = "fn selected() -> u8 { helper() }";
+    repo.write(SOURCE, &format!("fn helper() -> u8 {{ 1 }}\n{selected}\n"));
+    let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,SOURCE,selected),"destination":{"kind":"existing","path":"cases/layout/scheduler/work/target.rs"}}]});
+    let result = run(&repo, args);
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    let repair = result["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            r["kind"] == "visibility"
+                && r["target"]["binding"] == "crate::scheduler::work::source::helper"
+        })
+        .unwrap();
+    assert_eq!(
+        repair["visibility"]["consumers"],
+        json!([{
+            "anchor":nested_anchor(&repo, selected, "helper"),
+            "access_reason":"written_binding",
+            "original_module_region":["scheduler","work","source"],
+            "final_module_region":["scheduler","work","target"]
+        }])
+    );
+    assert_eq!(
+        repair["visibility"]["narrowest_covering_region"],
+        json!(["scheduler", "work"])
+    );
+    assert_eq!(repair["after_text"], "pub(super) ");
+    assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    assert!(
+        result["plan"]["rewrites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["kind"] != "visibility")
+            .all(|r| r.get("visibility").is_none())
+    );
+    compile(&apply(&repo, &result));
 }

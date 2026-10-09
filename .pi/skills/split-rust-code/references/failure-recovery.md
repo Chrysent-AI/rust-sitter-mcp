@@ -100,6 +100,16 @@ Add to the **original request** (extra members, not a stand-alone call):
 
 **Copy the published target object verbatim** — a source target contains a full anchor; a synthesis target contains `path`, `slot`, contributor `items`, `binding`, etc. Never reconstruct from display indices.
 
+For a visibility choice, inspect `rewrites[].visibility`: original consumer anchors,
+access reasons, original/final module regions, `preserved_access_region`,
+`preserved_original_access_regions`, and `narrowest_covering_region`. Regions are
+crate-relative segment arrays (`[]` means root). Empty consumers with **no new
+observed caller** means original member access is being preserved, not a missing
+caller to invent. The minimum remains unchanged by a broader accepted override;
+`after_text` reports the chosen bytes. This evidence does not authorize repair of
+unsupported fields, constructors, concrete types or uncertain receivers. Their
+anchored refusals must follow the existing decision route.
+
 ## Trivia overrides
 
 ```json
