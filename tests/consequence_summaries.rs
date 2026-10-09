@@ -56,6 +56,20 @@ fn expanded(member: &Value) -> BTreeSet<(String, String)> {
     assert_eq!(member["count"], ids.len());
     ids
 }
+fn advice_links(summaries: &[Value]) -> BTreeSet<(String, String)> {
+    summaries
+        .iter()
+        .flat_map(|summary| {
+            summary["classes"]
+                .as_object()
+                .unwrap()
+                .values()
+                .chain(std::iter::once(&summary["unmapped"]))
+                .flat_map(expanded)
+        })
+        .filter(|(collection, _)| collection == "advice_decisions")
+        .collect()
+}
 #[test]
 fn uncapped_summaries_conserve_links_at_zero_default_and_full_expansion() {
     let repo = fixture();
@@ -81,6 +95,39 @@ fn uncapped_summaries_conserve_links_at_zero_default_and_full_expansion() {
     assert!(!full["drafts"].as_array().unwrap().is_empty());
     let expected = summaries(full);
     assert!(!expected.is_empty());
+    let expected_advice_links = advice_links(&expected);
+    for collection in ["boundary_observations", "test_observations"] {
+        let records = full[collection]["records"].as_array().unwrap();
+        assert!(!records.is_empty(), "fixture must exercise {collection}");
+        for record in records {
+            let advice: Vec<_> = full["advice_decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|decision| {
+                    decision["evidence_refs"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|e| e["collection"] == collection && e["id"] == record["id"])
+                })
+                .collect();
+            assert!(
+                !advice.is_empty(),
+                "missing advice projection for {collection} record {record}"
+            );
+            for decision in advice {
+                let link = (
+                    "advice_decisions".to_owned(),
+                    decision["id"].as_str().unwrap().to_owned(),
+                );
+                assert!(
+                    expected_advice_links.contains(&link),
+                    "missing qualified summary link for {collection} record {record}: {link:?}"
+                );
+            }
+        }
+    }
     let canonical: BTreeSet<_> = ["decisions", "advice_decisions"]
         .into_iter()
         .flat_map(|collection| {
@@ -122,6 +169,7 @@ fn uncapped_summaries_conserve_links_at_zero_default_and_full_expansion() {
     );
     for result in &responses {
         assert_eq!(summaries(result), expected);
+        assert_eq!(advice_links(&summaries(result)), expected_advice_links);
         for (draft, canonical_draft) in result["drafts"]
             .as_array()
             .unwrap()
@@ -165,4 +213,5 @@ fn uncapped_summaries_conserve_links_at_zero_default_and_full_expansion() {
     args["limits"]["diagnostic_count"] = json!(0);
     let wire = stdio_client::Client::new().call("suggest_split", args);
     assert_eq!(summaries(&wire), expected);
+    assert_eq!(advice_links(&summaries(&wire)), expected_advice_links);
 }
