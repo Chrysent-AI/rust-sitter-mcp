@@ -32,7 +32,11 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 - Ownership cores use written SCCs, unique nominal/impl associations and bounded
   same-owner member/signature-payload seeds, not names or inferred architectural
   ownership. Companions and impl/member alternatives are inspection-only and never
-  expand selection. Shared/public/import/unsupported/uncertain nodes stop traversal.
+  expand selection. Companion `review_obligation` distinguishes supported type/impl
+  selection-completeness review, written boundary dependencies and unproved
+  associations independently of observed-consumer classification. Exclusive
+  payload/helper consumers do not prove mandatory co-location or access repairs.
+  Shared/public/import/unsupported/uncertain nodes stop traversal.
 - `observed_exclusive` means completed admitted written observations only. Macro,
   inline-module, forwarded named-route, receiver and unadmitted/generated contexts
   remain unproved. Boundary observations disclose separate coverage and candidates;

@@ -17,8 +17,10 @@ pub struct OwnershipCandidate {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct InspectionCompanion {
+    pub id: String,
     pub item_id: String,
     pub role: String,
+    pub review_obligation: String,
     pub classification: String,
     pub signal_ids: Vec<String>,
     pub boundary_observation_ids: Vec<String>,
@@ -534,7 +536,27 @@ pub(super) fn build(
         )
     });
     for (i, c) in candidates.iter_mut().enumerate() {
-        c.id = format!("ownership/{i}");
+        c.id = format!("candidate/{i}");
+    }
+    let mut companion_order: Vec<_> = candidates
+        .iter()
+        .enumerate()
+        .flat_map(|(c, candidate)| (0..candidate.companions.len()).map(move |m| (c, m)))
+        .collect();
+    result.account(
+        companion_order
+            .len()
+            .saturating_mul(std::mem::size_of::<(usize, usize)>()),
+    )?;
+    companion_order.sort_by_key(|(c, m)| {
+        let item = &result.inventory[index.ids[&candidates[*c].companions[*m].item_id]];
+        (&item.path, &item.span.range, &item.kind, *c)
+    });
+    for (i, (c, m)) in companion_order.into_iter().enumerate() {
+        controls.check()?;
+        let id = format!("companion/{i}");
+        result.account(id.len())?;
+        candidates[c].companions[m].id = id;
     }
     result.counts.ownership_candidates = candidates.len();
     result.ownership_candidates = candidates;
@@ -616,6 +638,7 @@ fn candidate(
                 stops.insert("unexamined_context".into());
             }
             let record = companions.entry(to).or_insert_with(|| InspectionCompanion {
+                id: String::new(),
                 item_id: item.id.clone(),
                 role: match item.kind.as_str() {
                     "impl_item" => "implementation",
@@ -625,6 +648,7 @@ fn candidate(
                     _ => "written_dependency",
                 }
                 .into(),
+                review_obligation: "association_unproved".into(),
                 classification: "undetermined".into(),
                 signal_ids: Vec::new(),
                 boundary_observation_ids: index.boundary[to]
@@ -651,6 +675,7 @@ fn candidate(
             record.stop_reasons.dedup();
             // Implementation membership is disclosed as a choice, not inserted into core.
             if signal.kind == "impl_owner_bundle" {
+                record.review_obligation = "selection_completeness".into();
                 if !alternatives
                     .iter()
                     .any(|a: &OwnershipAlternative| a.item_ids == vec![item.id.clone()])
@@ -711,6 +736,18 @@ fn candidate(
             "observed_shared"
         } else {
             "observed_exclusive"
+        }
+        .into();
+        // A supported type/impl bundle needs an explicit completeness choice.
+        // Written references alone establish dependencies, not mandatory co-location.
+        record.review_obligation = if record.classification == "undetermined" {
+            "association_unproved"
+        } else if record.review_obligation == "selection_completeness"
+            && record.stop_reasons.is_empty()
+        {
+            "selection_completeness"
+        } else {
+            "boundary_dependency"
         }
         .into();
     }
