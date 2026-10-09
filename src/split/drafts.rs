@@ -639,7 +639,7 @@ fn make_draft(
             kind: if index == 0 { "retain" } else { "new_sibling" }.into(), destination,
             item_ids: members.iter().map(|i| result.inventory[*i].id.clone()).collect(), rationale,
             confidence: Confidence { basis: "syntactic_heuristic".into(), level: if high { "high" } else { "low" }.into(), limitations: vec!["integer organization facts, not probability or move safety; symbols/types/cfg/macros/public API not verified".into()] },
-            sizes, signal_ids, facts, warnings,
+            sizes, overlap_ids: Vec::new(), size_interpretation: None, signal_ids, facts, warnings,
             expected_to_block: ExpectedBlocks {
                 lower_bound: true,
                 counts: ExpectedBlockCounts::default(),
@@ -882,6 +882,31 @@ pub(super) fn finalize(
     for (index, draft) in result.drafts.iter_mut().enumerate() {
         controls.check()?;
         draft.id = format!("draft/{index}");
+        let assignments: BTreeMap<_, _> = draft
+            .groups
+            .iter()
+            .enumerate()
+            .flat_map(|(i, group)| group.item_ids.iter().map(move |id| (id.as_str(), i)))
+            .collect();
+        for overlap in &mut result.overlaps {
+            controls.check()?;
+            let impl_group_index = assignments[overlap.item_ids[0].as_str()];
+            let member_group_index = assignments[overlap.item_ids[1].as_str()];
+            overlap.draft_groups.push(OverlapDraftGroups {
+                draft_id: draft.id.clone(),
+                impl_group_index,
+                member_group_index,
+            });
+        }
+        for overlap in &result.overlaps {
+            controls.check()?;
+            let link = overlap.draft_groups.last().expect("draft overlap link");
+            for group_index in BTreeSet::from([link.impl_group_index, link.member_group_index]) {
+                let group = &mut draft.groups[group_index];
+                group.overlap_ids.push(overlap.id.clone());
+                group.size_interpretation = Some(SizeInterpretation::non_additive());
+            }
+        }
         let moved: BTreeSet<_> = draft
             .groups
             .iter()
@@ -944,5 +969,6 @@ pub(super) fn finalize(
         }
     }
     result.account(descriptor_bytes(&result.drafts)?)?;
+    result.account(descriptor_bytes(&result.overlaps)?)?;
     Ok(())
 }

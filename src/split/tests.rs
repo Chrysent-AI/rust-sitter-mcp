@@ -175,6 +175,75 @@ fn final_fit_tier_accounts_membership_without_losing_root_or_snapshot() {
 }
 
 #[test]
+fn fitting_withheld_drafts_preserves_overlap_labels_and_accounts_records() {
+    let repo = Fixture::new();
+    fs::write(repo.0.join("lib.rs"),
+        "struct Recorder;\nimpl Recorder {\nfn record_start() {}\nfn record_stop() {}\nfn other() {}\n}\n").unwrap();
+    let mut result = run(&repo.0, repo.request(), &AtomicBool::new(false));
+    assert_eq!(result.status, "complete");
+    let expected: Vec<_> = result
+        .drafts
+        .iter()
+        .map(|draft| {
+            draft
+                .groups
+                .iter()
+                .map(|g| {
+                    (
+                        g.overlap_ids.clone(),
+                        serde_json::to_value(&g.size_interpretation).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let overlap_count = result.overlaps.len();
+    let group_links: usize = result.overlaps.iter().map(|o| o.draft_groups.len()).sum();
+    assert_eq!(overlap_count, 3);
+    result.drafts[0].rationale = "x".repeat(100_000);
+    result.limits.response_bytes = 65_536;
+    result
+        .fit(Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &AtomicBool::new(false),
+        })
+        .unwrap();
+    assert_eq!(result.status, "partial");
+    assert!(result.drafts.is_empty());
+    assert!(result.overlaps.is_empty());
+    assert_eq!(result.counts.omissions["overlaps"], overlap_count);
+    assert_eq!(
+        result.counts.omissions["overlap_draft_group_links"],
+        group_links
+    );
+    let actual: Vec<_> = result
+        .draft_summaries
+        .iter()
+        .map(|draft| {
+            draft
+                .groups
+                .iter()
+                .map(|g| {
+                    (
+                        g.overlap_ids.clone(),
+                        serde_json::to_value(&g.size_interpretation).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    assert!(
+        result
+            .inventory
+            .iter()
+            .filter(|i| i.enclosing_impl.is_some())
+            .all(|i| i.enclosing_impl_id.is_some() && i.size_interpretation.is_some())
+    );
+    assert!(result.wire_bytes() <= result.limits.response_bytes);
+}
+
+#[test]
 fn final_fit_counts_omitted_decision_ids_not_compressed_runs() {
     let repo = Fixture::new();
     fs::write(

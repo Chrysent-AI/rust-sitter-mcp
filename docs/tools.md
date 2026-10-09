@@ -989,7 +989,7 @@ Definite bad requests use `INVALID_ITEM_SELECTION`, `DUPLICATE_MOVE`, `STALE_SEL
 
 This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no cursor, saved plan, execution handle, or implicit selection. Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
 
-The result has `advisory:true`, `source`, `inventory[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `chain_diagnostics[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
+The result has `advisory:true`, `source`, `inventory[]`, `overlaps[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `chain_diagnostics[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
 
 - Inventory is in original source order and includes every significant top-level written unit. Anonymous impl blocks have IDs and written type/optional trait spans in `impl_contexts`; they do not disappear because `name` is null. Outer attributes/docs are associated spans, not extra units. Each unit reports full original coordinates, kind/name, raw visibility, byte/line sizes, syntax flags, unit-kind eligibility/reasons and `signal_ids`.
 - `supported_unit` means the top-level unit kind is supported, **not** that a move is dependency-free or safe. Modules, uses, extern/foreign and macro constructs remain inventoried with context-sensitive reasons and are retained in complete partitions. Direct written impl members remain `context_sensitive`: selection requires their exact header-only `enclosing_impl.anchor`. Members with empty `reasons` can enter draft sibling groups; members with nonempty exclusion reasons and their overlapping enclosing impls stay in the retain set. `counts.eligible_items` counts supported top-level units plus these non-excluded associated units, not proven safe moves. A `supported_unit`-only batch still excludes members; construct drafted member moves with the associated-item anchor shape described above.
@@ -1002,7 +1002,19 @@ Each draft has a nonempty retain group and up to two sibling groups. Every inven
 
 The primary proposal seeds clusters from prefixes/sections/outer-text adjacency, joins strongly connected candidate references, and ranks by descending internal reference occurrences, same-prefix members, then section/attribute/doc agreements; earliest original span breaks ties. Other units stay in source, retaining the earliest eligible unit if necessary. A distinct alternative retains excluded/context-only units (including enclosing impls) and the earliest draft-eligible unit, then chooses the original-order boundary closest to half the remaining bytes (earlier boundary wins ties). Weak cohesion uses that balanced arrangement with explicitly low confidence. Equivalent alternatives are not duplicated.
 
-Group `facts`, rationale and confidence expose integer organization evidence, not a probability of compiler correctness. High confidence requires at least two independent signal families and complete layout/membership; execution risks remain unresolved. Sizes count written item bytes/lines, not a prediction of generated file size. The 64-KiB/256-line group aim is **soft advice**: whole oversized items remain indivisible and get warnings. Cross-group candidate IDs and warnings identify import/path/visibility review needs.
+Group `facts`, rationale and confidence expose integer organization evidence, not a probability of compiler correctness. High confidence requires at least two independent signal families and complete layout/membership; execution risks remain unresolved. Sizes count written item bytes/lines, not a prediction of generated file size. Exact-once ID membership is **not a disjoint byte partition**: whole impl descriptors overlap their members, even across groups. Member `enclosing_impl_id` links to the whole impl inventory ID, independently of the exact header-only execution anchor in `enclosing_impl.anchor`.
+
+`overlaps[]` emits one original-range containment edge per member whose enclosing impl is inventoried, in member source order. Each record has a response-local `id` (`overlap/N`), `relation:"member_contained_in_impl"`, `path`, two `item_ids` (impl first, member second), and corresponding original byte `ranges`. Its `draft_groups[]` links each draft by `draft_id` and zero-based `impl_group_index`/`member_group_index`; different indices explicitly identify cross-group overlap. Inventory entries and participating draft groups carry `overlap_ids`, and overlapping entries/groups carry:
+
+```json
+"size_interpretation": {
+  "basis": "original_descriptor_ranges",
+  "additivity": "non_additive",
+  "generated_module_size": "not_estimated"
+}
+```
+
+A group is labeled even when the other descriptor is in another group. Existing item `bytes`/`lines` and group `sizes.items`/`bytes`/`lines` remain unchanged descriptor values/sums, not a range union or a generated module estimate. Absence of `size_interpretation` is not an additive-size or move-safety guarantee. Containment is an execution alternative: explicitly choose a whole impl **or** its members, never both; advice never prunes either descriptor or changes membership. The 64-KiB/256-line group aim is **soft advice**: whole oversized items remain indivisible and get warnings. Cross-group candidate IDs and warnings identify import/path/visibility review needs.
 
 Every group, including retain groups and groups with zero observed risks, also has:
 
@@ -1100,8 +1112,12 @@ descriptors, evidence, unresolved consequence and next action; consult omissions
 rather than assuming that every detail record is present. `choice_available` identifies supported review/anchored-choice paths (including retained ordinary banners); `request_change_required` cannot be cleared by acknowledgment. `blocks_applicability` describes a prospective execution concern, not an executable advisory result. Actual `move_item` analysis determines which repairs/choices are supported for the caller's edited batch.
 
 When output fitting withholds full drafts, `draft_summaries[]` retains each draft's
-ID, source snapshot, group kind/destination path, complete `item_ids` and unresolved
-decision IDs. These are non-executable membership summaries, not complete drafts;
+ID, source snapshot, group kind/destination path, complete `item_ids`, `overlap_ids`,
+non-additive `size_interpretation` where present, and unresolved decision IDs.
+If overlap records are withheld, `counts.omissions.overlaps` and
+`overlap_draft_group_links` account for them; surviving links and labels do not
+promise that omitted records or display inventory are locally available.
+These are non-executable membership summaries, not complete drafts;
 the omitted decision records need not resolve locally. Display inventory is trimmed
 before these summaries or decision groups; root/snapshot/coverage/omissions survive.
 Only the final tier may omit summaries, with exact summary/reference counts.

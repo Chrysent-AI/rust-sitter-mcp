@@ -272,7 +272,7 @@ impl Server {
 
 Use for:
 - Inventory functions, types, whole impl blocks and their direct written associated units in a large file; supported inherent methods/consts can enter draft sibling groups.
-- Compare up to two draft partitions, with reasons and sizes.
+- Compare up to two draft partitions, with reasons, original-range sizes, explicit impl/member containment and cross-group overlap links. Affected sizes are labeled non_additive; exact-once item IDs are not a disjoint byte partition or generated module size estimate.
 - Choose items to submit later as an explicit move_item batch.
 Does NOT:
 - Execute a split, extract inline-module bodies, or return an applicable move plan.

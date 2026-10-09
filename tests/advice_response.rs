@@ -261,6 +261,65 @@ fn counts_only_advice_keeps_chain_routes_and_accounts_hidden_links() {
 }
 
 #[test]
+fn stdio_advice_exposes_containment_without_changing_descriptor_sizes() {
+    let source = "struct Recorder;\nimpl Recorder {\nfn record_start() {}\nfn record_stop() {}\nfn other() {}\n}\n";
+    let repo = fixture(source);
+    let before = observe(&repo.0);
+    let mut client = Client::new();
+    let result = client.call("suggest_split", request(&repo));
+    assert_eq!(result["status"], "complete");
+    assert_eq!(result["schema_version"], 2);
+    assert_eq!(result["integrity"]["semantic"], "not_performed");
+    assert_eq!(result["inventory"].as_array().unwrap().len(), 5);
+    let inventory: BTreeMap<_, _> = result["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["id"].as_str().unwrap(), i))
+        .collect();
+    let overlaps = result["overlaps"].as_array().unwrap();
+    assert_eq!(overlaps.len(), 3);
+    for overlap in overlaps {
+        let owner = inventory[overlap["item_ids"][0].as_str().unwrap()];
+        let member = inventory[overlap["item_ids"][1].as_str().unwrap()];
+        assert_eq!(member["enclosing_impl_id"], owner["id"]);
+        assert_eq!(member["size_interpretation"]["additivity"], "non_additive");
+        assert_eq!(owner["size_interpretation"]["additivity"], "non_additive");
+    }
+    let mut crossing = false;
+    for draft in result["drafts"].as_array().unwrap() {
+        let mut seen = BTreeSet::new();
+        for group in draft["groups"].as_array().unwrap() {
+            let mut bytes = 0;
+            let mut lines = 0;
+            for id in group["item_ids"].as_array().unwrap() {
+                assert!(seen.insert(id.as_str().unwrap()));
+                let item = inventory[id.as_str().unwrap()];
+                bytes += item["bytes"].as_u64().unwrap();
+                lines += item["lines"].as_u64().unwrap();
+            }
+            assert_eq!(group["sizes"]["bytes"], bytes);
+            assert_eq!(group["sizes"]["lines"], lines);
+            if !group["overlap_ids"].as_array().unwrap().is_empty() {
+                assert_eq!(group["size_interpretation"]["additivity"], "non_additive");
+            }
+        }
+        assert_eq!(seen.len(), inventory.len());
+        for overlap in overlaps {
+            let link = overlap["draft_groups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|link| link["draft_id"] == draft["id"])
+                .unwrap();
+            crossing |= link["impl_group_index"] != link["member_group_index"];
+        }
+    }
+    assert!(crossing);
+    assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
 fn exact_file_scope_still_honestly_reports_unadmitted_sibling_destinations() {
     let repo = fixture("fn retained() {}\nfn moved() {}\n");
     let mut args = request(&repo);

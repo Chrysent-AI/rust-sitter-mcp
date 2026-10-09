@@ -174,6 +174,14 @@ pub(crate) fn inventory(
                 reasons,
                 signal_ids: Vec::new(),
                 enclosing_impl: Some(identity.clone()),
+                enclosing_impl_id: Some(format!(
+                    "i/{}/{}/{}",
+                    file.path,
+                    implementation.start_byte(),
+                    implementation.end_byte()
+                )),
+                overlap_ids: Vec::new(),
+                size_interpretation: None,
             });
         }
     }

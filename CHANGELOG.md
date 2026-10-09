@@ -9,6 +9,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Link inventory members to enclosing impl IDs and expose original-range containment
+  and cross-group overlap records in `suggest_split`; label affected sizes as
+  non-additive without changing descriptor sizes or exact-once draft membership.
 * Flag retained source imports with zero post-move written-name references through
   anchored nonblocking `post_move_import_review` advisories; exclude strings/comments
   and public re-exports, retain all import bytes, and disclose unenumerable globs

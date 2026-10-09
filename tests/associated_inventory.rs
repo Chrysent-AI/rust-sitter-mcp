@@ -118,6 +118,13 @@ fn every_written_impl_member_has_context_and_excluded_members_are_retained() {
             expected
         );
         let source = fs::read_to_string(repo.0.join(path)).unwrap();
+        let interpretation = json!({
+            "basis":"original_descriptor_ranges",
+            "additivity":"non_additive",
+            "generated_module_size":"not_estimated"
+        });
+        let overlaps = result["overlaps"].as_array().unwrap();
+        assert_eq!(overlaps.len(), members.len());
         for member in members {
             assert_eq!(member["eligibility"], "context_sensitive", "{member}");
             let implementation = &member["enclosing_impl"];
@@ -134,8 +141,35 @@ fn every_written_impl_member_has_context_and_excluded_members_are_retained() {
                 member["span"]["range"]["end_byte"].as_u64().unwrap()
                     < implementation["range"]["end_byte"].as_u64().unwrap()
             );
-            assert!(inventory.iter().any(|item| item["kind"] == "impl_item"
-                && item["span"]["range"] == implementation["range"]));
+            let owner = inventory
+                .iter()
+                .find(|item| {
+                    item["kind"] == "impl_item" && item["span"]["range"] == implementation["range"]
+                })
+                .unwrap();
+            assert_eq!(member["enclosing_impl_id"], owner["id"]);
+            let links = member["overlap_ids"].as_array().unwrap();
+            assert_eq!(links.len(), 1);
+            let overlap = overlaps.iter().find(|o| o["id"] == links[0]).unwrap();
+            assert_eq!(overlap["relation"], "member_contained_in_impl");
+            assert_eq!(overlap["path"], path);
+            assert_eq!(overlap["item_ids"], json!([owner["id"], member["id"]]));
+            assert_eq!(
+                overlap["ranges"],
+                json!([owner["span"]["range"], member["span"]["range"]])
+            );
+            assert!(
+                owner["overlap_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&overlap["id"])
+            );
+            assert_eq!(member["size_interpretation"], interpretation);
+            assert_eq!(owner["size_interpretation"], interpretation);
+            assert_eq!(
+                overlap["draft_groups"].as_array().unwrap().len(),
+                result["drafts"].as_array().unwrap().len()
+            );
             for draft in result["drafts"].as_array().unwrap() {
                 if !member["reasons"].as_array().unwrap().is_empty() {
                     assert!(
@@ -161,6 +195,80 @@ fn every_written_impl_member_has_context_and_excluded_members_are_retained() {
             }
         }
         assert!(!result["drafts"].as_array().unwrap().is_empty());
+        for item in inventory {
+            let start = item["span"]["range"]["start_byte"].as_u64().unwrap() as usize;
+            let end = item["span"]["range"]["end_byte"].as_u64().unwrap() as usize;
+            assert_eq!(item["bytes"], end - start);
+            let start_line = source[..start].bytes().filter(|b| *b == b'\n').count();
+            let end_line = source[..end].bytes().filter(|b| *b == b'\n').count();
+            assert_eq!(item["lines"], end_line - start_line + 1);
+        }
+        let mut same_group = false;
+        let mut cross_group = false;
+        for draft in result["drafts"].as_array().unwrap() {
+            let groups = draft["groups"].as_array().unwrap();
+            let mut seen = std::collections::BTreeSet::new();
+            for group in groups {
+                let mut bytes = 0;
+                let mut lines = 0;
+                for id in group["item_ids"].as_array().unwrap() {
+                    assert!(seen.insert(id.as_str().unwrap()));
+                    let item = inventory.iter().find(|item| item["id"] == *id).unwrap();
+                    bytes += item["bytes"].as_u64().unwrap();
+                    lines += item["lines"].as_u64().unwrap();
+                }
+                assert_eq!(
+                    group["sizes"]["items"],
+                    group["item_ids"].as_array().unwrap().len()
+                );
+                assert_eq!(group["sizes"]["bytes"], bytes);
+                assert_eq!(group["sizes"]["lines"], lines);
+                let expected: Vec<_> = overlaps
+                    .iter()
+                    .filter(|o| {
+                        o["item_ids"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|id| group["item_ids"].as_array().unwrap().contains(id))
+                    })
+                    .map(|o| o["id"].clone())
+                    .collect();
+                assert_eq!(group["overlap_ids"], json!(expected));
+                if !expected.is_empty() {
+                    assert_eq!(group["size_interpretation"], interpretation);
+                }
+            }
+            assert_eq!(seen.len(), inventory.len());
+            for overlap in overlaps {
+                let link = overlap["draft_groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|link| link["draft_id"] == draft["id"])
+                    .unwrap();
+                let owner_group = link["impl_group_index"].as_u64().unwrap() as usize;
+                let member_group = link["member_group_index"].as_u64().unwrap() as usize;
+                assert!(
+                    groups[owner_group]["item_ids"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&overlap["item_ids"][0])
+                );
+                assert!(
+                    groups[member_group]["item_ids"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&overlap["item_ids"][1])
+                );
+                same_group |= owner_group == member_group;
+                cross_group |= owner_group != member_group;
+            }
+        }
+        assert!(
+            same_group && cross_group,
+            "both overlap shapes must be disclosed"
+        );
         let admitted = inventory
             .iter()
             .filter(|item| {
