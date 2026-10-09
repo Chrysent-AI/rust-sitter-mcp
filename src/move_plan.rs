@@ -152,10 +152,12 @@ impl From<MoveLimits> for Limits {
     }
 }
 impl MoveLimits {
-    fn preview_count(&self) -> usize {
-        if self.diagnostic_count_explicit
+    pub(crate) fn diagnostic_count_expanded(&self) -> bool {
+        self.diagnostic_count_explicit
             || self.diagnostic_count != Limits::default().diagnostic_count
-        {
+    }
+    fn preview_count(&self) -> usize {
+        if self.diagnostic_count_expanded() {
             self.diagnostic_count
         } else {
             4

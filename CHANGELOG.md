@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add read-only `export_move_request` for one complete inactive ordinary request
+  from explicit retained unit/destination entries, with exact item/header bytes,
+  separate review/provenance and current observational corpus/scope/ignore/mode/
+  filesystem-identity checks; refuse stale, excluded, overlapping or oversized
+  selections without partial requests, implicit companions or move submission.
+
 * Add opt-in immutable completed-advice retention, a separate compact manifest and
   `get_split_detail` for deterministic historical pages, exact original unit/header
   anchors and explicit release; expose accounted allocation, fixed expiry and honest

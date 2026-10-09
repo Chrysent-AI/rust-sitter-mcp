@@ -8,7 +8,7 @@ pub use consequences::{
 };
 mod ownership;
 pub mod retained;
-pub use retained::{DetailEnvelope, DetailRequest, SplitResponse};
+pub use retained::{DetailEnvelope, DetailRequest, ExportEnvelope, ExportRequest, SplitResponse};
 mod signals;
 mod test_observations;
 pub use boundary::{BoundaryCoverage, BoundaryObservation, BoundaryObservations};

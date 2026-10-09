@@ -63,12 +63,25 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   explicitly; no snippets are exported as full anchors and no move request is
   submitted or scaffolded. Ordinary `move_item` still requires full current anchors
   and every existing audit.
+- `export_move_request` is a separately invoked inactive scaffold, not an applicable
+  plan. It requires explicit analysis-qualified unit/destination entries, preserves
+  exact full frozen item/header bytes and strict execution defaults, and never adds
+  companions or submits moves. Freshness compares the captured corpus, scope, ignore
+  inputs, modes and observed filesystem identities, without parsing/grouping; it is
+  observational, not atomic application-time freshness. Unsupported/overlapping/stale
+  or oversized selections refuse with `request:null`. Both the 8-MiB decoded request
+  and duplicated wire response must fit; no snippets or automatic batch splitting.
+  Caller destination anchors receive syntax checks only. Ordinary `move_item` still
+  independently checks current anchors and every safety/applicability audit.
 - A separate `scope_input_digest` captures normalized scope/corpus and effective
   observed in-root `.gitignore` presence/absence/exact bytes without changing corpus
   `snapshot_id` semantics. Policy observations are finite (100,000 entries, 1 MiB
-  per input, 16 MiB aggregate accounting); unsafe/unreadable/over-limit inputs fail
+  per input, 16 MiB aggregate accounting, plus at most 200,000 observed filesystem
+  identity/permission records under the same aggregate cap); unsafe/unreadable/over-limit inputs fail
   closed. This freshness seam is not a claim that detail checks current source,
-  modes or ignore policy. See `docs/tools.md` for selectors, filters and limits.
+  modes or ignore policy. Export uses this seam for current observational rechecks;
+  ignored/hard-excluded paths remain outside the captured evidence boundary.
+  See `docs/tools.md` for selectors, export refusals and limits.
 
 - Candidate/group `consequence_summary` counts uncapped decision records per class,
   with exact links and explicit unmapped reasons. Classes overlap; counts are not

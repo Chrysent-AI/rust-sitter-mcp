@@ -6,6 +6,7 @@ Common failures and typed recovery routing for rust-sitter-mcp. Unknown or undia
 
 - **Failed call** (`status: "failed"`): inspect `error.code` and `error.field` — the fix targets the named request field.
 - **Blocked plan** (`status: "complete"`, `plan.state: "blocked"`): inspect `plan.blockers[]` and `plan.decisions[]`; artifacts are withheld.
+- **Export envelope:** `export_move_request` has its own envelope, not an ordinary `status`/`plan`. Inspect `error` and `request` first; any export failure has `request:null`, so there is no usable request to pass on.
 - **Incomplete advice:** for full schema-2 responses, inspect `status`, `coverage`, `truncation_reasons`, and `counts.omissions`. For compact `envelope_kind:"split_manifest"` schema 1, inspect `analysis_status`, `manifest_complete`, `coverage`, `omissions`, `totals` and `detail_availability`; manifest omissions can be retrievable detail rather than incomplete analysis.
 
 For a retained move need, inspect `plan.decisions[].refusal_basis[]`: each entry is `{class, anchor:{path,range?}, name?}`. Prelude/derive vetoes identify `chain_macro_statement`, `derive_veto`, `shadow` / `macro_shadow` (with the competing name), `conditional_context`, `prelude_disabled`, `module_attribute`, `unparseable_attribute`, `glob_import`, `unresolved_chain` or `syntax_recovery`; lexical refusals identify `lexical_uncertainty` or a `chain_macro_statement` in the reference's block or an enclosing block and retain the full `lexical_uncertainty` witness. Written re-export route failures with no accessible admitted fallback use `inaccessible_route:<segment>` with `name` identifying the inaccessible or unprovable intermediate module and its original declaration anchor when available. Other written failures use `written_binding_unproved` alongside the existing decision reason. Semantic entries identify the failed configuration, overlay, mapping, source-fact, final-fact or identity proof stage (`semantic_*_unproved`, except `semantic_overlay_unavailable`), not a finer internal resolver cause. Written witnesses use original byte ranges; unresolved paths and synthesized bindings omit the range. Zero proofs with `assume_standard_prelude` enabled are therefore diagnosable, not permission to add guessed imports or weaken a veto. If details are capped, request a larger `diagnostic_count` and response budget as needed.
@@ -58,15 +59,19 @@ A new `suggest_split` call is a separately requested analysis with a new identit
 | `UNKNOWN_ADVICE_ID` | Selected/filter ID or candidate is unknown or belongs to another collection | Use exact IDs from the retained record and the matching collection. |
 | `DETAIL_TOO_LARGE` | Complete indivisible record/unit or explicit subset cannot fit | Increase detail `response_bytes` up to 16 MiB or request smaller pages/subsets. The tool withholds every record/anchor rather than returning snippets. |
 | `INVALID_PARAMS` | Malformed selector/filter/limits, empty/duplicate/oversized ID list or unobserved typed reason filter | Correct the named request field; filters support only observed typed `id`, `reason` and `candidate_id` values. |
-| `BUSY` | Shared analysis slot is occupied; detail/release started no work and was not queued | Wait for active work or cancellation to settle, then retry serially. |
+| `BUSY` | Shared analysis slot is occupied; detail/release/export started no work and was not queued | Wait for active work or cancellation to settle, then retry serially. |
 
 Page tokens bind the analysis/handle, corpus snapshot, scope-input digest,
 collection, filter, ordering, position, page size and effective detail limits.
 Repeat every option unchanged with `selector.page_token`. A `reason` filter must
 be an observed typed reason in that collection; unknown reasons refuse rather
 than returning a misleading empty result. `scope_input_digest` is distinct from
-`snapshot_id`: it also binds normalized scope and effective in-root ignore
-inputs, but detail performs no live source, mode or ignore freshness check.
+`snapshot_id`: it also binds normalized scope, effective in-root ignore inputs,
+and observed filesystem device/inode identities and full modes. The bounded manifest
+permits at most 200,000 identity entries and 16 MiB aggregate accounting. Detail still
+performs no live source, mode or ignore freshness check; export reobserves only
+its captured evidence boundary and does not claim ignored/excluded-path coverage
+or atomic application-time freshness.
 Retention defaults are one active record, 134,217,728 aggregate accounted bytes
 (128 MiB), and a fixed non-sliding 900-second lifetime from publication.
 Preparations and in-flight readers occupy capacity; conservative reservation may
@@ -77,10 +82,50 @@ and explicit release removes only the process-local record.
 
 `units` returns complete frozen original item and header anchors, but they are
 historical (`historical:true`, `live_freshness:"not_checked"`), not checked-current
-execution authority. Re-read and verify current item/header bytes before any
-move request; `move_item` independently repeats its mandatory current-byte and
-safety audits. Historical retrieval does not select or submit units, refresh
-analysis, or add an export capability.
+execution authority. For manual request construction, re-read and verify current
+item/header bytes; `move_item` independently repeats its mandatory current-byte
+and safety audits. A separate `export_move_request` can reobserve the captured
+inputs and produce a complete inactive scaffold, but historical retrieval itself
+still does not check freshness, select or submit units, refresh analysis, or
+export a request.
+
+### Inactive exact-anchor export recovery
+
+Export is a separate call from historical detail. A usable success has
+`schema_version:1`, `scaffold:true`, `submitted:false`,
+`applicability:"not_assessed"`, `source_freshness:"checked_at_export"`,
+`integrity.semantic:"not_performed"`, and a non-null ordinary strict `request`.
+`provenance` and `review` are outside that request. Every export failure envelope
+has `request:null`; never salvage a partial or preview request from `error`.
+
+| Export error | Meaning and recovery |
+|---|---|
+| `ADVICE_SNAPSHOT_UNKNOWN` / `ADVICE_SNAPSHOT_EXPIRED` | Handle is unknown/released/from another process, or its fixed lifetime expired. Do not silently rerun; explicitly request a new retained analysis if still needed. |
+| `ADVICE_SNAPSHOT_MISMATCH` | Supplied optional top-level `analysis_id` or `scope_input_digest`, or required `snapshot_id`, does not match the retained record. Copy identity values from one result; never combine analyses. |
+| `UNKNOWN_ADVICE_ID` | The selected `item_id` is absent from this retained inventory. Use an exact inventory ID from the same record. |
+| `INVALID_SCAFFOLD_SELECTION` | Empty/over-cap selection, invalid or duplicate unit reference, cross-analysis `unit_ref.analysis_id`, or overlapping whole-impl/member ranges. Correct the explicit selection; nothing is pruned automatically. |
+| `UNSUPPORTED_SCAFFOLD_SELECTION` | Excluded/recovered/unsupported unit or missing complete frozen item/header provenance. Choose a supported inventory unit; snippets are not anchors. |
+| `INVALID_DESTINATION` | Caller destination syntax, root-relative geometry, or required destination anchor is invalid. Correct it explicitly. Only `existing`, `new_sibling`, and member-only `existing_impl` are supported; `new_child` is not supported. The check is not destination applicability proof. |
+| `SOURCE_CHANGED` | Captured source/corpus, normalized scope, effective ignore input, mode or observed filesystem identity changed or could not be completely reobserved. Request a fresh retained `suggest_split` analysis explicitly, then review and export again; `get_split_detail` remains historical. |
+| `SCAFFOLD_TOO_LARGE` | The complete decoded request exceeds 8 MiB or the complete duplicated structured/text response cannot fit. Export never shortens anchors, emits partial JSON/snippets, or automatically splits the batch. The export `response_bytes` limit is 64 KiB–16 MiB; choose limits before retrying. |
+| `INVALID_PARAMS` | Strict request object, required field, option or bound is invalid. Correct the named field; unknown fields are not accepted. |
+| `CANCELLED` / `planning_deadline` | Cooperative work stopped before a request was published. Retry only if still requested. |
+| `BUSY` | The shared analysis slot is occupied; this export started no work and was not queued. Wait for active work/cancellation to settle, then retry serially. |
+
+The export request is explicit: each `selection` entry has an analysis-qualified
+`unit_ref:{analysis_id,item_id}` and a caller-chosen destination. Optional top-level
+identity/digest fields must match. No group/candidate ID is an execution selector,
+and no companion, destination, assumption, acknowledgment, semantic option or
+rewrite/trivia choice is added. `move_options` permits only `context`, ordinary
+move `limits`, and `max_moves` (default 500, 1–5000); an omitted diagnostic count
+stays omitted so ordinary preview defaults are preserved. Review and edit the
+returned `request` separately, then submit it to ordinary `move_item`, which
+performs every audit and can reject later stale anchors. `checked_at_export` is
+an observational comparison at captured boundaries, not atomic application-time
+freshness; ignored/hard-excluded paths are outside that evidence boundary. Export
+uses the worker-owned shared admission permit through cancellation/shutdown: `BUSY`
+starts no work and queues nothing, and cancellation does not free the slot until
+admitted work settles.
 
 ## Common error codes
 
@@ -98,11 +143,11 @@ analysis, or add an export capability.
 | `ATTRIBUTE_ATTACHMENT_CHANGED` / `OVERLAPPING_EDITS` | Unsafe attribute attachment or conflicting intervals | Remove the unsafe choice; revise the batch. |
 | `INVALID_REWRITE_OVERRIDE` / `STALE_REWRITE_OVERRIDE` | Unsupported/duplicate override or changed contributor anchor | Rerun the same batch without stale choices; copy fresh full published targets verbatim. |
 | `INVALID_MOVE_TRIVIA_OVERRIDE` / `UNSUPPORTED_TRIVIA_DISPOSITION` | Stale/unrelated trivia anchor, unselected target, protected attachment | Use exact current ordinary-ambiguous anchors only; leave protected/owned trivia alone. |
-| `BUSY` | The analysis slot is occupied; the rejected call started no analysis and was not queued | Wait for the active call to finish or cancellation to settle, then retry serially. No retry deadline or other request's identity is disclosed. |
+| `BUSY` | The shared analysis slot is occupied; the rejected call started no work and was not queued | Wait for the active call to finish or cancellation to settle, then retry serially. This also applies to export. No retry deadline or other request's identity is disclosed. |
 | Cancellation | Work stopped | Only retry if still requested. |
 | Limit/partial states | Membership/evidence/scan/output not complete | Inspect truncation+omissions; raise supported limits or reduce optional text/context — never exclude needed chain/binding evidence to force applicability. |
 
-`SOURCE_CHANGED`/`CREATION_RACE` can appear as incompleteness reasons rather than error codes; `CRATE_IDENTITY_UNCERTAIN` typically surfaces as a module-context blocker. Same recovery either way: stabilize the base, reread, replan.
+For `export_move_request`, `SOURCE_CHANGED` is an export error: the captured observation cannot be presented as current; obtain a new retained analysis explicitly. `CREATION_RACE` and other move-planning freshness issues can appear as incompleteness reasons rather than error codes; `CRATE_IDENTITY_UNCERTAIN` typically surfaces as a module-context blocker. Stabilize the base, reread, and replan rather than treating old detail as fresh.
 
 ## Decision routing
 

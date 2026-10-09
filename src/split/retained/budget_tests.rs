@@ -203,6 +203,14 @@ fn duplicate_display_fitting_preserves_canonical_records_and_historical_pages() 
         original.records[0]["item"]["expected_text"],
         &source[range.start_byte..range.end_byte]
     );
+    let export = store.export(serde_json::from_value(json!({"analysis_handle":retention.analysis_handle,"snapshot_id":retention.snapshot_id,
+        "selection":[{"unit_ref":{"analysis_id":retention.analysis_id,"item_id":full.inventory[0].id},
+        "destination":{"kind":"new_sibling","parent_path":"src/lib.rs","path":"src/helpers.rs"}}]})).unwrap(), &AtomicBool::new(false));
+    assert!(export.error.is_none(), "{:?}", export.error);
+    assert_eq!(
+        export.request.unwrap().moves[0].item.expected_text,
+        source[range.start_byte..range.end_byte]
+    );
     fs::write(repo.0.join("src/worker.rs"), "fn changed() {}\n").unwrap();
     for (detail, before) in pages {
         assert_eq!(

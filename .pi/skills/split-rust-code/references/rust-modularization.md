@@ -108,13 +108,23 @@ not automatic co-location. Broader boundary/test observations are advice-only;
 zero counts do not assess destination/batch applicability or prove repairability.
 
 When advice was explicitly retained, `analysis_id`-qualified `unit_ref` values
-are selectors for historical evidence only, never execution authority. Retrieved
-pages and complete unit/header anchors preserve original bytes but do not assess
-live freshness, layout, grouping quality or `move_item` applicability. Re-read
-and verify current item/header bytes before use; `move_item` still performs its
-independent freshness and safety audits. Keep whole-impl versus member choices
-explicit, retain exclusions and overlapping alternatives, and do not auto-select
-companions or submit historical references as moves.
+select inventory units in the retained analysis; they are not move commands or
+execution authority. `get_split_detail` remains historical: pages and complete
+unit/header anchors preserve frozen bytes but do not check live freshness, layout,
+grouping quality or `move_item` applicability. A separately invoked
+`export_move_request` accepts explicit per-unit references and caller-chosen
+`existing`, `new_sibling` or `existing_impl` destinations, reobserves the captured
+corpus/scope, effective ignore inputs, modes and observed filesystem identities,
+and can return full current-observed anchors in an inactive schema-1 scaffold.
+This freshness result is observational only—not grouping approval, applicability,
+semantic proof or an atomic application-time guarantee—and ignored/excluded paths
+are outside its evidence boundary. The caller reviews/edits and separately submits
+the ordinary request to `move_item`, which independently performs every audit and
+can reject later changes. Manual construction from current bytes remains supported.
+Associated-unit headers are exact header-only anchors ending immediately before
+`{`, preserving generic/where text and CRLF bytes. Keep whole-impl versus member
+choices explicit, retain exclusions and overlapping alternatives, and never
+auto-select companions or destinations.
 
 ## Inspecting test coupling
 
