@@ -39,6 +39,14 @@ Start with the most restrictive visibility that works:
 
 **The MCP engine selects the narrowest sufficient ancestor region**: `pub(super)` for a non-root immediate parent, `pub(in crate::path)` for a more distant non-root ancestor, and `pub(crate)` only when crate-root access is required. It merges all proven final caller chains into one repair, preserving already-written access and moved private members' original defining region. Review visibility rewrites; a private or restricted override must still cover that combined requirement. This is admitted-scope evidence, not exhaustive caller discovery or compilation.
 
+Visibility rewrites expose `visibility.consumers` with exact original anchors,
+access reasons and original/final consumer module regions, plus declaration regions,
+preserved access requirements and `narrowest_covering_region`. Regions are arrays
+relative to `crate` (`[]` is root). Preservation-only member repairs report empty
+consumers and no new observed caller; do not infer unseen callers from that requirement.
+The minimum describes the computed default, not a broader caller-selected `after_text`.
+Unsupported private-field, constructor, concrete-type and receiver access still blocks.
+
 ## Import organization
 
 - **Prefer explicit imports** during a split — each new module imports exactly what it uses

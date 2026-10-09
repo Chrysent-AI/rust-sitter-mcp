@@ -872,6 +872,32 @@ For example, using the actual published decision `d` (not a display ID):
 
 The placeholder must be replaced by the full object and the replacement by the exact `d.removal_gap.after_text`; mixed endings or BOF gaps may have different bytes.
 
+Visibility rewrites additionally carry `visibility` evidence (absent on other rewrite kinds):
+
+- `consumers[]` contains each exact original `anchor:{path,range,expected_text}`, its
+  `access_reason`, and `original_module_region` / `final_module_region`.
+  Reasons are `written_binding`, `written_path`, `written_import`,
+  `impl_header_dependency`, `impl_self_type`, or `same_type_inherent_access`:
+  these identify the written binding/path/import, header occurrence, or uniquely
+  matched same-type inherent access that actually required access checking.
+  Shared accesses are deduplicated, including their final region, and sorted.
+  An import anchor identifies its written path leaf, not inferred downstream calls.
+- `original_defining_region` and `final_defining_region` locate the declaration;
+  the original region is `null` only for a synthesized module declaration.
+  Regions are module-segment arrays relative to `crate`; `[]` is the crate root.
+- `preserved_access_region` is the existing restriction or final private defining
+  region that the repair must continue to cover. `preserved_original_access_regions`
+  separately records original defining regions retained for moved private members.
+- `narrowest_covering_region` is the computed deepest common ancestor of those
+  preserved requirements and the observed final consumer regions. It describes
+  the default requirement, even if a caller selects a broader supported override;
+  `after_text` remains the selected visibility bytes.
+- `basis` and `rationale` explain the covering calculation. A preservation-only
+  repair has empty `consumers` and explicitly says **no new observed caller**.
+  It does not invent callers beyond the admitted observations, prove exhaustive
+  access discovery, or add semantic verification. Preview evidence never clears
+  independent private-field, constructor, concrete-type, or receiver refusals.
+
 Defaults use complete CST paths and use leaves, not equal-looking text in comments, strings or token trees. Explicit aliases survive; grouped imports use an unchanged prefix, a shared prefix edit, or comment-free leaf extraction with unrelated leaves/trivia preserved. Local and inline-module import extraction keeps the original binding scope. Only necessary imports are synthesized; equivalent destination bindings are reused and shared needs are deduplicated. Items moving together do not create artificial cross-module imports or visibility changes.
 
 Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explicit module alias can identify a written target. Moved code is interpreted in its old lexical module, then mapped into the final batch. Recognized local functions, parameters, simple local bindings and generics are independent bindings, not leftover callers. Ordinary tuple/slice/constructor/struct binding positions are compared against the queried spelling: disjoint written names do not create uncertainty for every spelling in that scope. Explicit `mut`/`ref` binders and ordinary struct shorthand can prove independent locals; a matching plain identifier in a composite or refutable pattern still requires binding-versus-constant evidence. For/match/if-let/while-let patterns are checked only where their bindings are in scope, not in initializers, other arms or an if-let's else branch. Unsupported patterns, let chains, relevant local imports, macros and recovered/conditional lexical contexts remain anchored uncertainty. No macro expansion or semantic resolution is performed. Prelude assumptions are limited to the explicit opt-in type-position and bare value-position Option-constructor bridge described above. External explicit imports retain their written spelling, not a symbol-resolution guarantee; missing names are not guessed to be prelude imports on the default path.

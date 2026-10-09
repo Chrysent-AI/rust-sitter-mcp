@@ -392,6 +392,25 @@ pub enum ArtifactLink {
         content_range: ByteRange,
     },
 }
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VisibilityConsumer {
+    pub anchor: SourceAnchor,
+    pub access_reason: String,
+    pub original_module_region: Vec<String>,
+    pub final_module_region: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VisibilityExplanation {
+    pub consumers: Vec<VisibilityConsumer>,
+    pub original_defining_region: Option<Vec<String>>,
+    pub final_defining_region: Vec<String>,
+    pub preserved_access_region: Vec<String>,
+    pub preserved_original_access_regions: Vec<Vec<String>>,
+    pub narrowest_covering_region: Vec<String>,
+    pub basis: String,
+}
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct Rewrite {
@@ -406,6 +425,8 @@ pub struct Rewrite {
     pub origin: String,
     pub evidence: Vec<String>,
     pub rationale: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<VisibilityExplanation>,
     pub confidence: Confidence,
     pub default_action: String,
     pub selected_action: String,
@@ -2777,6 +2798,7 @@ fn rewrite(
         } else {
             "prevent a line comment/token boundary from swallowing or attaching inserted payload"
         }.into(),
+        visibility: None,
         confidence: Confidence {
             basis: "syntactic_heuristic".into(),
             level: "high".into(),
@@ -2932,6 +2954,7 @@ fn assemble(
             .unwrap_or_default();
         audit.anchors = repair.anchors.clone();
         audit.rationale = repair.rationale.clone();
+        audit.visibility = repair.visibility.clone();
         audit.evidence = repair
             .anchors
             .iter()
