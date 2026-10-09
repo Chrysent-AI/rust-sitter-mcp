@@ -63,6 +63,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Keep competing nominal imports and uncertain local written consumers from
+  gaining credible ownership seeds or exclusive companion classifications.
 * Emit narrow ancestor-scoped visibility repairs (`pub(super)` or
   `pub(in crate::path)`) instead of blanket `pub(crate)` widening; merge all proven
   caller regions and reject insufficient visibility overrides while preserving

@@ -284,6 +284,35 @@ fn same_owner_orchestrator_is_not_an_acyclic_joining_hub() {
 }
 
 #[test]
+fn competing_nominal_imports_and_uncertain_consumers_do_not_gain_ownership_claims() {
+    let repo = fixture("use other::State;\nstruct State;\nimpl State { fn act(&self) {} }\n");
+    let response = advice(&repo, json!({}));
+    complete(&response);
+    assert_eq!(
+        response["partition_outcome"],
+        "no_credible_written_partition"
+    );
+    assert!(
+        response["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["kind"] == "impl_owner_bundle" && s["facts"]["ambiguous_binding"] == 1)
+    );
+    repo.write("cases/ownership/core.rs", "fn a() { b(); validate(); }\nfn b() { a(); }\nfn validate() {}\nfn uncertain(pair: (fn(), u8)) { const validate: u8 = 1; let (validate, _) = pair; validate(); }\n");
+    let response = advice(&repo, json!({}));
+    complete(&response);
+    assert_eq!(
+        response["boundary_observations"]["coverage"]["attribution_uncertain"],
+        true
+    );
+    assert_eq!(
+        companion(&response, &response["ownership_candidates"][0], "validate")["classification"],
+        "undetermined"
+    );
+}
+
+#[test]
 fn outgoing_admitted_routes_keep_anchors_and_do_not_follow_shared_imports() {
     let repo = fixture("fn a() { b(); crate::outside::dependency(); }\nfn b() { a(); }\n");
     repo.write("cases/ownership/outside.rs", "pub fn dependency() {}\n");

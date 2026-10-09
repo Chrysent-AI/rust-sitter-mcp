@@ -57,6 +57,37 @@ pub(super) fn structural_signals(
     result: &mut SuggestSplitEnvelope,
 ) -> Result<(), DomainError> {
     let mut nominal: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let mut bindings: BTreeMap<String, usize> = BTreeMap::new();
+    for item in &result.inventory {
+        controls.check()?;
+        if item.enclosing_impl_id.is_some() {
+            continue;
+        }
+        if let Some(name) = &item.name {
+            *bindings
+                .entry(name.trim_start_matches("r#").into())
+                .or_default() += 1;
+        }
+        if item.kind == "use_declaration" {
+            let node = data
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(
+                    item.span.range.start_byte,
+                    item.span.range.end_byte,
+                )
+                .expect("import");
+            for leaf in items::use_leaves(
+                node,
+                &source.source,
+                (controls.deadline, controls.cancelled),
+            )? {
+                *bindings
+                    .entry(leaf.binding.trim_start_matches("r#").into())
+                    .or_default() += 1;
+            }
+        }
+    }
     let mut members: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (i, item) in result.inventory.iter().enumerate() {
         controls.check()?;
@@ -101,6 +132,12 @@ pub(super) fn structural_signals(
             value.to_item_id = Some(item.id.clone());
             value.count = 1;
             value.basis = "written_type".into();
+            value.facts.insert(
+                "ambiguous_binding".into(),
+                usize::from(
+                    bindings.get(identity.written_type.trim_start_matches("r#")) != Some(&1),
+                ),
+            );
             value.facts.insert(
                 "excluded_impl".into(),
                 usize::from(!identity.exclusions.is_empty()),
@@ -458,7 +495,11 @@ pub(super) fn build(
         .collect();
     for i in 0..n {
         controls.check()?;
-        if draftable(&result.inventory[i]) && !index.bundles[i].is_empty() {
+        if draftable(&result.inventory[i])
+            && index.bundles[i]
+                .iter()
+                .any(|s| result.signals[*s].facts.get("ambiguous_binding") != Some(&1))
+        {
             let mut support = 1;
             for s in &index.bundles[i] {
                 let implementation = index.target(&result.signals[*s]);
