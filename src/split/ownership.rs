@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 pub struct OwnershipCandidate {
     pub id: String,
     pub core_item_ids: Vec<String>,
+    pub consequence_summary: ConsequenceSummary,
     pub structural_signal_ids: Vec<String>,
     pub companions: Vec<InspectionCompanion>,
     pub alternatives: Vec<OwnershipAlternative>,
@@ -835,7 +836,7 @@ fn candidate(
             });
         }
     }
-    Ok(OwnershipCandidate { id: String::new(), core_item_ids: core.iter().map(|m| result.inventory[*m].id.clone()).collect(), structural_signal_ids: structural.into_iter().collect(), companions: companions.into_values().collect(), alternatives, ranking, observation_scope: "boundary_observations.coverage; written references, not resolved ownership".into(), selection_policy: "core only; companions and alternatives are inspection advice, never automatically selected".into() })
+    Ok(OwnershipCandidate { id: String::new(), consequence_summary: ConsequenceSummary::default(), core_item_ids: core.iter().map(|m| result.inventory[*m].id.clone()).collect(), structural_signal_ids: structural.into_iter().collect(), companions: companions.into_values().collect(), alternatives, ranking, observation_scope: "boundary_observations.coverage; written references, not resolved ownership".into(), selection_policy: "core only; companions and alternatives are inspection advice, never automatically selected".into() })
 }
 fn n_boundary(result: &SuggestSplitEnvelope, b: usize) -> usize {
     result.inventory.len() + b

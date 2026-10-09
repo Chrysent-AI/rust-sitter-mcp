@@ -802,7 +802,8 @@ fn display_only_wire_projection_preserves_drafts_and_context_coordinates() {
     );
     let mut request = args(&repo, "src/weak.rs");
     request["limits"]["text_bytes"] = json!(65536);
-    request["limits"]["response_bytes"] = json!(65536);
+    // Accommodate the additive consequence-summary payload; this is fixture sizing, not a contract change.
+    request["limits"]["response_bytes"] = json!(131072);
     let result = run(&repo, request);
     advice_flow::complete(&result);
     assert!(!result["drafts"].as_array().unwrap().is_empty());

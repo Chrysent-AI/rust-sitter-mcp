@@ -29,6 +29,13 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Advice-tier boundaries
 
+- Candidate/group `consequence_summary` counts uncapped decision records per class,
+  with exact links and explicit unmapped reasons. Classes overlap; counts are not
+  additive blocker/unit totals. Separate `advice_decisions` link inspection evidence,
+  never establish outside-consumer repairability or change local forecasts. Zero
+  counts still leave destination/batch applicability unassessed. Display omissions
+  can withhold linked detail; expand budgets rather than treating it as absent evidence.
+
 - `test_observations` separately scans admitted written inline/ordinary out-of-line
   test routes, including conditional exact `cfg(test)` declarations in both layouts.
   Missing/excluded/competing/remapped routes and unlinked test roots remain explicit

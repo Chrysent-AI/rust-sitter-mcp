@@ -440,6 +440,57 @@ fn excluded_giant_impl_has_no_draft_and_keeps_its_member_reasons() {
 }
 
 #[test]
+fn zero_consequences_and_fitted_memberships_keep_unassessed_applicability() {
+    let empty = ConsequenceSummary::default();
+    assert!(
+        empty
+            .classes
+            .values()
+            .all(|m| m.count == 0 && m.decision_refs.is_empty())
+    );
+    assert_eq!(empty.unmapped.membership.count, 0);
+    assert_eq!(empty.destination_and_batch_applicability, "not_assessed");
+    let repo = Fixture::new();
+    let mut result = run(&repo.0, repo.request(), &AtomicBool::new(false));
+    let expected: Vec<_> = result
+        .drafts
+        .iter()
+        .map(|d| {
+            d.groups
+                .iter()
+                .map(|g| {
+                    let summary = &g.consequence_summary;
+                    assert_eq!(summary.destination_and_batch_applicability, "not_assessed");
+                    serde_json::to_value(summary).unwrap()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(!expected.is_empty());
+    result.drafts[0].rationale = "x".repeat(100_000);
+    result.limits.response_bytes = 65_536;
+    result
+        .fit(Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &AtomicBool::new(false),
+        })
+        .unwrap();
+    assert!(result.drafts.is_empty());
+    let actual: Vec<_> = result
+        .draft_summaries
+        .iter()
+        .map(|d| {
+            d.groups
+                .iter()
+                .map(|g| serde_json::to_value(&g.consequence_summary).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    assert!(result.wire_bytes() <= result.limits.response_bytes);
+}
+
+#[test]
 fn descriptor_and_expired_work_checks_are_not_passing_evidence() {
     let mut result = SuggestSplitEnvelope::empty(Limits::default());
     assert!(result.account(128 * 1024 * 1024 + 1).is_err());

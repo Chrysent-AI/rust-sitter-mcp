@@ -9,6 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add uncapped, linked `consequence_summary` counts to ownership candidates and
+  draft groups, with separate advisory decisions, explicit unmapped reasons and
+  non-additive class membership; preserve local forecasts and unassessed applicability.
+
 * Disclose separate advisory `test_observations` for admitted inline/out-of-line
   test routes, multiline CST accesses and labeled macro-token candidates, with
   anchored discovery limitations, attribution uncertainty and non-exclusive
