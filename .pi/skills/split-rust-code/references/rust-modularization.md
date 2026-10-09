@@ -68,10 +68,56 @@ src/
 
 Rules:
 - Can't have both `foo.rs` and `foo/mod.rs` — pick one
-- The MCP creates new files as literal `.rs` siblings (`src/new_module.rs`), never directories or new `mod.rs` files
+- `new_sibling` creates a literal `.rs` sibling in an existing directory. The
+  explicitly selected private `new_child` layout can use one conventional child
+  directory; neither destination creates a new `mod.rs` file or supports arbitrary
+  directory chains.
 - `mod foo;` loads a module; `use` imports names but doesn't load files
 - Legacy `mod.rs` trees are valid — the engine works with them but never creates new ones
 - Root files (`lib.rs`, `main.rs`) can contain logic, not just declarations
+
+### Explicit private-child destinations
+
+The caller may select `{kind:"new_child",parent_path,path}` for a private
+ordinary direct child. Every unit assigned to that destination must originate in
+`parent_path`, which is the selected source file. The child path must match the
+evidenced Rust layout: `foo.rs` → `foo/child.rs`, `foo/mod.rs` →
+`foo/child.rs`, or a child beside an evidenced crate root. At most one absent
+conventional directory is supported for a non-root flat-file parent, and its
+higher ancestors must already exist and pass scope checks; existing safe
+directories are also supported. An absent child directory/file is not admitted
+by `paths`; admit an existing higher directory, and ensure any positive glob
+includes the future file. `new_sibling` remains limited to an absent file in an
+existing directory.
+
+The planner synthesizes one private ordinary `mod child;` declaration or reuses
+one unique compatible private declaration under existing admitted-context rules.
+Public/restricted, inline, remapped, ambiguous, unknown-cfg or unproved
+declarations refuse; the child is not widened for consumers outside its parent.
+The caller chooses units and destination; no core selection, public facade or
+re-export is inferred or synthesized. Preserve public facades explicitly. Parent
+imports are not inherited, and child placement adds no proof or visibility
+exemption. Supported associated-item wrappers retain their full audited headers.
+No arbitrary `mkdir`, new `mod.rs`, inline parent, layout conversion or
+unrelated-source aggregation is supported.
+
+Typed batches containing a child use schema 3, including mixed batches and
+failures; legacy-only typed batches remain schema 2. Reject unknown versions
+before interpreting artifacts. Schema 3 requires `plan.edits`,
+`plan.created_files`, `plan.directory_preconditions` and `plan.patch` together;
+unsuccessful results withhold all four. Directory records disclose root-relative
+paths, observed and required states, ordinary-layout basis, and dependent
+created-file IDs, with matching `created_files[].directory_precondition_ids`;
+they do not specify a directory mode or empty-directory Git artifact. Directory
+permissions are caller policy. The server creates nothing. Before external JSON
+reconstruction, callers recheck source/parent bytes and modes, file absence, the
+disclosed directory state and layout, ignores and competing layouts, then create
+only disclosed absent directories with caller-chosen permissions. Directory
+records do not expose filesystem identities; the server rechecks its captured
+identities before publication. A previously absent directory appearing—even
+empty—invalidates the plan. Git patches contain nested file entries but no
+separate empty-directory artifact; `git apply --check` creates nothing and
+provides no atomic freshness guarantee.
 
 ## Reading structural ownership advice
 
@@ -113,9 +159,14 @@ execution authority. `get_split_detail` remains historical: pages and complete
 unit/header anchors preserve frozen bytes but do not check live freshness, layout,
 grouping quality or `move_item` applicability. A separately invoked
 `export_move_request` accepts explicit per-unit references and caller-chosen
-`existing`, `new_sibling` or `existing_impl` destinations, reobserves the captured
-corpus/scope, effective ignore inputs, modes and observed filesystem identities,
-and can return full current-observed anchors in an inactive schema-1 scaffold.
+`existing`, `new_sibling`, `new_child` or `existing_impl` destinations,
+reobserves the captured corpus/scope, effective ignore inputs, modes and observed
+filesystem identities, and can return full current-observed anchors in an inactive
+schema-1 scaffold. For `new_child`, the caller supplies
+`{kind:"new_child",parent_path,path}`; the selected source must equal
+`parent_path` and the path must match its ordinary direct-child geometry. Export
+validates this syntax and reobserves captured inputs only: it does not admit the
+future destination or run the planner/applicability audits.
 This freshness result is observational only—not grouping approval, applicability,
 semantic proof or an atomic application-time guarantee—and ignored/excluded paths
 are outside its evidence boundary. The caller reviews/edits and separately submits

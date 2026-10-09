@@ -105,7 +105,7 @@ has `request:null`; never salvage a partial or preview request from `error`.
 | `UNKNOWN_ADVICE_ID` | The selected `item_id` is absent from this retained inventory. Use an exact inventory ID from the same record. |
 | `INVALID_SCAFFOLD_SELECTION` | Empty/over-cap selection, invalid or duplicate unit reference, cross-analysis `unit_ref.analysis_id`, or overlapping whole-impl/member ranges. Correct the explicit selection; nothing is pruned automatically. |
 | `UNSUPPORTED_SCAFFOLD_SELECTION` | Excluded/recovered/unsupported unit or missing complete frozen item/header provenance. Choose a supported inventory unit; snippets are not anchors. |
-| `INVALID_DESTINATION` | Caller destination syntax, root-relative geometry, or required destination anchor is invalid. Correct it explicitly. Only `existing`, `new_sibling`, and member-only `existing_impl` are supported; `new_child` is not supported. The check is not destination applicability proof. |
+| `INVALID_DESTINATION` | Caller destination syntax, root-relative geometry, or required destination anchor is invalid. Correct it explicitly. `new_child` requires `{kind:"new_child",parent_path,path}`, with `parent_path` equal to the selected unit's source and `path` matching that parent's ordinary direct-child layout; export's check is syntax-only, not destination admission or applicability proof. |
 | `SOURCE_CHANGED` | Captured source/corpus, normalized scope, effective ignore input, mode or observed filesystem identity changed or could not be completely reobserved. Request a fresh retained `suggest_split` analysis explicitly, then review and export again; `get_split_detail` remains historical. |
 | `SCAFFOLD_TOO_LARGE` | The complete decoded request exceeds 8 MiB or the complete duplicated structured/text response cannot fit. Export never shortens anchors, emits partial JSON/snippets, or automatically splits the batch. The export `response_bytes` limit is 64 KiB–16 MiB; choose limits before retrying. |
 | `INVALID_PARAMS` | Strict request object, required field, option or bound is invalid. Correct the named field; unknown fields are not accepted. |
@@ -127,6 +127,69 @@ uses the worker-owned shared admission permit through cancellation/shutdown: `BU
 starts no work and queues nothing, and cancellation does not free the slot until
 admitted work settles.
 
+## Private-child plans and schema-3 recovery
+
+A caller explicitly selects `new_child`; export does not choose it, admit its
+destination, run the planner or establish safety. The selected units must all
+come from the caller's `parent_path`, which is the selected source file. Only the
+evidenced ordinary direct-child path is supported: `foo.rs` → `foo/child.rs`,
+`foo/mod.rs` → `foo/child.rs`, or a child beside an evidenced crate root. At most
+one absent conventional directory may be required for the non-root flat-file
+layout; higher ancestors must already exist and pass scope checks. Existing safe
+directories are allowed. No arbitrary directory chain, new `mod.rs`, inline
+parent, layout conversion or unrelated-source aggregation is supported. Existing
+`new_sibling` admission remains strict.
+
+Private-child plans synthesize a private ordinary `mod child;` declaration or
+reuse one unique compatible private declaration under existing admitted-context
+rules. Public/restricted, inline, remapped, ambiguous, unknown-cfg or unproved
+declarations refuse. Do not widen the child for consumers outside its parent;
+keep public facades in place and do not synthesize a facade/re-export.
+Associated-item wrappers preserve supported full headers and all existing
+proof/veto rules. Child geometry does not relax public-path, macro, trait, field,
+constructor, concrete-type, receiver, context, scope, binding or visibility
+refusals.
+
+Branch on `schema_version` before interpreting any artifacts. Legacy-only typed
+batches use schema 2 and the three artifact members `plan.edits`,
+`plan.created_files` and `plan.patch`. Every successfully typed batch containing
+a child, including mixed batches and planning/admission failures, uses schema 3,
+selected before planning. Schema 3 requires all four artifact members: `edits`,
+`created_files`, `directory_preconditions` and `patch`. Reject unknown/unsupported
+versions before consuming artifacts; early untyped deserialization failures
+retain the existing transport contract. Any unsuccessful schema-3 result sets
+all four members to null together.
+
+`directory_preconditions` disclose `id`, root-relative `path` (`.` for the
+repository root), `observed_state` (`absent` or `existing_directory`),
+`required_state` (`absent_then_directory` or `existing_directory`),
+`basis:{kind,parent_path,crate_root,parent_module_segments}`, and
+`dependent_created_file_ids`. The basis kind names the ordinary layout
+(`flat_file_child`, `mod_rs_child`, `crate_root_child`, or `new_sibling` in a
+mixed batch). Each created file's `directory_precondition_ids` links back; check
+both directions. There is no directory mode, content, source range or
+empty-directory Git artifact. Directory permissions belong to the caller.
+`directory_diagnostics` contain `id`, `reason`, `path`, `parent_path`,
+`expected_state` and `observed_state`, not a creation instruction or fabricated
+byte anchor.
+
+Use the exact directory refusal/race vocabulary in those records and linked blockers:
+
+- `directory_context_unproved` marks a directory admission/context that could not be proved under the existing typed destination/scope rules.
+- `directory_creation_unsupported_layout` identifies a missing higher ancestor; this layout is unsupported, not an invitation to plan an arbitrary directory chain.
+- `CREATION_RACE` reports captured creation evidence that changed before publication. Its diagnostic `reason` distinguishes `directory_creation_race` (directory state/identity), `file_creation_race` (destination file or case alias appeared), and `competing_file_layout` (the competing ordinary module layout appeared). Read `path`, `parent_path`, `expected_state` and `observed_state`; do not invent source ranges or a directory-creation action.
+
+A formerly absent directory appearing invalidates the plan even if it is now
+empty and otherwise safe. JSON consumers must recheck source/parent bytes and
+modes, file absence, the disclosed directory state and ordinary layout, ignore
+inputs and competing layouts, then create only disclosed `absent_then_directory`
+paths with caller-chosen permissions. Directory records do not expose filesystem
+identities; the server rechecks its captured identities before publication. Git
+patches contain the nested created file, not an empty-directory artifact;
+`git apply --check` creates nothing and is not a freshness or atomicity guarantee.
+On any race/change, stabilize, obtain fresh anchors and replan; never salvage an
+artifact subset. The server never creates directories.
+
 ## Common error codes
 
 | Error code | Meaning | Recovery |
@@ -147,7 +210,7 @@ admitted work settles.
 | Cancellation | Work stopped | Only retry if still requested. |
 | Limit/partial states | Membership/evidence/scan/output not complete | Inspect truncation+omissions; raise supported limits or reduce optional text/context — never exclude needed chain/binding evidence to force applicability. |
 
-For `export_move_request`, `SOURCE_CHANGED` is an export error: the captured observation cannot be presented as current; obtain a new retained analysis explicitly. `CREATION_RACE` and other move-planning freshness issues can appear as incompleteness reasons rather than error codes; `CRATE_IDENTITY_UNCERTAIN` typically surfaces as a module-context blocker. Stabilize the base, reread, and replan rather than treating old detail as fresh.
+For `export_move_request`, `SOURCE_CHANGED` is an export error: the captured source, scope, ignore inputs, modes or observed filesystem identities changed or could not be completely reobserved; obtain a new retained analysis explicitly. In move planning, source/parent byte or mode changes and ignore-input changes remain `SOURCE_CHANGED`. `CREATION_RACE` and other move-planning freshness issues can appear as incompleteness reasons rather than error codes; `CRATE_IDENTITY_UNCERTAIN` typically surfaces as a module-context blocker. Stabilize the base, reread, and replan rather than treating old detail as fresh.
 
 ## Decision routing
 
