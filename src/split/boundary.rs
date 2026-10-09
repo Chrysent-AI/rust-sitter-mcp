@@ -305,6 +305,9 @@ pub(super) fn collect(
                     (controls.deadline, controls.cancelled),
                     false,
                 )?;
+                if assessment.binding == items::LexicalBinding::Uncertain {
+                    unsupported(result, anchor(path, source, node, result.limits.text_bytes))?;
+                }
                 if path == &request.source_path
                     && assessment.binding != items::LexicalBinding::Independent
                 {
