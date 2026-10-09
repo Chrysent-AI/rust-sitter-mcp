@@ -285,6 +285,121 @@ fn external_test_markers_never_infer_target_or_library_alias() {
 }
 
 #[test]
+fn cfg_mentions_disclose_limits_without_unlinked_test_roots() {
+    for attribute in [
+        "#[cfg(not(test))]",
+        "#[cfg_attr(test, allow(dead_code))]",
+        "#[cfg(any(test, feature = \"other\"))]",
+        "#[cfg(all(test, feature = \"other\"))]",
+    ] {
+        let repo = Fixture::generate();
+        repo.write("cases/coupling/lib.rs", "const LIMIT: u8 = 4;\n");
+        repo.write(
+            "cases/coupling/external.rs",
+            &format!("{attribute} fn helper() {{ let _ = crate::LIMIT; }}\n"),
+        );
+        let mut client = Client::new();
+        let value = advice(
+            &mut client,
+            &repo,
+            "cases/coupling/lib.rs",
+            json!(["cases/coupling"]),
+        );
+        assert_eq!(value["status"], "complete", "{value}");
+        let projection = &value["test_observations"];
+        assert_eq!(projection["coverage"]["completed"], true);
+        assert_eq!(projection["coverage"]["unlinked_test_roots"], json!([]));
+        assert_eq!(projection["routes"], json!([]));
+        assert!(records(&value).is_empty(), "{projection}");
+        let limitations = projection["limitations"].as_array().unwrap();
+        assert_eq!(limitations.len(), 1, "{projection}");
+        assert_eq!(limitations[0]["reason"], "unsupported_test_cfg");
+        assert_eq!(limitations[0]["anchor"]["span"]["text"], attribute);
+        assert_eq!(
+            limitations[0]["paths"],
+            json!(["cases/coupling/external.rs"])
+        );
+        assert!(
+            limitations[0]["note"]
+                .as_str()
+                .unwrap()
+                .contains("does not establish a test root or coupling")
+        );
+    }
+}
+
+#[test]
+fn cfg_mentions_do_not_seed_inline_test_routes() {
+    for attribute in ["#[cfg(not(test))]", "#[cfg_attr(test, allow(dead_code))]"] {
+        let repo = Fixture::generate();
+        repo.write(
+            "cases/coupling/lib.rs",
+            &format!("const LIMIT: u8 = 4;\n{attribute} mod helpers {{ fn helper() {{ let _ = super::LIMIT; }} }}\n"),
+        );
+        let mut client = Client::new();
+        let value = advice(
+            &mut client,
+            &repo,
+            "cases/coupling/lib.rs",
+            json!(["cases/coupling"]),
+        );
+        assert_eq!(value["status"], "complete", "{value}");
+        let projection = &value["test_observations"];
+        assert_eq!(projection["routes"], json!([]));
+        assert_eq!(projection["coverage"]["unlinked_test_roots"], json!([]));
+        assert!(records(&value).is_empty(), "{projection}");
+        let limitation = &projection["limitations"][0];
+        assert_eq!(limitation["reason"], "unsupported_test_cfg");
+        assert_eq!(limitation["anchor"]["span"]["text"], attribute);
+        assert_eq!(limitation["paths"], json!(["cases/coupling/lib.rs"]));
+    }
+}
+
+#[test]
+fn positive_test_cfg_markers_preserve_linked_and_unlinked_routes() {
+    for attribute in ["#[cfg(test)]", "#[ cfg ( test ) ]"] {
+        let repo = Fixture::generate();
+        repo.write(
+            "cases/coupling/lib.rs",
+            &format!("const LIMIT: u8 = 4;\n{attribute} mod checks {{ fn helper() {{ let _ = super::LIMIT; }} }}\n"),
+        );
+        repo.write(
+            "cases/coupling/external.rs",
+            &format!("{attribute} mod checks {{ fn helper() {{ let _ = crate::LIMIT; }} }}\n"),
+        );
+        let mut client = Client::new();
+        let value = advice(
+            &mut client,
+            &repo,
+            "cases/coupling/lib.rs",
+            json!(["cases/coupling"]),
+        );
+        assert_eq!(value["status"], "complete", "{value}");
+        let projection = &value["test_observations"];
+        assert_eq!(
+            projection["coverage"]["unlinked_test_roots"],
+            json!(["cases/coupling/external.rs"])
+        );
+        assert_eq!(projection["routes"][0]["status"], "inline_written");
+        assert_eq!(projection["routes"][1]["status"], "inline_uncertain");
+        for route in projection["routes"].as_array().unwrap() {
+            assert_eq!(route["conditional"], true);
+            assert_eq!(route["attributes"][0]["span"]["text"], attribute);
+        }
+        assert!(has(&value, "super::LIMIT", "cst"), "{projection}");
+        assert!(has(&value, "crate::LIMIT", "cst"), "{projection}");
+        assert!(
+            projection["limitations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|limitation| limitation["reason"] != "unsupported_test_cfg")
+        );
+        assert_anchors(&repo, &value);
+    }
+}
+
+#[test]
 fn diagnostic_caps_preserve_projection_and_output_fitting_discloses_omissions() {
     let repo = Fixture::generate();
     let source = format!(

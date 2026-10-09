@@ -128,7 +128,13 @@ fn exact(source: &str, node: Node<'_>, form: &str) -> bool {
         .filter(|c| !c.is_whitespace())
         .eq(form.chars())
 }
-fn test_cfg_candidate(source: &str, node: Node<'_>) -> bool {
+fn test_cfg_marker(source: &str, node: Node<'_>) -> bool {
+    exact(source, node, "#[cfg(test)]")
+}
+fn unsupported_test_cfg(source: &str, node: Node<'_>) -> bool {
+    if test_cfg_marker(source, node) {
+        return false;
+    }
     let compact: String = source[node.byte_range()].split_whitespace().collect();
     if !(compact.starts_with("#[cfg(") || compact.starts_with("#[cfg_attr(")) {
         return false;
@@ -226,7 +232,7 @@ impl Projection<'_> {
         self.controls.check()?;
         let source = &self.files[&ctx.path].source;
         let attrs = attributes(node);
-        let conditional = attrs.iter().any(|a| exact(source, *a, "#[cfg(test)]"));
+        let conditional = attrs.iter().any(|a| test_cfg_marker(source, *a));
         // Reuse the legacy recognition for directly inventoried inline modules,
         // without altering its same-file execution predicate or its exclusions.
         let legacy = self.parsed[&ctx.path]
@@ -246,10 +252,9 @@ impl Projection<'_> {
             .transpose()?
             .flatten()
             .is_some();
-        let candidate_marker = attrs.iter().any(|a| test_cfg_candidate(source, *a));
-        let testing = ctx.testing || conditional || recognized || candidate_marker;
+        let testing = ctx.testing || conditional || recognized;
         let unsupported = attrs.iter().any(|a| {
-            !exact(source, *a, "#[cfg(test)]")
+            !test_cfg_marker(source, *a)
                 && !items::context_independent_attribute(&source[a.byte_range()])
         });
         let declaration = self.anchor(&ctx.path, node, result);
@@ -1278,19 +1283,24 @@ pub(super) fn collect(
     let linked_paths: BTreeSet<_> = discovered.iter().map(|c| c.path.clone()).collect();
     for (path, data) in parsed {
         controls.check()?;
-        if linked_paths.contains(path) {
-            continue;
-        }
         let source = &files[path].source;
         let mut stack = vec![data.tree.root_node()];
         let mut marker = None;
         while let Some(node) = stack.pop() {
             controls.check()?;
-            if node.kind() == "attribute_item"
-                && (exact(source, node, "#[test]") || test_cfg_candidate(source, node))
-            {
-                marker = Some(node);
-                break;
+            if node.kind() == "attribute_item" {
+                if exact(source, node, "#[test]") || test_cfg_marker(source, node) {
+                    marker.get_or_insert(node);
+                } else if unsupported_test_cfg(source, node) {
+                    projection.limitation(
+                        result,
+                        "unsupported_test_cfg",
+                        Some(projection.anchor(path, node, result)),
+                        vec![path.clone()],
+                        "cfg expression mentions test but is not a supported positive test marker; not evaluated and does not establish a test root or coupling",
+                    )?;
+                }
+                continue;
             }
             if excluded(node) || matches!(node.kind(), "macro_invocation" | "macro_definition") {
                 continue;
@@ -1299,7 +1309,7 @@ pub(super) fn collect(
                 stack.push(node.named_child(i as u32).expect("child"));
             }
         }
-        if let Some(marker) = marker {
+        if let Some(marker) = marker.filter(|_| !linked_paths.contains(path)) {
             result
                 .test_observations
                 .coverage
