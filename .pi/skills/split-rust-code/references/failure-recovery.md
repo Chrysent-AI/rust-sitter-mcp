@@ -6,7 +6,7 @@ Common failures and typed recovery routing for rust-sitter-mcp. Unknown or undia
 
 - **Failed call** (`status: "failed"`): inspect `error.code` and `error.field` — the fix targets the named request field.
 - **Blocked plan** (`status: "complete"`, `plan.state: "blocked"`): inspect `plan.blockers[]` and `plan.decisions[]`; artifacts are withheld.
-- **Incomplete advice** (`status` not complete, or omissions/truncation present): inspect `truncation_reasons`, `coverage`, `counts.omissions`.
+- **Incomplete advice:** for full schema-2 responses, inspect `status`, `coverage`, `truncation_reasons`, and `counts.omissions`. For compact `envelope_kind:"split_manifest"` schema 1, inspect `analysis_status`, `manifest_complete`, `coverage`, `omissions`, `totals` and `detail_availability`; manifest omissions can be retrievable detail rather than incomplete analysis.
 
 For a retained move need, inspect `plan.decisions[].refusal_basis[]`: each entry is `{class, anchor:{path,range?}, name?}`. Prelude/derive vetoes identify `chain_macro_statement`, `derive_veto`, `shadow` / `macro_shadow` (with the competing name), `conditional_context`, `prelude_disabled`, `module_attribute`, `unparseable_attribute`, `glob_import`, `unresolved_chain` or `syntax_recovery`; lexical refusals identify `lexical_uncertainty` or a `chain_macro_statement` in the reference's block or an enclosing block and retain the full `lexical_uncertainty` witness. Written re-export route failures with no accessible admitted fallback use `inaccessible_route:<segment>` with `name` identifying the inaccessible or unprovable intermediate module and its original declaration anchor when available. Other written failures use `written_binding_unproved` alongside the existing decision reason. Semantic entries identify the failed configuration, overlay, mapping, source-fact, final-fact or identity proof stage (`semantic_*_unproved`, except `semantic_overlay_unavailable`), not a finer internal resolver cause. Written witnesses use original byte ranges; unresolved paths and synthesized bindings omit the range. Zero proofs with `assume_standard_prelude` enabled are therefore diagnosable, not permission to add guessed imports or weaken a veto. If details are capped, request a larger `diagnostic_count` and response budget as needed.
 
@@ -24,10 +24,61 @@ Candidate/group `consequence_summary` links exact runs qualified by `decisions`
 or `advice_decisions`; never merge their `d/N` and `ad/N` namespaces. Counts are
 uncapped distinct records per class, non-additive across classes. `unmapped` keeps
 unknown reasons visible and needs inspection, not an invented override. Omitted
-advice detail requires diagnostic/response expansion; no saved retrieval handle
-exists. Selection-completeness and outside/test observations remain prospective
-review, not proof the edited batch is incomplete or unrepairable. Local lower
-bounds and unassessed destination/batch applicability remain unchanged.
+full-response advice detail may need diagnostic/response expansion. If the caller
+explicitly retained completed advice and its handle is still available, omitted
+evidence may instead be retrieved historically; compact availability is not
+implicit, so inspect `detail_availability` and `retention` before relying on it.
+Selection-completeness and outside/test observations remain prospective review,
+not proof the edited batch is incomplete or unrepairable. Local lower bounds and
+unassessed destination/batch applicability remain unchanged.
+
+### Compact manifests and retained historical detail
+
+For `envelope_kind:"split_manifest"` schema 1, branch on `analysis_status` and
+`manifest_complete`, then inspect `coverage`, `omissions`, `totals` and each
+`detail_availability`. A compact manifest has no legacy `inventory[]`. Analysis
+completion, mandatory-manifest completeness, detail availability and each
+returned page's `returned_page_complete` / `collection_exhausted` state are
+separate. Retrieve only when `retention.state:"retained"` and the collection is
+marked `retrievable:true`; unavailable records are permanently unavailable from
+that result. Do not silently substitute a fresh analysis for historical evidence.
+A new `suggest_split` call is a separately requested analysis with a new identity.
+
+| Condition or error | Meaning | Recovery |
+|---|---|---|
+| Retention `unavailable` with `capacity` or `record_too_large` | No usable historical handle was published | Review the ordinary full response if complete; release a retained record you no longer need if it occupies capacity, or retry without retention. Larger output limits do not remove the record/capacity limit. |
+| Retention `unavailable` with `analysis_incomplete` | The completed-analysis retention precondition was not met | Recover the incomplete advice cause first; do not treat a partial result as retained evidence. |
+| Retention `unavailable` with `response_budget` | Retention metadata or response did not fit | Raise `response_bytes` within bounds or use the full response mode; no retrievable handle is promised. |
+| Retention `unavailable` with `cancelled_before_publication` | Cancellation prevented publication | Retry only if the analysis is still requested. |
+| `ADVICE_MANIFEST_TOO_LARGE` | Mandatory compact membership/consequence/coverage could not fit; manifest is incomplete and no handle is published | Use full response mode or a larger allowed `response_bytes`; inspect remaining omissions and do not treat the failed compact manifest as complete. |
+| `ADVICE_SNAPSHOT_UNKNOWN` | Handle is unknown, released, corrupted or from a previous process | Confirm the exact returned handle is still available in this process; do not guess or silently reanalyze. |
+| `ADVICE_SNAPSHOT_EXPIRED` | Valid handle passed its fixed expiry, including after payload reclamation | Historical detail is no longer available; make a new analysis only as a new, explicitly requested snapshot. |
+| `ADVICE_SNAPSHOT_MISMATCH` | Supplied snapshot, analysis or input digest differs; `error.field` names the mismatched field | Copy the identity values from the same retention result; do not combine records across analyses. |
+| `INVALID_ADVICE_PAGE` | Page token, page size or bound options/position are invalid or changed | Reuse the returned token with the exact same handle, snapshot, collection, filter, page size and detail limits; otherwise restart that collection at its first page if the handle remains valid. |
+| `UNKNOWN_ADVICE_ID` | Selected/filter ID or candidate is unknown or belongs to another collection | Use exact IDs from the retained record and the matching collection. |
+| `DETAIL_TOO_LARGE` | Complete indivisible record/unit or explicit subset cannot fit | Increase detail `response_bytes` up to 16 MiB or request smaller pages/subsets. The tool withholds every record/anchor rather than returning snippets. |
+| `INVALID_PARAMS` | Malformed selector/filter/limits, empty/duplicate/oversized ID list or unobserved typed reason filter | Correct the named request field; filters support only observed typed `id`, `reason` and `candidate_id` values. |
+| `BUSY` | Shared analysis slot is occupied; detail/release started no work and was not queued | Wait for active work or cancellation to settle, then retry serially. |
+
+Page tokens bind the analysis/handle, corpus snapshot, scope-input digest,
+collection, filter, ordering, position, page size and effective detail limits.
+Repeat every option unchanged with `selector.page_token`. A `reason` filter must
+be an observed typed reason in that collection; unknown reasons refuse rather
+than returning a misleading empty result. `scope_input_digest` is distinct from
+`snapshot_id`: it also binds normalized scope and effective in-root ignore
+inputs, but detail performs no live source, mode or ignore freshness check. The
+provisional one-record / 128-MiB accounted allocation / 900-second lifetime
+parameters are not measured or final guarantees. Expiry is fixed from
+publication, navigation does not extend it, there is no silent eviction or disk
+persistence, restart loses records, and release removes only the process-local
+record.
+
+`units` returns complete frozen original item and header anchors, but they are
+historical (`historical:true`, `live_freshness:"not_checked"`), not checked-current
+execution authority. Re-read and verify current item/header bytes before any
+move request; `move_item` independently repeats its mandatory current-byte and
+safety audits. Historical retrieval does not select or submit units, refresh
+analysis, or add an export capability.
 
 ## Common error codes
 

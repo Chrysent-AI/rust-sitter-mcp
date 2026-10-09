@@ -3,7 +3,9 @@ use crate::{
     move_plan::{MoveEnvelope, MoveRequest},
     plan::{PlanEnvelope, ReplaceRequest},
     result::{DomainError, Limits, PatternRequest, SearchEnvelope, SearchRequest},
-    split::{SuggestSplitEnvelope, SuggestSplitRequest},
+    split::{
+        DetailEnvelope, DetailRequest, SplitResponse, SuggestSplitEnvelope, SuggestSplitRequest,
+    },
 };
 use rmcp::{
     RoleServer, ServerHandler,
@@ -201,7 +203,10 @@ impl Server {
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         let failure = |limits: crate::split::AdviceLimits, error| {
-            suggest_wire(SuggestSplitEnvelope::failed(limits.into(), error))
+            suggest_wire(SplitResponse::Full(Box::new(SuggestSplitEnvelope::failed(
+                limits.into(),
+                error,
+            ))))
         };
         let Ok(permit) = self.admission.clone().try_acquire_owned() else {
             return failure(request.limits, busy_error());
@@ -233,6 +238,36 @@ impl Server {
             ),
         }
     }
+    async fn run_detail(
+        &self,
+        request: DetailRequest,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let Ok(permit) = self.admission.clone().try_acquire_owned() else {
+            return detail_wire(DetailEnvelope::failed(busy_error()));
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let _guard = CancelOnDrop(flag.clone());
+        {
+            let mut active = self.active.lock().expect("active lock");
+            flag.store(active.cancelled, Ordering::Relaxed);
+            active.flags.retain(|weak| weak.strong_count() > 0);
+            active.flags.push(Arc::downgrade(&flag));
+        }
+        let engine = self.engine.clone();
+        let worker_flag = flag.clone();
+        let mut job = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            engine.get_split_detail(request, &worker_flag)
+        });
+        let result = tokio::select! {
+            result = &mut job => result,
+            _ = context.ct.cancelled() => { flag.store(true, Ordering::Relaxed); job.await }
+        };
+        detail_wire(result.unwrap_or_else(|_| {
+            DetailEnvelope::failed(DomainError::new("INTERNAL", "blocking detail task failed"))
+        }))
+    }
     pub async fn shutdown(&self) {
         self.cancel_requests();
         // The owned permit lives until all blocking workers and Git children have joined.
@@ -257,8 +292,17 @@ fn move_wire(result: MoveEnvelope) -> CallToolResult {
         CallToolResult::structured(value)
     }
 }
-fn suggest_wire(result: SuggestSplitEnvelope) -> CallToolResult {
+fn detail_wire(result: DetailEnvelope) -> CallToolResult {
     let failed = result.error.is_some();
+    let value = serde_json::to_value(result).expect("serializable historical detail");
+    if failed {
+        CallToolResult::structured_error(value)
+    } else {
+        CallToolResult::structured(value)
+    }
+}
+fn suggest_wire(result: SplitResponse) -> CallToolResult {
+    let failed = result.error().is_some();
     let value = serde_json::to_value(result).expect("serializable advice");
     if failed {
         CallToolResult::structured_error(value)
@@ -268,6 +312,21 @@ fn suggest_wire(result: SuggestSplitEnvelope) -> CallToolResult {
 }
 #[tool_router]
 impl Server {
+    #[tool(name = "get_split_detail", description = r#"Read immutable historical evidence from explicitly retained completed advice, or release it.
+Use for: deterministic bounded pages, explicit records and full original unit/header anchors.
+Does NOT: read current files, reanalyze, assess applicability, export a move request or change repositories.
+Example arguments:
+{"analysis_handle":"opaque-analysis-token","snapshot_id":"sha1:captured-corpus-hash","selector":{"kind":"page","collection":"inventory","page_size":100}}
+Workflow: request retain_snapshot:true in suggest_split, then repeat the returned identity with a tagged page/records/units/release selector. Pages bind all limits, collection, filter and page size; repeat identical options with next_page_token. Full unit anchors are historical, not verified current execution anchors.
+Safety: historical:true, live_freshness:not_checked and semantic:not_performed. Unknown, expired, mismatched, invalid-page, unknown-ID and oversized indivisible evidence refuse explicitly. Release removes only process-local evidence. Restart loses handles. All operations share the single analysis slot; BUSY starts no work and queues nothing.
+Advanced details: page_size is 1–1000 (default 100); explicit nonempty IDs are capped at 1000. Filters are id/reason/candidate_id. limits accepts only response_bytes (64 KiB–16 MiB, default 2 MiB) and time_budget_ms (1–300000, default 60000). See docs/tools.md for collection/filter semantics and provisional retention limits."#, output_schema = rmcp::handler::server::tool::schema_for_output::<DetailEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn get_split_detail(
+        &self,
+        Parameters(request): Parameters<DetailRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(self.run_detail(request, context).await)
+    }
     #[tool(name = "suggest_split", description = r#"Suggest ways to organize one large Rust source file into smaller module files, without changing it.
 
 Use for:
@@ -297,9 +356,11 @@ Risk signals: Every group has expected_to_block lower-bound observed decision co
 
 Consequence routing: Every ownership candidate and draft group has consequence_summary from uncapped finalized evidence: six classes plus visible unmapped reasons, exact collection-qualified decision-ID runs, distinct records per class and non_additive:true. Separate advice_decisions (ad/N) link companion/boundary/test evidence without changing local decisions (d/N), expected_to_block or assessment_scope. Classes may overlap; zero counts still leave destination_and_batch_applicability:not_assessed. Outside/test observations never prove repairability. Diagnostic caps affect detail, not summaries; fitted draft_summaries retain group summaries when membership fits. See docs/tools.md for the explicit reason mapping.
 
+Historical detail: retain_snapshot defaults to false and response_mode defaults to full. Explicit retain_snapshot:true requests immutable pre-fit advice and original bytes under an opaque analysis-specific handle. response_mode:compact opts into schema-1 split_manifest with complete mandatory counts/membership/consequence/coverage and honest retrieval availability, not a shortened schema-2 inventory. Compact does not implicitly retain. get_split_detail reads historical pages/full unit/header anchors or releases the record; it does no live freshness check, reanalysis or move submission. Retention unavailable (capacity, record_too_large, analysis_incomplete, response_budget, cancelled_before_publication) does not alone make completed analysis incomplete. Provisional measurement defaults are one record, 128 MiB accounted retained allocation and a fixed non-sliding 900-second lifetime from publication, pending measurements and human cap selection; reported accounting is not process RSS. No eviction, persistence or restart survival. Normalized request/provenance and a separate scope_input_digest include effective in-root ignore inputs; corpus snapshot_id semantics stay unchanged.
+
 Response detail: Candidate IDs use candidate/N; each companion has a unique response-local companion/N ID and a review_obligation (selection_completeness, boundary_dependency or association_unproved), separate from observed-consumer classification. These are review distinctions, not automatic selection or access/repairability proof. Schema version 2 encodes decision_groups[].decision_ids as exact {first_id,count} runs, with one routing summary and consequence per cause/route/consequence group. Default decisions contain one full anchored exemplar per group, bounded by limits.diagnostic_count (default 64); counts and draft risk links cover omitted details through these runs. Explicit limits.diagnostic_count (0–100000) returns the first N full decisions with unchanged fields; raise response_bytes too when expanding large files. Omissions are counted; capping decision detail alone does not withhold full drafts or mark analysis incomplete.
 
-Advanced details: Inventories every written top-level unit, including anonymous impls and context-sensitive constructs, plus direct written impl members. Associated entries remain context_sensitive: only members with enclosing_impl present and empty reasons can enter sibling groups; excluded members and their overlapping enclosing impls stay retained. counts.eligible_items includes these non-excluded members, so filtering only supported_unit misses draftable units. Draft eligibility is advice, not move applicability. Source-linked heuristic prefixes, reference candidates, sections and sizes explain partitions, or an honest no-draft/incomplete result. Banner adjacency never assigns ownership. max_items defaults to 500 (1–5000), bounds displayed membership rather than an execution selection, and exceeded limits withhold complete drafts. Optional context/limits objects use defaults for omitted settings; there is no cursor. docs/tools.md is the authoritative detailed contract for inventory/member labels, decision action routes, chain diagnostics and edited-batch execution."#, output_schema = rmcp::handler::server::tool::schema_for_output::<SuggestSplitEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+Advanced details: Inventories every written top-level unit, including anonymous impls and context-sensitive constructs, plus direct written impl members. Associated entries remain context_sensitive: only members with enclosing_impl present and empty reasons can enter sibling groups; excluded members and their overlapping enclosing impls stay retained. counts.eligible_items includes these non-excluded members, so filtering only supported_unit misses draftable units. Draft eligibility is advice, not move applicability. Source-linked heuristic prefixes, reference candidates, sections and sizes explain partitions, or an honest no-draft/incomplete result. Banner adjacency never assigns ownership. max_items defaults to 500 (1–5000), bounds displayed membership rather than an execution selection, and exceeded limits withhold complete drafts. Optional context/limits objects use defaults for omitted settings; there is no cursor. docs/tools.md is the authoritative detailed contract for inventory/member labels, decision action routes, chain diagnostics and edited-batch execution."#, output_schema = rmcp::handler::server::tool::schema_for_output::<SplitResponse>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
     async fn suggest_split(
         &self,
         Parameters(request): Parameters<SuggestSplitRequest>,
@@ -460,6 +521,7 @@ impl ServerHandler for Server {
             && request.name != "replace"
             && request.name != "move_item"
             && request.name != "suggest_split"
+            && request.name != "get_split_detail"
         {
             return Err(rmcp::ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
@@ -469,7 +531,11 @@ impl ServerHandler for Server {
         let decoded = if serde_json::to_vec(&args).expect("JSON args").len() > 8 * 1024 * 1024 {
             Err("decoded arguments exceed 8 MiB".into())
         } else {
-            if request.name == "suggest_split" {
+            if request.name == "get_split_detail" {
+                serde_json::from_value::<DetailRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else if request.name == "suggest_split" {
                 serde_json::from_value::<SuggestSplitRequest>(args)
                     .map(|_| ())
                     .map_err(|e| e.to_string())
@@ -502,11 +568,20 @@ impl ServerHandler for Server {
                 message = message.chars().take(800).collect();
                 message.push_str(" (a client may have stringified an object parameter; omit optional object parameters instead of passing null)");
             }
+            if request.name == "get_split_detail" {
+                return Ok(detail_wire(DetailEnvelope::failed(DomainError::new(
+                    "INVALID_PARAMS",
+                    message,
+                )))
+                .into());
+            }
             if request.name == "suggest_split" {
-                return Ok(suggest_wire(SuggestSplitEnvelope::failed(
-                    Limits::default(),
-                    DomainError::new("INVALID_PARAMS", message),
-                ))
+                return Ok(suggest_wire(SplitResponse::Full(Box::new(
+                    SuggestSplitEnvelope::failed(
+                        Limits::default(),
+                        DomainError::new("INVALID_PARAMS", message),
+                    ),
+                )))
                 .into());
             }
             if request.name == "move_item" {

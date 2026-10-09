@@ -18,6 +18,7 @@ use std::{
 pub struct Engine {
     launch: PathBuf,
     cursors: Mutex<Cursors>,
+    retained_advice: crate::split::retained::Store,
 }
 impl Engine {
     pub fn new(launch: PathBuf) -> Result<Self, DomainError> {
@@ -28,6 +29,7 @@ impl Engine {
         Ok(Self {
             launch,
             cursors: Mutex::new(Cursors::default()),
+            retained_advice: crate::split::retained::Store::default(),
         })
     }
     pub fn search(&self, request: SearchRequest, cancelled: &AtomicBool) -> SearchEnvelope {
@@ -313,8 +315,29 @@ impl Engine {
         &self,
         request: crate::split::SuggestSplitRequest,
         cancelled: &AtomicBool,
-    ) -> crate::split::SuggestSplitEnvelope {
-        crate::split::run(&self.launch, request, cancelled)
+    ) -> crate::split::SplitResponse {
+        crate::split::run_retained(&self.launch, request, cancelled, &self.retained_advice)
+    }
+    pub fn get_split_detail(
+        &self,
+        request: crate::split::DetailRequest,
+        cancelled: &AtomicBool,
+    ) -> crate::split::DetailEnvelope {
+        self.retained_advice.detail(request, cancelled)
+    }
+    /// Measurement-only integration seam; it does not alter MCP requests or freeze defaults.
+    #[cfg(test)]
+    pub fn with_retention_limits(
+        launch: PathBuf,
+        limits: crate::split::retained::RetentionLimits,
+    ) -> Result<Self, DomainError> {
+        let mut engine = Self::new(launch)?;
+        engine.retained_advice = crate::split::retained::Store::new(limits);
+        Ok(engine)
+    }
+    #[doc(hidden)]
+    pub fn retained_allocation(&self) -> (usize, usize) {
+        self.retained_advice.accounted_allocation()
     }
     pub fn launch_directory(&self) -> &Path {
         &self.launch

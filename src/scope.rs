@@ -419,6 +419,100 @@ pub fn discover(
     deadline: Instant,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Vec<FileSnapshot>, Option<String>), DomainError> {
+    discover_observed(scope, result, deadline, cancelled, None)
+}
+
+/// Exact effective in-root policy inputs. Absence is evidence too; corpus hashes stay unchanged.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct ScopeInputManifest {
+    pub ignores: Vec<IgnoreInput>,
+    #[serde(skip)]
+    accounted: usize,
+}
+#[derive(Debug, serde::Serialize)]
+pub struct IgnoreInput {
+    pub path: String,
+    pub bytes: Option<Vec<u8>>,
+}
+impl ScopeInputManifest {
+    fn observe(&mut self, directory: &Path, root: &Path) -> Result<(), DomainError> {
+        let path = directory.join(".gitignore");
+        let fail = || {
+            DomainError::new(
+                "scan_incomplete",
+                "effective ignore input cannot be safely read within bounded policy limits",
+            )
+        };
+        if self.ignores.len() >= 100_000 {
+            return Err(fail());
+        }
+        let bytes = match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(fail()),
+            Ok(before) => {
+                if !before.is_file()
+                    || before.file_type().is_symlink()
+                    || before.len() > 1024 * 1024
+                {
+                    return Err(fail());
+                }
+                let mut file = File::open(&path).map_err(|_| fail())?;
+                let opened = file.metadata().map_err(|_| fail())?;
+                if !same(&before, &opened) {
+                    return Err(fail());
+                }
+                let mut bytes = Vec::new();
+                Read::by_ref(&mut file)
+                    .take(1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| fail())?;
+                let after = fs::symlink_metadata(&path).map_err(|_| fail())?;
+                if !same(&opened, &after) || bytes.len() as u64 != after.len() {
+                    return Err(fail());
+                }
+                Some(bytes)
+            }
+        };
+        let name = path
+            .strip_prefix(root)
+            .map_err(|_| fail())?
+            .to_str()
+            .ok_or_else(fail)?
+            .to_owned();
+        self.accounted = self
+            .accounted
+            .saturating_add(name.capacity())
+            .saturating_add(bytes.as_ref().map_or(0, Vec::capacity))
+            .saturating_add(2 * std::mem::size_of::<IgnoreInput>());
+        if self.accounted > 16 * 1024 * 1024 {
+            return Err(fail());
+        }
+        self.ignores.push(IgnoreInput { path: name, bytes });
+        Ok(())
+    }
+    pub fn accounted_allocation(&self) -> usize {
+        self.accounted
+    }
+    pub fn digest(
+        &self,
+        scope: &Scope,
+        snapshot: &str,
+        controls: (Instant, &std::sync::atomic::AtomicBool),
+    ) -> Result<String, DomainError> {
+        hash_serialized(
+            &scope.root,
+            &(snapshot, &scope.paths, &scope.globs, self),
+            controls,
+        )
+    }
+}
+pub fn discover_observed(
+    scope: &Scope,
+    result: &mut SearchEnvelope,
+    deadline: Instant,
+    cancelled: &std::sync::atomic::AtomicBool,
+    mut inputs: Option<&mut ScopeInputManifest>,
+) -> Result<(Vec<FileSnapshot>, Option<String>), DomainError> {
     let boundaries = Arc::new(Mutex::new((
         crate::result::skipped_map(),
         result.limits.diagnostic_count,
@@ -494,6 +588,11 @@ pub fn discover(
                 );
             }
             Ok(entry) => {
+                if let Some(inputs) = &mut inputs
+                    && entry.file_type().is_some_and(|kind| kind.is_dir())
+                {
+                    inputs.observe(entry.path(), &scope.root)?;
+                }
                 if entry.error().is_some() {
                     skip(
                         &mut result.skipped,

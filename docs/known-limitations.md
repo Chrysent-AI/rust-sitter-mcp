@@ -29,6 +29,33 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Advice-tier boundaries
 
+- Historical detail requires explicit `retain_snapshot:true` on a completed
+  analysis. Legacy full calls allocate no record; `response_mode:"compact"` alone
+  does not retain. Compact is a separate manifest, not a complete shortened
+  inventory; mandatory membership/consequence/coverage overflow refuses rather
+  than silently dropping evidence. Unavailable retention does not by itself make
+  completed advice incomplete.
+- Retention is bounded, process-local and immutable: no silent eviction, persistence,
+  jobs, background refresh or restart survival. Current one-record/128-MiB/900-second
+  defaults are **provisional measurement parameters**, pending representative
+  workload measurements and human cap selection. Accounted owned allocations are
+  not peak process RSS; transient analysis/output are separate. Fixed monotonic
+  expiry does not slide on detail reads, and release/expiry retain accounting for
+  still-owned in-flight readers.
+- `get_split_detail` returns frozen original evidence with `historical:true` and
+  `live_freshness:"not_checked"`, never live reanalysis. Full unit/header anchors
+  are not current execution authority. Unknown/expired/mismatched identities,
+  changed page options, unknown IDs and oversized complete records/units refuse
+  explicitly; no snippets are exported as full anchors and no move request is
+  submitted or scaffolded. Ordinary `move_item` still requires full current anchors
+  and every existing audit.
+- A separate `scope_input_digest` captures normalized scope/corpus and effective
+  observed in-root `.gitignore` presence/absence/exact bytes without changing corpus
+  `snapshot_id` semantics. Policy observations are finite (100,000 entries, 1 MiB
+  per input, 16 MiB aggregate accounting); unsafe/unreadable/over-limit inputs fail
+  closed. This freshness seam is not a claim that detail checks current source,
+  modes or ignore policy. See `docs/tools.md` for selectors, filters and limits.
+
 - Candidate/group `consequence_summary` counts uncapped decision records per class,
   with exact links and explicit unmapped reasons. Classes overlap; counts are not
   additive blocker/unit totals. Separate `advice_decisions` link inspection evidence,

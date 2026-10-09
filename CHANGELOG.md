@@ -9,6 +9,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add opt-in immutable completed-advice retention, a separate compact manifest and
+  `get_split_detail` for deterministic historical pages, exact original unit/header
+  anchors and explicit release; expose accounted allocation, fixed expiry and honest
+  capacity/identity/page/oversize refusals without live reanalysis or move submission.
+  Retention bounds remain provisional pending workload measurements and cap selection.
+* Capture a separate effective-ignore `scope_input_digest`, including observed
+  `.gitignore` absence and exact bytes, without changing corpus snapshot semantics.
+
 * Add uncapped, linked `consequence_summary` counts to ownership candidates and
   draft groups, with separate advisory decisions, explicit unmapped reasons and
   non-additive class membership; preserve local forecasts and unassessed applicability.

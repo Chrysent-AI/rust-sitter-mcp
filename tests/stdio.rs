@@ -50,7 +50,33 @@ fn real_stdio_query() {
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
     let advertised = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(advertised.len(), 5);
+    assert_eq!(advertised.len(), 6);
+    let detail_tool = advertised
+        .iter()
+        .find(|t| t["name"] == "get_split_detail")
+        .unwrap();
+    assert!(detail_tool["outputSchema"].is_object());
+    assert_eq!(detail_tool["annotations"]["readOnlyHint"], true);
+    assert!(
+        detail_tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("analysis_handle"))
+    );
+    assert!(
+        detail_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("live_freshness:not_checked")
+    );
+    let unknown = exchange(
+        json!({"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"get_split_detail","arguments":{"analysis_handle":"unknown","snapshot_id":"sha1:unknown","selector":{"kind":"release"}}}}),
+    );
+    assert_eq!(unknown["result"]["isError"], true);
+    assert_eq!(
+        unknown["result"]["structuredContent"]["error"]["code"],
+        "ADVICE_SNAPSHOT_UNKNOWN"
+    );
     for name in [
         "search",
         "search_query",

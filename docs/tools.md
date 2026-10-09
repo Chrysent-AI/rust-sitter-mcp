@@ -1,6 +1,6 @@
 # Structural Rust search, move plans and split advice
 
-`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, and advisory-only `suggest_split` inventories/partitions. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
+`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, and `get_split_detail` for explicitly retained historical evidence/release. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
 
 A stdio launch configuration is:
 
@@ -1013,7 +1013,7 @@ Definite bad requests use `INVALID_ITEM_SELECTION`, `DUPLICATE_MOVE`, `STALE_SEL
 {"repo_path":"/absolute/project","crate_root":"src/lib.rs","source_path":"src/rich.rs","paths":["src"],"limits":{"text_bytes":0}}
 ```
 
-This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no cursor, saved plan, execution handle, or implicit selection. Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
+This call inspects **one existing admitted file**. `crate_root` supplies the same ordinary written module context as `move_item`; it is not Cargo target discovery. Optional `max_items` defaults to 500 (1–5000). `paths`, `globs`, `context` and `limits` have the usual meanings. There is no search cursor, saved executable plan, execution handle, or implicit selection. Historical retention and its separate detail tokens are opt-in (below). Advice consumes no search-series capacity and shares the same admission/cancellation/shutdown lifecycle as other tools.
 
 The result has `advisory:true`, `source`, `inventory[]`, `overlaps[]`, `item_contexts[]`, `impl_contexts[]`, `scope_trivia[]`, `signals[]`, `decisions[]`, `chain_diagnostics[]`, `drafts[]` and `draft_eligibility`. It has **no patch, edits, creation content or move plan**, even when a draft is complete.
 
@@ -1262,8 +1262,9 @@ projection must be withheld; stopped/withheld projection coverage is not complet
 `counts.test_observations` is the analyzed record count, not a test count or safety score.
 
 Risk fields and signal kinds are unchanged by counts-first response shaping;
-`semantic:"not_performed"` is unchanged. `suggest_split` publishes schema version 2
-because decision-group IDs now use exact runs rather than strings.
+`semantic:"not_performed"` is unchanged. Full `suggest_split` publishes schema version 2
+because decision-group IDs now use exact runs rather than strings; the opt-in compact
+manifest is separately identified as schema 1.
 
 By default, `decisions[]` contains one full anchored exemplar per identical
 cause/route/consequence group, bounded by `limits.diagnostic_count` (default 64).
@@ -1300,6 +1301,156 @@ before these summaries or decision groups; root/snapshot/coverage/omissions surv
 Only the final tier may omit summaries, with exact summary/reference counts.
 
 Empty/singleton/recovered or unsupported-layout files return inventory and an explicit no-draft reason. A work, discovery, membership, freshness or mandatory evidence/output limit gives incomplete advice and withholds **all complete drafts**. Counts distinguish observed inventory/descriptors/candidates from returned items; `counts.omissions` records suppressed arrays and membership/decision links. Dropping only source/context display text preserves complete drafts when full coordinates and required evidence links fit. `span.text:null` is not a shortened `expected_text`: obtain the complete current original bytes before execution. Integrity is input-only (`input_checked`, `input_recovered` or `not_checked`), always `semantic:"not_performed"`.
+
+### Retained advice and compact manifests
+
+`retain_snapshot` is a strict boolean, default false. `response_mode` is `full|compact`,
+default full; compact does **not** implicitly retain. Legacy full retention-off calls
+allocate no retained record and keep their previous wire shape (no `retention` field).
+Explicit retention adds a sub-result independently of full-response presentation.
+
+```json
+{"repo_path":"/absolute/project","crate_root":"src/lib.rs","source_path":"src/worker.rs","paths":["src"],"retain_snapshot":true,"response_mode":"compact","limits":{"response_bytes":2097152,"diagnostic_count":0,"text_bytes":0}}
+```
+
+Only completed, rechecked canonical analysis may be retained. Capture precedes
+`max_items` display trimming, diagnostic shaping and wire fitting. Canonical
+records use original coordinates and immutable buffers, not display snippets;
+retained text is stored once and reconstructed without formatting or reanalysis.
+No parser trees, rust-analyzer databases, open files, watchers or executable plans
+are retained. Full fitting keeps its existing conservative partial-output meanings;
+a retained complete canonical record can therefore outlive a partial full display.
+
+A successful `retention` has `state:"retained"`, opaque `analysis_handle` and
+`analysis_id`, corpus `snapshot_id`, separate `scope_input_digest`, normalized
+`normalized_request`, grammar/server/build/grouping `provenance`, informative
+RFC3339 `expires_at`, effective `limits` and `accounted_bytes`. Metadata includes
+all effective request options and whether diagnostic expansion was explicit.
+Handles identify one analysis, not a corpus hash or authorization. Separate
+analyses on identical bytes/options have different handles. With unavailability,
+there is no usable handle and `state:"unavailable"` names one reason:
+`capacity`, `record_too_large`, `analysis_incomplete`, `response_budget` or
+`cancelled_before_publication`. Otherwise complete analysis remains complete.
+Compact retention-off reports `state:"not_requested"`.
+
+Current **provisional measurement parameters** are one active record, 134,217,728
+aggregate accounted retained bytes and 900 seconds from publication. These are
+finite tunable parameters, **not frozen measured guarantees**; representative
+measurements and a human cap choice remain pending. Accounting conservatively
+includes owned container/string capacities, descriptor/node reserves, buffers,
+input manifests and identity metadata, separately from transient analysis/output
+and process peak RSS. A test-only limit override and cap-neutral allocation probe
+support that measurement without adding MCP flags. Registry removal does not
+subtract bytes still owned by an in-flight reader. Expiry is monotonic and fixed,
+not extended by navigation; expired payloads are reclaimed lazily. No silent
+eviction, persistence, background refresh, jobs or restart-survival promise exists.
+
+`scope_input_digest` binds the corpus snapshot, normalized scope and effective
+in-root `.gitignore` inputs consulted in discovery, including absence and exact
+bytes at observed directories. It does not change `snapshot_id` or search-cursor
+semantics. Hard-excluded, symlink and nested-repository boundaries remain intact.
+Policy observation is bounded to 100,000 entries, 1 MiB per input and 16 MiB
+aggregate path/byte/entry accounting within the advice descriptor/time guards;
+unreadable, unsafe or over-limit relevant input fails closed. The retained source
+manifest records admitted paths, modes, lengths and content digests. This is a
+freshness seam for future operations, **not** a claim that historical detail checks
+current source, ignore policy or modes.
+
+Compact returns `schema_version:1`, `envelope_kind:"split_manifest"`,
+`response_mode:"compact"`, `analysis_status`, `manifest_complete`, root/snapshot,
+`totals`, `coverage`, `candidate_summaries`, `draft_memberships`,
+`consequence_summaries`, `decision_groups`, `detail_availability`, `retention`,
+`omissions`, `error` and input-only `integrity`. It has no legacy `inventory:[]`
+masquerading as complete. Candidate core/alternative/companion membership and
+consequences remain explicit; draft groups retain exact item/overlap membership
+and consequences. `coverage.local_forecasts` preserves each draft/group's local
+lower-bound forecast, test coupling and unchanged `assessment_scope` in group
+order. Scope/boundary/test coverage, uncertainty, work guards, omissions and
+partition outcome remain mandatory. Compact ignores display-only `max_items`
+trimming; it does not bypass analysis guards.
+
+Each detail-availability entry states collection total, returned records (zero),
+omitted-from-manifest count, retrievability, permanently unavailable count and
+retrieval tool. Availability is conditional on the fixed handle lifetime; it is
+not persistence. Analysis completion, complete mandatory manifest, complete
+returned detail page and retrievable evidence are separate claims. If mandatory
+membership/consequence/coverage cannot fit the duplicated wire budget, return
+`ADVICE_MANIFEST_TOO_LARGE` with `manifest_complete:false`, bounded totals/status
+and explicit omissions/unavailability; publish no record. Never silently shorten
+a complete manifest. Full schema-2 advice remains available.
+
+### Historical detail and release (`get_split_detail`)
+
+```json
+{"analysis_handle":"opaque-analysis-token","snapshot_id":"sha1:captured-corpus-hash","selector":{"kind":"page","collection":"decisions","page_size":100},"limits":{"response_bytes":2097152}}
+```
+
+Required identity is `analysis_handle` plus expected `snapshot_id`; optional
+`analysis_id` and `scope_input_digest` must match when supplied. Requests are
+strict objects. Select exactly one tagged selector:
+
+- `page`: collection is `inventory`, `groups`, `decisions`, `advice_decisions`,
+  `companions`, `boundary_observations`, `test_coupling`, `overlaps` or
+  `chain_diagnostics`. Page size is 1–1000 (default 100); repeat returned
+  `next_page_token` as `selector.page_token` with all options unchanged.
+- `records`: `{kind:"records",collection,ids:[...]}` retrieves complete selected
+  collection records in supplied order. Derived groups have IDs
+  `draft/N/group/M` (zero-based group index); companions add their `candidate_id`.
+- `units`: `{kind:"units",item_ids:[...]}` returns complete original
+  `{item_id,unit_ref:{analysis_id,item_id},item:{path,range,expected_text},enclosing_impl}`
+  anchors, eligibility and exclusions. `enclosing_impl` is the exact header ending
+  immediately before `{`, or null. Unit references are qualified selectors, not
+  execution authority. Whole-impl/member overlap is not silently pruned.
+- `release`: `{kind:"release"}` removes only process-local evidence, returning
+  `released:true`; nothing is changed in the caller repository.
+
+Explicit record/unit ID lists are nonempty, unique and at most 1000 IDs. IDs are
+bounded to 512 bytes. Optional page `filter` accepts only `id`, `reason` and
+`candidate_id`: `id` must exist in that collection; `reason` must be an observed
+typed `reason` or member of `reasons` there (unsupported/unknown reasons refuse);
+`candidate_id` must identify a retained candidate. Candidate filtering follows
+core/companion/alternative item links, group/decision/overlap item membership,
+boundary candidate links and test candidate couplings; companions match their
+candidate directly. Combined supported filters may legitimately yield an empty
+page. There is no arbitrary query language. Identity/token strings are at most
+200 bytes; tokens must be ASCII. `limits` accepts only `response_bytes` (64 KiB–
+16 MiB, default 2 MiB) and `time_budget_ms` (1–300000, default 60000), not scan or
+`text_bytes` options. Decoded requests still have the common 8-MiB cap.
+
+Schema-1 detail is `envelope_kind:"split_detail"` with analysis/snapshot/input
+digest, `historical:true`, `live_freshness:"not_checked"`, collection/filter,
+exact filtered `total`, records, `returned_page_complete`, `collection_exhausted`
+and `next_page_token`, plus error and `integrity.semantic:"not_performed"`.
+Pages use frozen original record order; all embedded source descriptors/anchors
+are reconstructed from immutable buffers. Repeat a valid page to receive identical
+evidence and token bytes while alive, even after live source/ignore edits.
+No filesystem reads, fingerprinting, parsing, grouping or current timestamps occur
+in detail. No patch, request scaffold or applicability judgment is returned.
+
+Tokens bind process/handle, snapshot/input digest, collection/filter, ordering,
+position, page size and effective detail limits. A page stops only on complete
+record boundaries; exact totals/continuation remain explicit. An indivisible full
+record/unit or complete explicit subset that cannot fit refuses with
+`DETAIL_TOO_LARGE`, withholding every record/anchor rather than returning snippets.
+A successful page never makes no progress when records remain. All detail/release
+calls share the original single admission permit and cancellation/shutdown model;
+`BUSY` starts no work and queues nothing. Store locks cover only registry lookup,
+publication/pruning/removal, not I/O, serialization or response fitting.
+
+| Detail error | Meaning |
+|---|---|
+| `ADVICE_SNAPSHOT_UNKNOWN` | Unknown, released, corrupted or previous-process handle |
+| `ADVICE_SNAPSHOT_EXPIRED` | Valid current-process handle past fixed expiry, including after payload reclamation |
+| `ADVICE_SNAPSHOT_MISMATCH` | Supplied snapshot/analysis/input digest differs; `error.field` names it |
+| `INVALID_ADVICE_PAGE` | Invalid token/page size or changed bound options; `error.field` is `selector.page_token` |
+| `UNKNOWN_ADVICE_ID` | Unknown or cross-collection selected/filter ID or candidate |
+| `DETAIL_TOO_LARGE` | Complete indivisible evidence or explicit subset cannot fit |
+| `INVALID_PARAMS` | Malformed selector/filter/limits, duplicate/empty/over-cap ID list or unknown typed reason filter |
+
+Historical full bytes are **not verified current execution anchors**. Before
+constructing/submitting an ordinary explicit `move_item` request, obtain/recheck
+current original bytes and header provenance; that tool still independently
+performs every audit. No move-by-ID or export tool is added by historical retrieval.
 
 ### Consuming decisions and member labels
 
@@ -1405,9 +1556,10 @@ contiguous runs, e.g. `decision_ids:[{"first_id":"d/0","count":2},
 {"first_id":"d/3","count":1}]` names only `d/0`, `d/1`, `d/3`, not `d/2`.
 A run increments the numeric suffix of the first ID; run counts sum to group count.
 This run encoding applies to **every** `move_item` response (blocked and
-applicable) and **every** `suggest_split` response. Both publish `schema_version: 2`
-(v1 listed group decision IDs as plain strings). Search tools remain on schema
-version 1. Draft/risk decision IDs remain individual strings and can be joined to
+applicable), full `suggest_split` responses and compact manifest decision groups.
+Move and full advice publish `schema_version:2` (v1 listed group decision IDs as
+plain strings); manifest/detail envelopes separately publish schema 1. Search tools
+remain on schema version 1. Draft/risk decision IDs remain individual strings and can be joined to
 the exact runs even when per-occurrence detail is omitted.
 Both tools' groups additionally contain `unresolved_consequence` and `actions[]`: one
 routing summary for the group, including the request tool/field/purpose/choices,

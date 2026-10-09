@@ -99,6 +99,15 @@ exact collection-qualified links; classes overlap and unknown reasons remain in
 not automatic co-location. Broader boundary/test observations are advice-only;
 zero counts do not assess destination/batch applicability or prove repairability.
 
+When advice was explicitly retained, `analysis_id`-qualified `unit_ref` values
+are selectors for historical evidence only, never execution authority. Retrieved
+pages and complete unit/header anchors preserve original bytes but do not assess
+live freshness, layout, grouping quality or `move_item` applicability. Re-read
+and verify current item/header bytes before use; `move_item` still performs its
+independent freshness and safety audits. Keep whole-impl versus member choices
+explicit, retain exclusions and overlapping alternatives, and do not auto-select
+companions or submit historical references as moves.
+
 ## Inspecting test coupling
 
 Read the separate `test_observations` projection before deciding test placement.
