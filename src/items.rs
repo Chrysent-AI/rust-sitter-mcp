@@ -25,8 +25,8 @@ pub(crate) use globs::GlobRoutes;
 pub(crate) use lexical::LexicalLocation;
 pub use lexical::LexicalUncertainty;
 pub(crate) use lexical::{
-    GlobBinding, LexicalBinding, LexicalReason, final_glob_binding, glob_bindings,
-    lexical_assessment, lexical_assessment_with_globs,
+    LexicalBinding, LexicalReason, PatternBinding, final_pattern_binding, lexical_assessment,
+    lexical_assessment_with_globs, pattern_bindings,
 };
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
@@ -85,6 +85,7 @@ pub struct Item {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_interpretation: Option<SizeInterpretation>,
 }
+#[derive(Clone)]
 pub struct ParsedFile {
     pub tree: Tree,
     pub items: Vec<Item>,

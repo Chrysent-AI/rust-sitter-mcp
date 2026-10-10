@@ -64,6 +64,155 @@ fn anchored(result: &Value, function: &str) {
         "{function}: {result}"
     );
 }
+fn rustc(repo: &Fixture) -> std::process::Output {
+    std::process::Command::new("rustc")
+        .current_dir(&repo.0)
+        .args([
+            "--edition=2024",
+            "--crate-type=lib",
+            "--emit=metadata",
+            ROOT,
+        ])
+        .output()
+        .unwrap()
+}
+fn compile(repo: &Fixture) {
+    let output = rustc(repo);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn compiler_demonstrates_unassisted_constant_flip_and_forced_binding_collision() {
+    for (function, diagnostic) in [
+        (FUNCTION, "E0005"),
+        (
+            "fn selected(input: u8) -> u8 { let mut binding = input; binding += 1; binding }",
+            "E0530",
+        ),
+    ] {
+        let repo = fixture("", "", "const binding: u8 = 0;", function);
+        compile(&repo);
+        anchored(&run(&repo, request(&repo, function)), function);
+        // The refused hypothetical relocation is replayed only in a disposable
+        // copy, never in the caller repository and never claimed by the engine.
+        let copy = repo.copy();
+        copy.write(SOURCE, "");
+        copy.write(DESTINATION, &format!("const binding: u8 = 0;\n{function}"));
+        let output = rustc(&copy);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn unassisted_written_forms_preserve_clean_moves_and_refuse_competition() {
+    for function in [
+        "fn selected(binding: u8) -> u8 { binding }",
+        "fn selected(input: u8) -> u8 { let binding = input; binding }",
+        "fn selected(input: u8) -> u8 { let binding = input; input }",
+        "fn selected(input: u8) -> u8 { let mut binding = input; binding += 1; binding }",
+        "fn selected(input: u8) -> u8 { let ref binding = input; *binding }",
+        "fn selected(input: u8) -> u8 { let binding @ _ = input; binding }",
+        "fn selected(input: u8) -> u8 { let (binding,) = (input,); binding }",
+        FUNCTION,
+        "fn selected(input: u8) -> u8 { let call = |binding: u8| binding; call(input) }",
+        "fn selected(input: u8) -> u8 { struct Record { binding: u8 } let Record { binding } = Record { binding: input }; binding }",
+        "fn selected(input: u8) -> u8 { struct Record { field: u8 } let Record { field: binding } = Record { field: input }; binding }",
+        "fn selected(input: u8) -> u8 { struct Wrap(u8); let Wrap(binding) = Wrap(input); binding }",
+        "fn selected(input: u8) -> u8 { let (mut binding,) = (input,); binding += 1; binding }",
+        "fn selected(input: u8) -> u8 { let (ref binding,) = (input,); *binding }",
+    ] {
+        let repo = fixture("", "", "", function);
+        compile(&repo);
+        let result = run(&repo, request(&repo, function));
+        assert_eq!(result["plan"]["applicable"], true, "{function}: {result}");
+        compile(&move_artifacts::apply(&repo, &result));
+        for destination in [
+            "const binding: u8 = 0;",
+            "static binding: u8 = 0;",
+            "struct binding;",
+            "struct binding(u8);",
+            "enum Choice { binding } use Choice::binding;",
+            "use crate::exports::other as binding;",
+            "use crate::exports::*;",
+            "use missing::*;",
+        ] {
+            let repo = fixture(
+                "",
+                "pub(crate) const binding: u8 = 0; pub(crate) const other: u8 = 0;",
+                destination,
+                function,
+            );
+            anchored(&run(&repo, request(&repo, function)), function);
+        }
+    }
+}
+
+#[test]
+fn binder_free_move_needs_no_binding_witnesses() {
+    let function = "fn selected() {}";
+    let repo = fixture("", "", "const binding: u8 = 0;", function);
+    let result = run(&repo, request(&repo, function));
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    compile(&move_artifacts::apply(&repo, &result));
+}
+
+#[test]
+fn parameter_type_repair_preserves_exact_patterns_but_not_competition() {
+    for pattern in ["binding", "mut binding", "ref binding", "binding @ _"] {
+        for body in ["", "let _ = binding;"] {
+            let function = format!("fn selected({pattern}: crate::exports::Value) {{ {body} }}");
+            for destination in [
+                "",
+                "const binding: u8 = 0;",
+                "static binding: u8 = 0;",
+                "struct binding;",
+                "struct binding(u8);",
+                "use crate::exports::other as binding;",
+                "use crate::exports::*;",
+                "use missing::*;",
+            ] {
+                let repo = fixture(
+                    "",
+                    "pub(crate) mod inner; pub(crate) use inner::Value; pub(crate) const other: u8 = 0; pub(crate) const binding: u8 = 0;",
+                    destination,
+                    &function,
+                );
+                repo.write(
+                    "cases/patterns/exports/inner.rs",
+                    "pub(crate) enum Value { Only }",
+                );
+                let result = run(&repo, request(&repo, &function));
+                if destination.is_empty() {
+                    compile(&repo);
+                    assert_eq!(result["plan"]["applicable"], true, "{function}: {result}");
+                    assert!(
+                        result["plan"]["rewrites"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|r| r["after_text"]
+                                .as_str()
+                                .is_some_and(|s| s.contains("exports::inner::Value"))),
+                        "{result}"
+                    );
+                    compile(&move_artifacts::apply(&repo, &result));
+                } else {
+                    anchored(&result, &function);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn direct_unrelated_export_allows_an_applicable_lossless_move() {
     let repo = fixture(
@@ -175,7 +324,7 @@ fn destination_competitors_and_unknown_producers_are_final_refusals() {
     }
 }
 #[test]
-fn unread_binders_are_revalidated_and_unassisted_history_is_unchanged() {
+fn unread_and_unassisted_binders_are_revalidated() {
     let function = "fn selected(input: u8) -> u8 { let [binding] = [input]; input + 1 }";
     let repo = fixture(
         "use crate::exports::*;",
@@ -190,29 +339,27 @@ fn unread_binders_are_revalidated_and_unassisted_history_is_unchanged() {
         "const binding: u8 = 0;",
         FUNCTION,
     );
-    // This pre-existing unassisted relocation limitation is not claimed repaired.
-    assert_eq!(
-        run(&repo, request(&repo, FUNCTION))["plan"]["applicable"],
-        true
-    );
+    anchored(&run(&repo, request(&repo, FUNCTION)), FUNCTION);
 }
 #[test]
 fn exporter_or_destination_companion_mutations_use_the_complete_overlay() {
     for destination in [EXPORTS, DESTINATION] {
-        let repo = fixture(
-            "use crate::exports::*;",
-            "pub(crate) const other: u8 = 1;",
-            "use crate::exports::*;",
-            FUNCTION,
-        );
-        repo.write(
-            ROOT,
-            "mod source; mod destination; mod companion; pub(crate) mod exports;",
-        );
-        repo.write("cases/patterns/companion.rs", "const binding: u8 = 0;");
-        let mut args = request(&repo, FUNCTION);
-        args["moves"].as_array_mut().unwrap().push(json!({"item":anchor(&repo,"cases/patterns/companion.rs","const binding: u8 = 0;"),"destination":{"kind":"existing","path":destination}}));
-        anchored(&run(&repo, args), FUNCTION);
+        for import in ["", "use crate::exports::*;"] {
+            let repo = fixture(
+                import,
+                "pub(crate) const other: u8 = 1;",
+                "use crate::exports::*;",
+                FUNCTION,
+            );
+            repo.write(
+                ROOT,
+                "mod source; mod destination; mod companion; pub(crate) mod exports;",
+            );
+            repo.write("cases/patterns/companion.rs", "const binding: u8 = 0;");
+            let mut args = request(&repo, FUNCTION);
+            args["moves"].as_array_mut().unwrap().push(json!({"item":anchor(&repo,"cases/patterns/companion.rs","const binding: u8 = 0;"),"destination":{"kind":"existing","path":destination}}));
+            anchored(&run(&repo, args), FUNCTION);
+        }
     }
 }
 #[test]
@@ -379,6 +526,37 @@ fn inaccessible_and_provider_uncertain_alias_hops_are_unknown() {
         withheld(&run(&repo, request(&repo, FUNCTION)));
     }
 }
+#[test]
+fn final_companion_collision_withholds_schema_three_child_artifacts() {
+    let repo = fixture("", "", "", FUNCTION);
+    repo.write(
+        ROOT,
+        "mod source; mod destination; mod companion; pub(crate) mod exports;",
+    );
+    let competitor = "const binding: u8 = 0;";
+    repo.write("cases/patterns/companion.rs", competitor);
+    let child =
+        json!({"kind":"new_child", "path":"cases/patterns/source/child.rs", "parent_path":SOURCE});
+    let helper = "fn extracted() {}";
+    repo.write(SOURCE, &format!("{FUNCTION}\n{helper}"));
+    let mut args = request(&repo, FUNCTION);
+    args["moves"].as_array_mut().unwrap().push(json!({"item":anchor(&repo,"cases/patterns/companion.rs",competitor), "destination":{"kind":"existing", "path":DESTINATION}}));
+    args["moves"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"item":anchor(&repo,SOURCE,helper), "destination":child}));
+    let result = run(&repo, args);
+    assert_eq!(result["schema_version"], 3);
+    anchored(&result, FUNCTION);
+    assert!(
+        result["plan"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "BINDING_COLLISION")
+    );
+}
+
 #[test]
 fn synthesized_child_declarations_are_validated_and_schema_three_withholds_totally() {
     let repo = fixture(

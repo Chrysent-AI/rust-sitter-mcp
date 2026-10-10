@@ -780,9 +780,15 @@ fn ordered_chains_respect_introduction_and_nearest_shadowing() {
             let range = assessment.definite_binding.unwrap().range;
             assert_eq!(
                 &source[range.start_byte..range.end_byte],
-                declaration.split(':').next().unwrap(),
+                "selected",
                 "{source}"
             );
+            let expected = if declaration == "selected" {
+                source.rfind("let selected").unwrap() + 4
+            } else {
+                source.find(declaration).unwrap() + declaration.find("selected").unwrap()
+            };
+            assert_eq!(range.start_byte, expected, "{source}");
         }
         for condition in [
             "selected > 0 && let mut selected = 1",

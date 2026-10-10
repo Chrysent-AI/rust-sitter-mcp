@@ -1,4 +1,4 @@
-//! Revalidate only newly glob-assisted binders against immutable assembled bytes.
+//! Revalidate moved pattern binders against immutable assembled bytes.
 use super::*;
 use tree_sitter::Node;
 
@@ -46,15 +46,18 @@ fn mapped(
     Ok(found)
 }
 fn exact<'a>(tree: &'a tree_sitter::Tree, range: &ByteRange, kind: &str) -> Option<Node<'a>> {
-    let node = tree
+    let mut node = tree
         .root_node()
         .named_descendant_for_byte_range(range.start_byte, range.end_byte)?;
-    (node.kind() == kind
-        && node.start_byte() == range.start_byte
-        && node.end_byte() == range.end_byte
-        && !node.has_error()
-        && !node.is_missing())
-    .then_some(node)
+    // Pattern wrappers can have exactly the same range as their child. Select
+    // the witnessed CST kind, not whichever equal-range descendant is deepest.
+    while node.start_byte() == range.start_byte && node.end_byte() == range.end_byte {
+        if node.kind() == kind {
+            return (!node.has_error() && !node.is_missing()).then_some(node);
+        }
+        node = node.parent()?;
+    }
+    None
 }
 fn authored_range(
     id: &str,
@@ -105,10 +108,11 @@ fn authored_range(
 pub(super) fn audit(
     request: &MoveRequest,
     files: &BTreeMap<String, FileSnapshot>,
+    parsed: &BTreeMap<String, items::ParsedFile>,
     outputs: &BTreeMap<String, (String, Vec<trivia::Trivia>)>,
     edits: &[Edit],
     creations: &BTreeMap<String, Creation>,
-    proof: (&[items::GlobBinding], &BTreeMap<String, ModuleEvidence>),
+    proof: (&[items::PatternBinding], &BTreeMap<String, ModuleEvidence>),
     controls: (Instant, &AtomicBool),
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
@@ -161,10 +165,14 @@ pub(super) fn audit(
     let mut observed = 0;
     for (path, file) in &final_files {
         items::check(controls.0, controls.1)?;
-        final_parsed.insert(
-            path.clone(),
-            items::parse(file, 0, controls.0, controls.1, &mut observed)?,
-        );
+        let data = if outputs.contains_key(path) {
+            items::parse(file, 0, controls.0, controls.1, &mut observed)?
+        } else {
+            // Unchanged bytes retain the captured CST and inventory. Tree clones
+            // share immutable storage; no filesystem discovery or reparse.
+            parsed[path].clone()
+        };
+        final_parsed.insert(path.clone(), data);
     }
     // Preserve captured physical-layout admission; validate edges in final CSTs,
     // never ask the filesystem to resolve virtual files.
@@ -265,7 +273,7 @@ pub(super) fn audit(
         let destination = &entry.destination;
         let valid = if let Some(data) = final_parsed.get(destination) {
             let mut nodes = Vec::new();
-            for witness in [&entry.identifier, &entry.pattern, &entry.scope] {
+            for witness in [&entry.identifier, &entry.pattern] {
                 items::check(controls.0, controls.1)?;
                 let range = mapped(
                     witness,
@@ -278,15 +286,16 @@ pub(super) fn audit(
                 )?;
                 nodes.push(range.and_then(|r| exact(&data.tree, &r, &witness.kind)));
             }
-            if let [Some(identifier), Some(pattern), Some(scope)] = nodes.as_slice() {
+            if let [Some(identifier), Some(pattern)] = nodes.as_slice() {
                 let source = &final_files[destination].source;
-                let mut valid = items::final_glob_binding(
+                let mut valid = items::final_pattern_binding(
                     destination,
                     *identifier,
                     *pattern,
-                    *scope,
+                    &entry.scope.kind,
                     source,
                     &routes,
+                    !entry.routes.is_empty(),
                     controls,
                 )?;
                 for witness in &entry.references {
@@ -314,8 +323,8 @@ pub(super) fn audit(
                         )?;
                         valid &= assessment.binding == items::LexicalBinding::Independent
                             && assessment.definite_binding.is_some_and(|b| {
-                                b.range.start_byte == pattern.start_byte()
-                                    && b.range.end_byte == pattern.end_byte()
+                                b.range.start_byte == identifier.start_byte()
+                                    && b.range.end_byte == identifier.end_byte()
                             });
                     } else {
                         valid = false;
@@ -330,7 +339,7 @@ pub(super) fn audit(
         };
         if !valid {
             let original = &entry.identifier;
-            let message = "newly glob-assisted pattern binding is not proved in the complete final written context; artifacts withheld";
+            let message = "moved pattern binding is not proved in the complete final written context; artifacts withheld";
             result.blocker(
                 "BINDING_COLLISION",
                 message,
@@ -364,6 +373,10 @@ pub(super) fn audit(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "pattern_tests.rs"]
+mod pattern_tests;
 
 #[cfg(test)]
 mod tests {
