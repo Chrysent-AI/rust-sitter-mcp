@@ -197,11 +197,11 @@ chosen path's written module edges. This is additive rationale vocabulary, not a
 new evidence/proof class. Review these anchors and the chosen `after_text` before
 accepting or replacing an ordinary rewrite.
 
-This is **consumer-side import resolution only**. Moving a declaration that is
-itself publicly exposed or re-exported still retains `public_path_change` and
-requires a separate API decision; no facade, compatibility shim or re-export is
-synthesized. An unsupported consumer route remains a written-binding or
-conditional-context blocker, not permission to bypass it with an override.
+Without `parent_facade`, this is **consumer-side import resolution only**.
+Moving an exposed declaration still retains `public_path_change`; no compatibility
+shim is inferred. Explicit `parent_facade:true` supports only the path-preserving
+private-child case described below. An unsupported consumer route remains a
+written-binding or conditional-context blocker, not permission to bypass it.
 
 ### Opt-in standard `matches!` consumers
 
@@ -894,14 +894,71 @@ The planner synthesizes one private ordinary `mod detail;`, or reuses one unique
 compatible private dangling declaration under the existing admitted attribute and
 positive configuration rules. Public/restricted, inline, remapped, ambiguous or
 unproved declarations refuse rather than convert. The child module is never
-widened to support consumers outside its parent's access region. Retain public
-facades explicitly by omitting them from moves; no re-export shim is synthesized.
+widened to support consumers outside its parent's access region. By default, retain
+public facades explicitly by omitting them from moves; no re-export is inferred.
+With explicit `parent_facade:true`, the bounded synthesis below can preserve the
+original named binding without widening the child declaration.
 Child code does not inherit parent imports: only evidenced explicit import/path
 repairs and audited verbatim inherent-member wrappers are generated. The same
 original/final binding, public-path, syntax, trivia, module and narrow-visibility
 audits apply. Field/constructor/concrete-type/receiver and macro/trait/generic
 uncertainty remains blocking; common historical extractions are not promised to
 be applicable merely because this layout is expressible.
+
+### Explicit path-preserving parent facade
+
+`parent_facade` is a top-level `move_item` boolean, default `false`. It applies
+only to `new_child` selections; other destinations retain their usual behavior.
+The caller still chooses every item and destination. For example, to relocate
+`pub fn helper() {}` from `src/worker.rs` into its private child while preserving
+`crate::worker::helper`, add `"parent_facade":true` to the ordinary request.
+The plan synthesizes `pub use self::detail::helper;` in the parent and keeps
+`mod detail;` private. Existing callers and supported named re-export aliases
+keep their old paths rather than importing the hidden child.
+
+Each facade and moved declaration retain **exactly the original access region**.
+An originally private item gets private `use` in the parent and `pub(super)` in
+its child (or the equivalent crate-root region); `pub(super)`, `pub(crate)` and
+`pub(in ...)` restrictions are translated to the same evidenced ancestor, never
+a wider region. A genuinely public binding uses `pub use`. This is not a generic
+`pub(crate)` repair and never widens `mod child;`.
+
+Inspect `rewrites[].kind:"parent_facade"`, its full synthesis target with
+`slot:"parent_facade"`, `written_reexport` evidence, original declaration,
+module-chain, insertion-boundary and discharged consumer anchors, and supporting
+visibility evidence. The `parent_facade` rationale records the unchanged binding.
+These are written-route witnesses, not a semantic `binding_proofs` class or a
+compilation claim. Existing schema 3 applies; no additional schema version.
+`integrity.semantic` stays `not_performed` without resolution. Retaining any
+required facade/visibility rewrite blocks all artifacts; replacement cannot
+rename a facade, inject code or widen its original region.
+
+Admission is conservative: only named top-level functions, consts, statics,
+type aliases, structs with no fields or wholly public fields, and enums qualify.
+Unsupported namespaces/associated selections, private or restricted fields,
+ambiguous aliases, conflicting parent names, wildcard competition in the parent,
+conditional item/module/re-export routes (even declared ON), generated namespace
+context and incomplete original routes refuse. Existing typed decision reasons
+remain; `parent_facade_unproved` identifies an anchored synthesis-admission
+failure. The existing named re-export machinery supplies unique terminal identity,
+access and eight-hop/cycle checks; no parallel resolver is used.
+
+A `public_path_change` or glob need is removed only when **that particular old
+route is proved unchanged**. For globs the supported subset is one direct simple
+wildcard route to the original parent, with a complete unchanged export scope,
+no competing wildcard/named candidate or unexamined local/provider context, and
+original access covering the consumer. Grouped/forwarded, external, conditional,
+competing or unproved glob routes retain their existing blockers. This does not
+synthesize globs, waive semantic/test acknowledgment rules, or authorize narrowing
+away consumers. `export_move_request.move_options` does not accept this flag;
+review and explicitly edit the exported ordinary request before submission.
+
+Derive/helper attributes, receiver/concrete-type facts, private-field access,
+macro uncertainty, attachment/origin checks and the final moved-binder audit are
+independent and unchanged. Out-of-line tests can keep proven named routes, but
+conditional test context or macro calls may still block; there is no expanded
+test-consumer acknowledgment. Apply the full patch in a disposable copy and run
+the affected Cargo project's `cargo check --all-targets` externally.
 
 ### Known structural limitations
 
@@ -1065,7 +1122,9 @@ Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explici
 
 Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged ancestor restrictions survive. A proven insufficient access receives the deepest common ancestor region containing the declaration's preserved access region and all proven final callers: `pub(super)` for a non-root immediate parent, `pub(in crate::path)` for a more distant non-root ancestor, or `pub(crate)` only when the root is the smallest covering region. Multiple callers merge into one repair and can escalate a previously narrower requirement. Moved private inherent members also preserve their original defining region's access, without inventing callers outside the admitted corpus. Retained relative restrictions can be widened when their parent scope is unchanged; moved relative/re-scoped restrictions still block. Visibility alternatives must denote an evidenced ancestor and cover the merged requirement; insufficient choices block artifacts with `visibility_scope_unproved`, while public exposure, non-ancestor paths, comments and injected tokens are rejected. Private fields/tuple constructors, unproved associated/type-directed references, relevant globs/macros, unadmitted conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro outside the relevant binding context is not by itself a veto. Consumer-glob candidates are checked against written module routes: file identity plus inline-module anchors, scoped module aliases, grouped use prefixes, and exact default-layout parent declarations. A same-named module in another subtree is not the source module. Proven different modules and enum-variant globs are excluded; a caller-selected file root does not inherit aliases from every unrelated `crate` import. Unknown/recovered routes, competing inclusions, local alias shadows, and possible wildcard/re-export/same-name forwarding remain conservative candidates. This is admitted written-syntax evidence, not Cargo discovery, cfg evaluation, macro expansion, or semantic name resolution. Optional `coverage.glob_exclusions` counts excluded selected-item/glob pairs by reason (`different_written_module`, `enum_variants`, `no_written_route`); it is not a count of files skipped or semantic absence proofs. Test-consumer advice uses the same written-route classifier, including aliases that glob the immediate test parent; it infers no edge from an unknown route.
 
-Bare selected-name references in other admitted files are checked against visible glob imports, including `use super::super::*`, grouped/module-alias routes and possible chained forwarding. A reachable or unproved route emits `glob_consumer_unrepaired` in category `glob_dependency`, with `action.route:"selection_change_required"`, `blocks_applicability:true`, and no acknowledgment or rewrite choice. Its first anchor is the original reference identifier in the consumer file; subsequent anchors contain the complete original candidate glob statements. `refusal_basis` retains their `glob_import` ranges and affected name, plus any lexical uncertainty witness. This is conservative written reachability, not proof of glob binding identity. Named bindings in the same scope and proven independent locals are not glob-only consumers; sibling/parent-module imports are not inherited. Existing explicit-import and same-file repair paths are unchanged. These third-file risks cannot be waived by `acknowledge_test_consumers` or semantic resolution; all artifacts remain null while any such blocker exists. Keep the affected item in place or change the selected move; never narrow away admitted consumers just to obtain an applicable plan.
+Bare selected-name references in other admitted files are checked against visible glob imports, including `use super::super::*`, grouped/module-alias routes and possible chained forwarding. A reachable or unproved route emits `glob_consumer_unrepaired` in category `glob_dependency`, with `action.route:"selection_change_required"`, `blocks_applicability:true`, and no acknowledgment or rewrite choice. Its first anchor is the original reference identifier in the consumer file; subsequent anchors contain the complete original candidate glob statements. `refusal_basis` retains their `glob_import` ranges and affected name, plus any lexical uncertainty witness. This is conservative written reachability, not proof of glob binding identity. Named bindings in the same scope and proven independent locals are not glob-only consumers; sibling/parent-module imports are not inherited. Existing explicit-import and same-file repair paths are unchanged. These third-file risks cannot be waived by `acknowledge_test_consumers` or semantic
+resolution. Explicit `parent_facade` may instead prove the narrow direct old-route
+preservation case above; all other such blockers keep every artifact null. Keep the affected item in place or change the selected move; never narrow away admitted consumers just to obtain an applicable plan.
 
 Each alternative is checked against the same target and final binding/access constraints before assembly; newly colliding aliases block. Caller-authored bytes and associated reference repairs remain `origin:"caller_override"`, never compiler-verified. Always echo a complete published target: synthesized import `binding` identities can include a scope anchor, and separator identities include their boundary role. Neither display IDs nor a cached server plan authorize a choice.
 

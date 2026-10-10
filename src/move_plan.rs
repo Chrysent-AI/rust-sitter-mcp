@@ -189,6 +189,9 @@ pub struct MoveRequest {
     pub trivia_overrides: Option<Vec<MoveTriviaOverride>>,
     pub rewrite_overrides: Option<Vec<RewriteOverride>>,
     pub draft_provenance: Option<DraftProvenance>,
+    /// Preserve named paths through explicit, region-bounded parent re-exports for new_child moves.
+    #[serde(default)]
+    pub parent_facade: bool,
     /// Include trivia for unselected items in blocked previews (default false).
     #[serde(default)]
     pub include_unselected_trivia: bool,
@@ -3420,7 +3423,7 @@ fn assemble(
     }
     let mut imports: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
     for (index, (repair, _, _)) in authored.iter().enumerate() {
-        if repair.kind == "import_insert"
+        if repair.is_import()
             && !(repair.import_scope.is_some()
                 && selected.iter().any(|s| {
                     s.runs.iter().any(|run| {
@@ -3671,7 +3674,7 @@ fn assemble(
                 let mut internal: Vec<_> = authored
                     .iter()
                     .filter(|(r, _, _)| {
-                        (r.kind != "import_insert" || r.import_scope.is_some())
+                        (!r.is_import() || r.import_scope.is_some())
                             && r.path == run.path
                             && r.range.start_byte >= run.range.start_byte
                             && r.range.end_byte <= run.range.end_byte
@@ -3687,16 +3690,12 @@ fn assemble(
                         cursor,
                         repair.range.start_byte,
                     );
-                    let local_eol =
-                        if repair.kind == "import_insert" && insertion.text.contains('\n') {
-                            ending(&insertion.text, insertion.text.len())
-                        } else {
-                            eol
-                        };
-                    if repair.kind == "import_insert"
-                        && !text.is_empty()
-                        && !insertion.text.ends_with('\n')
-                    {
+                    let local_eol = if repair.is_import() && insertion.text.contains('\n') {
+                        ending(&insertion.text, insertion.text.len())
+                    } else {
+                        eol
+                    };
+                    if repair.is_import() && !text.is_empty() && !insertion.text.ends_with('\n') {
                         add_separator(
                             request,
                             &mut used,
@@ -3716,7 +3715,7 @@ fn assemble(
                     insertion
                         .rewrites
                         .push((id.clone(), range(start, insertion.text.len())));
-                    if repair.kind == "import_insert" && !text.is_empty() {
+                    if repair.is_import() && !text.is_empty() {
                         add_separator(
                             request,
                             &mut used,
@@ -3795,7 +3794,7 @@ fn assemble(
         .map(|(_, id, _)| id.clone())
         .collect();
     for (repair, id, text) in &authored {
-        if repair.kind != "import_insert"
+        if !repair.is_import()
             && !absorbed.contains(id)
             && repair.range.start_byte == repair.range.end_byte
             && !selected.iter().any(|s| {
@@ -3846,7 +3845,7 @@ fn assemble(
         }
     }
     for (repair, id, text) in &authored {
-        if repair.kind == "import_insert"
+        if repair.is_import()
             || absorbed.contains(id)
             || selected.iter().any(|s| {
                 s.runs.iter().any(|run| {

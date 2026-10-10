@@ -97,7 +97,7 @@ one unique compatible private declaration under existing admitted-context rules.
 Public/restricted, inline, remapped, ambiguous, unknown-cfg or unproved
 declarations refuse; the child is not widened for consumers outside its parent.
 The caller chooses units and destination; no core selection, public facade or
-re-export is inferred or synthesized. Preserve public facades explicitly. Parent
+re-export is inferred or synthesized by default; an explicit `parent_facade` request for a `new_child` move synthesizes a region-bounded parent re-export that preserves the original named binding. Preserve public facades explicitly. Parent
 imports are not inherited, and child placement adds no proof or visibility
 exemption. Supported associated-item wrappers retain their full audited headers.
 No arbitrary `mkdir`, new `mod.rs`, inline parent, layout conversion or

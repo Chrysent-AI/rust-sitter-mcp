@@ -1,5 +1,6 @@
 //! Bounded written-binding repairs. Evidence is syntactic, never symbol resolution.
 mod associated;
+mod facade;
 mod matches;
 use crate::{
     items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile},
@@ -30,6 +31,11 @@ pub(crate) struct Repair {
     pub caller_override: bool,
     pub import_module: Option<Vec<String>>,
     pub import_scope: Option<ByteRange>,
+}
+impl Repair {
+    pub(crate) fn is_import(&self) -> bool {
+        matches!(self.kind, "import_insert" | "parent_facade")
+    }
 }
 pub(crate) struct Analysis {
     pub repairs: Vec<Repair>,
@@ -313,6 +319,7 @@ struct Analyzer<'a> {
     selected: &'a [(String, Item, String)],
     contexts: &'a BTreeMap<String, ModuleEvidence>,
     final_contexts: &'a BTreeMap<String, ModuleEvidence>,
+    facades: BTreeMap<String, facade::Facade>,
     repairs: Vec<Repair>,
     visibility_regions: BTreeMap<VisibilityKey, VisibilityRegion>,
     visibility_observations: BTreeMap<VisibilitySubject, VisibilityObservations>,
@@ -640,13 +647,17 @@ impl Analyzer<'_> {
         let mut target = target.to_owned();
         let mut seen = std::collections::BTreeSet::new();
         let mut anchors = Vec::new();
+        let mut attributed_route = false;
         loop {
             if items::check(self.controls.0, self.controls.1).is_err() {
                 return None;
             }
             let bindings = self.reexports(&target);
             if let Some((path, item)) = self.declaration(&target) {
-                if !bindings.is_empty() || !self.contexts[&path].unresolved.is_empty() {
+                if !bindings.is_empty()
+                    || !self.contexts[&path].unresolved.is_empty()
+                    || (attributed_route && self.facades.contains_key(&target))
+                {
                     self.missing_target(need, &target);
                     return None;
                 }
@@ -678,6 +689,7 @@ impl Analyzer<'_> {
                 .items
                 .iter()
                 .find(|i| i.span.range == binding.leaf.declaration)?;
+            attributed_route |= binding.written_attributes;
             if binding.conditioned || !matches!(item.visibility_key, "pub" | "pub(crate)") {
                 self.missing_target(need, &target);
                 return None;
@@ -702,7 +714,15 @@ impl Analyzer<'_> {
                     .flatten()
             });
             if let Some((path, exported)) = exported
-                && !self.accessible_route(need, &path, &exported, &binding.module)
+                && (!self.accessible_route(need, &path, &exported, &binding.module)
+                    || self.facade_for(&path, &exported).is_some_and(|facade| {
+                        facade.region.as_ref().is_some_and(|region| {
+                            !binding.module.starts_with(region)
+                                || !matches!(exported.visibility_key, "pub" | "pub(crate)")
+                                || (item.visibility_key == "pub"
+                                    && exported.visibility_key != "pub")
+                        })
+                    }))
             {
                 return None;
             }
@@ -718,6 +738,38 @@ impl Analyzer<'_> {
     ) -> Option<WrittenTarget> {
         let (terminal, mut anchors) = self.follow_reexport(need, target)?;
         let mut route = self.mapped(&terminal);
+        if let Some(facade) = self.facades.get(&terminal).cloned() {
+            let (path, item) = if target == terminal {
+                self.declaration(&terminal)?
+            } else {
+                let binding = self.reexports(target).into_iter().next()?;
+                let item = self.parsed[&binding.path]
+                    .items
+                    .iter()
+                    .find(|i| i.span.range == binding.leaf.declaration)?
+                    .clone();
+                (binding.path.clone(), item)
+            };
+            if (target == terminal
+                && !facade
+                    .region
+                    .as_ref()
+                    .is_none_or(|region| using.starts_with(region)))
+                || !self.accessible_route(need, &path, &item, using)
+            {
+                return None;
+            }
+            route = target.into();
+            anchors.push(facade.anchor.clone());
+            return Some(WrittenTarget {
+                terminal,
+                route,
+                evidence: RouteEvidence {
+                    anchors,
+                    fallback: vec!["parent_facade: original named route retained by explicit region-bounded re-export".into()],
+                },
+            });
+        }
         let mut fallback = Vec::new();
         if let Some((path, item)) = self.declaration(&terminal) {
             let mut rejected = need.clone();
@@ -804,7 +856,12 @@ impl Analyzer<'_> {
     // the hidden canonical modules it intentionally avoids.
     fn accessible_route(&self, need: &mut Need, path: &str, item: &Item, using: &[String]) -> bool {
         let final_path = self.final_path(path, item);
-        let Some(context) = self.final_contexts.get(final_path) else {
+        let context = if self.facade_for(path, item).is_some() {
+            self.contexts.get(path)
+        } else {
+            self.final_contexts.get(final_path)
+        };
+        let Some(context) = context else {
             return self.inaccessible_route(need, item.name.as_deref().unwrap_or("crate"), None);
         };
         for (index, segment) in context.module_segments.iter().enumerate() {
@@ -923,6 +980,12 @@ impl Analyzer<'_> {
         ids: &[String],
         access: &VisibilityConsumer,
     ) -> bool {
+        if let Some(facade) = self.facade_for(path, item) {
+            return facade
+                .region
+                .as_ref()
+                .is_none_or(|region| consumer.starts_with(region));
+        }
         let final_path = self.final_path(path, item).to_owned();
         let Some(defining) = self.final_contexts.get(&final_path).cloned() else {
             return false;
@@ -1403,6 +1466,9 @@ impl Analyzer<'_> {
         Some(result.join("::"))
     }
     fn mapped(&self, target: &str) -> String {
+        if self.facades.contains_key(target) {
+            return target.into();
+        }
         self.declaration(target)
             .and_then(|(p, i)| {
                 self.final_contexts
@@ -2636,6 +2702,9 @@ impl Analyzer<'_> {
         Ok(failures)
     }
     fn repair(&mut self, need: &mut Need) -> bool {
+        if self.preserve_facade_need(need) {
+            return true;
+        }
         // Preserve the semantic tier's original/final attribute evidence when
         // requested; written-only calls need no resolver to evaluate predicates.
         if !self.request.resolve_semantic
@@ -3016,6 +3085,7 @@ pub(crate) fn analyze(
         selected,
         contexts,
         final_contexts,
+        facades: BTreeMap::new(),
         repairs: Vec::new(),
         visibility_regions: BTreeMap::new(),
         visibility_observations: BTreeMap::new(),
@@ -3112,7 +3182,8 @@ pub(crate) fn analyze(
             }
         }
     }
-    let mut remaining = analyzer.associated()?;
+    let mut remaining = analyzer.parent_facades()?;
+    remaining.extend(analyzer.associated()?);
     for mut need in needs {
         items::check(controls.0, controls.1)?;
         if !analyzer.repair(&mut need) {
@@ -3143,6 +3214,7 @@ pub(crate) fn analyze(
     }
     analyzer.explain_visibility()?;
     remaining.extend(analyzer.choices()?);
+    remaining.extend(analyzer.audit_facades()?);
     remaining.extend(analyzer.matches_final_shadows());
     items::check(controls.0, controls.1)?;
     if analyzer.exceeded {

@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add explicit `parent_facade` for private-child moves, preserving old named
+  paths through region-bounded parent re-exports while keeping the child private.
+  Only proven unchanged named/direct-glob routes discharge their path needs;
+  ambiguous, conditional, conflicting and unsupported privacy cases still refuse.
+  Derive, macro, receiver, test acknowledgment and final binder checks remain
+  independent, with no compilation or semantic claim.
+
 * Add exact `derived_attribute_relocations` caller assertions for unchanged
   written derive invocations and registered helpers with explicit provider import
   routes at both ends. Label admission as `assumed_derive_relocation` with separate
