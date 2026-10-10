@@ -700,6 +700,12 @@ pub(super) fn discharge(
     controls: (Instant, &AtomicBool),
     cfg: Option<&items::DeclaredCfg>,
 ) -> Result<Vec<BindingProof>, DomainError> {
+    let root = contexts
+        .values()
+        .next()
+        .map(|c| c.crate_root.as_str())
+        .unwrap_or("");
+    let pattern_routes = items::GlobRoutes::strict(files, parsed, contexts, root, controls)?;
     let mut modules = BTreeMap::new();
     for (path, data) in parsed {
         items::check(controls.0, controls.1)?;
@@ -912,8 +918,15 @@ pub(super) fn discharge(
                 } else {
                     STANDARD_PRELUDE[audited].0
                 };
-                let assessment = items::lexical_assessment_with_cfg(
-                    path, node, source, name, controls, false, cfg,
+                let assessment = items::lexical_assessment_with_globs(
+                    path,
+                    node,
+                    source,
+                    name,
+                    controls,
+                    false,
+                    cfg,
+                    Some(&pattern_routes),
                 )?;
                 if assessment.binding != items::LexicalBinding::Absent {
                     if let Some(witness) = assessment.uncertainty {

@@ -54,6 +54,8 @@ Unsupported private-field, constructor, concrete-type and receiver access still 
 - **Don't reorder or merge import groups** during a move — the Rust Style Guide forbids merging/reordering groups
 - **Don't introduce new wildcard imports** as a split shortcut — they hide binding provenance and the MCP engine refuses uncertain globs. Existing globs are not blanket vetoes, but bare consumers in other admitted files reached through candidate globs block with `glob_consumer_unrepaired`; review their exact call-site and glob-statement anchors rather than assuming the old route survives.
 
+For composite-pattern binders only, a fully admitted accessible direct written glob export set can establish spelling-specific noncompetition. Every relevant glob must be proved; forwarding, enum globs, unknown routes and provider/cfg/macro/recovery uncertainty still refuse. The planner exact-origin rechecks every newly assisted binder, including unread ones, and its affected reference identity against complete final batch bytes and module edges. This does not repair third-file glob consumers, waive constructor identity, or audit all historical unassisted locals. Check the applied full batch with the caller's compiler.
+
 ## File layout conventions
 
 **Modern (2018 edition) layout** — preferred for new code:
