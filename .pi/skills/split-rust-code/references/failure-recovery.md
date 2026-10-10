@@ -5,6 +5,7 @@ Common failures and typed recovery routing for rust-sitter-mcp. Unknown or undia
 ## Triage rule
 
 - **Failed call** (`status: "failed"`): inspect `error.code` and `error.field` — the fix targets the named request field.
+- For `resolve_semantic:true`, invalid supplied configuration is a failed call with `INVALID_PARAMS`; inspect `error.field` such as `semantic_configuration.crates[0].name` and its offending-value/reason message. Fix package-name hyphens explicitly with underscores, missing/unadmitted or duplicate roots, names, editions or dependency graph inputs as directed. Validation also runs with zero eligible needs. `semantic_configuration_unproved` remains the occurrence-level refusal for absent configuration, not the diagnostic for invalid supplied configuration.
 - **Blocked plan** (`status: "complete"`, `plan.state: "blocked"`): inspect `plan.blockers[]` and `plan.decisions[]`; artifacts are withheld.
 - **Export envelope:** `export_move_request` has its own envelope, not an ordinary `status`/`plan`. Inspect `error` and `request` first; any export failure has `request:null`, so there is no usable request to pass on.
 - **Incomplete advice:** for full schema-2 responses, inspect `status`, `coverage`, `truncation_reasons`, and `counts.omissions`. For compact `envelope_kind:"split_manifest"` schema 1, inspect `analysis_status`, `manifest_complete`, `coverage`, `omissions`, `totals` and `detail_availability`; manifest omissions can be retrievable detail rather than incomplete analysis.

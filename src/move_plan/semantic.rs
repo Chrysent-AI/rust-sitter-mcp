@@ -185,23 +185,199 @@ struct Inputs {
     assumed_declared_helpers: Cell<bool>,
     context: RefCell<BTreeMap<ContextKey, ContextEvaluation>>,
 }
+/// Reject unusable caller configuration without querying or constructing a database.
+pub(super) fn validate(
+    config: &Configuration,
+    paths: &BTreeSet<&str>,
+    crate_root: Option<&str>,
+) -> Result<(), DomainError> {
+    let invalid = |field: String, value: String, why: &str| {
+        let preview: String = value.chars().take(320).collect();
+        let clipped = if preview.len() < value.len() {
+            "…"
+        } else {
+            ""
+        };
+        super::error(
+            "INVALID_PARAMS",
+            &format!("{preview}{clipped}: {why}"),
+            &field,
+        )
+    };
+    let field = |i, suffix| format!("semantic_configuration.crates[{i}].{suffix}");
+    if config.crates.is_empty() || config.crates.len() > 32 {
+        return Err(invalid(
+            "semantic_configuration.crates".into(),
+            config.crates.len().to_string(),
+            "expected 1–32 explicit crates",
+        ));
+    }
+    let name_valid = |name: &str| {
+        name.len() <= 256
+            && name != "_"
+            && (ra_ap_syntax::utils::is_identifier(name, Edition::Edition2024)
+                || ra_ap_syntax::utils::is_raw_identifier(name, Edition::Edition2024))
+    };
+    let mut names = BTreeSet::new();
+    let mut roots = BTreeSet::new();
+    for (i, input) in config.crates.iter().enumerate() {
+        if !name_valid(&input.name) {
+            return Err(invalid(
+                field(i, "name"),
+                format!("{:?}", input.name),
+                "expected a Rust crate identifier (at most 256 bytes), not a Cargo package name; replace package-name hyphens with underscores explicitly",
+            ));
+        }
+        if !names.insert(input.name.as_str()) {
+            return Err(invalid(
+                field(i, "name"),
+                format!("{:?}", input.name),
+                "duplicate crate name",
+            ));
+        }
+        if !paths.contains(input.root_file.as_str()) {
+            return Err(invalid(
+                field(i, "root_file"),
+                format!("{:?}", input.root_file),
+                "root must be an admitted existing Rust file",
+            ));
+        }
+        if !roots.insert(input.root_file.as_str()) {
+            return Err(invalid(
+                field(i, "root_file"),
+                format!("{:?}", input.root_file),
+                "duplicate crate root",
+            ));
+        }
+        if input.edition.parse::<Edition>().is_err() {
+            return Err(invalid(
+                field(i, "edition"),
+                format!("{:?}", input.edition),
+                "expected 2015, 2018, 2021 or 2024",
+            ));
+        }
+        if input.cfg.len() + input.features.len() > 1024 {
+            return Err(invalid(
+                field(i, "cfg"),
+                format!(
+                    "{} cfg atoms + {} features",
+                    input.cfg.len(),
+                    input.features.len()
+                ),
+                "combined limit is 1024",
+            ));
+        }
+        for (j, atom) in input.cfg.iter().enumerate() {
+            if atom.key.is_empty() || atom.key.len() > 256 {
+                return Err(invalid(
+                    field(i, &format!("cfg[{j}].key")),
+                    format!("{:?}", atom.key),
+                    "expected a nonempty key of at most 256 bytes",
+                ));
+            }
+            if let Some(value) = &atom.value
+                && value.len() > 256
+            {
+                return Err(invalid(
+                    field(i, &format!("cfg[{j}].value")),
+                    format!("{value:?}"),
+                    "limit is 256 bytes",
+                ));
+            }
+        }
+        for (j, feature) in input.features.iter().enumerate() {
+            if feature.len() > 256 {
+                return Err(invalid(
+                    field(i, &format!("features[{j}]")),
+                    format!("{feature:?}"),
+                    "limit is 256 bytes",
+                ));
+            }
+        }
+        if input.dependencies.len() > 32 {
+            return Err(invalid(
+                field(i, "dependencies"),
+                input.dependencies.len().to_string(),
+                "limit is 32 dependencies",
+            ));
+        }
+    }
+    if let Some(root) = crate_root
+        && !roots.contains(root)
+    {
+        return Err(invalid(
+            "semantic_configuration.crates".into(),
+            format!("crate_root {root:?}"),
+            "configuration must include this root",
+        ));
+    }
+    let mut edges: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (i, input) in config.crates.iter().enumerate() {
+        let mut aliases = BTreeSet::new();
+        for (j, dep) in input.dependencies.iter().enumerate() {
+            if !name_valid(&dep.name) || !aliases.insert(&dep.name) {
+                return Err(invalid(
+                    field(i, &format!("dependencies[{j}].name")),
+                    format!("{:?}", dep.name),
+                    "expected a unique Rust crate identifier, not a hyphenated Cargo package name",
+                ));
+            }
+            if !names.contains(dep.crate_name.as_str()) {
+                return Err(invalid(
+                    field(i, &format!("dependencies[{j}].crate_name")),
+                    format!("{:?}", dep.crate_name),
+                    "must name another explicitly configured crate",
+                ));
+            }
+            let mut pending = vec![dep.crate_name.as_str()];
+            let mut seen = BTreeSet::new();
+            while let Some(name) = pending.pop() {
+                if name == input.name {
+                    return Err(invalid(
+                        field(i, &format!("dependencies[{j}].crate_name")),
+                        format!("{:?}", dep.crate_name),
+                        "dependency edge creates a cycle",
+                    ));
+                }
+                if seen.insert(name)
+                    && let Some(next) = edges.get(name)
+                {
+                    pending.extend(next.iter().copied());
+                }
+            }
+            edges
+                .entry(&input.name)
+                .or_default()
+                .insert(&dep.crate_name);
+        }
+    }
+    Ok(())
+}
+
 impl Inputs {
     fn new(
         texts: BTreeMap<String, String>,
         config: &Configuration,
         controls: (Instant, &AtomicBool),
-    ) -> Option<Self> {
-        if config.crates.is_empty() || config.crates.len() > 32 || texts.len() > 100_000 {
-            return None;
+    ) -> Result<Self, DomainError> {
+        validate(config, &texts.keys().map(String::as_str).collect(), None)?;
+        if texts.len() > 100_000 {
+            return Err(DomainError::new(
+                "INVALID_PARAMS",
+                "semantic input exceeds 100000 files",
+            ));
         }
         let mut set = FileSet::default();
         let mut change = FileChange::default();
         let mut ids = BTreeMap::new();
         let mut paths = BTreeMap::new();
         for (index, (path, text)) in texts.iter().enumerate() {
-            items::check(controls.0, controls.1).ok()?;
+            items::check(controls.0, controls.1)?;
             if text.len() > u32::MAX as usize {
-                return None;
+                return Err(DomainError::new(
+                    "INVALID_PARAMS",
+                    "semantic input file exceeds u32 byte range",
+                ));
             }
             let id = FileId::from_raw(index as u32);
             set.insert(id, VfsPath::new_virtual_path(format!("/{path}")));
@@ -213,24 +389,10 @@ impl Inputs {
         let mut crates = BTreeMap::new();
         let mut roots = BTreeMap::new();
         for input in &config.crates {
-            let edition = input.edition.parse::<Edition>().ok()?;
-            let file = *ids.get(&input.root_file)?;
-            if CrateName::new(&input.name).is_err()
-                || input.name.len() > 256
-                || crates.contains_key(&input.name)
-                || roots.contains_key(&file)
-                || input.cfg.len() + input.features.len() > 1024
-            {
-                return None;
-            }
+            let edition = input.edition.parse::<Edition>().expect("validated edition");
+            let file = ids[&input.root_file];
             let mut cfg = CfgOptions::default();
             for atom in &input.cfg {
-                if atom.key.is_empty()
-                    || atom.key.len() > 256
-                    || atom.value.as_ref().is_some_and(|v| v.len() > 256)
-                {
-                    return None;
-                }
                 if let Some(value) = &atom.value {
                     cfg.insert_key_value(Symbol::intern(&atom.key), Symbol::intern(value));
                 } else {
@@ -238,9 +400,6 @@ impl Inputs {
                 }
             }
             for feature in &input.features {
-                if feature.len() > 256 {
-                    return None;
-                }
                 cfg.insert_key_value(Symbol::intern("feature"), Symbol::intern(feature));
             }
             let id = graph.add_crate_root(
@@ -268,28 +427,21 @@ impl Inputs {
             roots.insert(file, input.name.clone());
         }
         for input in &config.crates {
-            let mut names = BTreeSet::new();
-            if input.dependencies.len() > 32 {
-                return None;
-            }
             for dep in &input.dependencies {
-                if !names.insert(&dep.name) {
-                    return None;
-                }
-                let name = CrateName::new(&dep.name).ok()?;
+                let name = CrateName::new(&dep.name).expect("validated dependency name");
                 graph
                     .add_dep(
                         crates[&input.name],
-                        DependencyBuilder::new(name, *crates.get(&dep.crate_name)?),
+                        DependencyBuilder::new(name, crates[&dep.crate_name]),
                     )
-                    .ok()?;
+                    .expect("validated acyclic dependency graph");
             }
         }
         change.set_roots(vec![SourceRoot::new_local(set)]);
         change.set_crate_graph(graph);
         let mut db = RootDatabase::default();
         change.apply(&mut db);
-        Some(Self {
+        Ok(Self {
             db,
             ids,
             paths,
@@ -342,14 +494,6 @@ pub fn discharge(
     };
     let (deadline, cancelled) = controls;
     items::check(deadline, cancelled)?;
-    if !config
-        .crates
-        .iter()
-        .any(|c| c.root_file == request.crate_root)
-    {
-        configuration_refusal(needs);
-        return Ok(());
-    }
     let original: BTreeMap<_, _> = files
         .iter()
         .map(|(p, f)| (p.clone(), f.source.clone()))
@@ -358,16 +502,13 @@ pub fn discharge(
     let root = std::path::Path::new(result.root.as_deref().expect("admitted root"));
     let digest = crate::scope::hash_serialized(root, &(&snapshot, config, ANALYZER), controls)?;
     let final_digest = crate::scope::hash_serialized(root, &(&digest, &overlay), controls)?;
-    let Some(mut old) = Inputs::new(original, config, controls) else {
-        items::check(deadline, cancelled)?;
-        configuration_refusal(needs);
-        return Ok(());
-    };
-    let Some(mut new) = Inputs::new(overlay, config, controls) else {
-        items::check(deadline, cancelled)?;
-        configuration_refusal(needs);
-        return Ok(());
-    };
+    validate(
+        config,
+        &original.keys().map(String::as_str).collect(),
+        Some(&request.crate_root),
+    )?;
+    let mut old = Inputs::new(original, config, controls)?;
+    let mut new = Inputs::new(overlay, config, controls)?;
     old.assume_declared_helpers = request.assume_declared_helpers;
     new.assume_declared_helpers = request.assume_declared_helpers;
     let coverage = ResolutionCoverage {

@@ -37,14 +37,30 @@ fn workspace_member_chains_admit_metadata_and_declared_cfg_without_guessing() {
     args["resolve_semantic"] = json!(true);
     let configuration = args["semantic_configuration"].clone();
     args["semantic_configuration"]["crates"][0]["edition"] = json!("invalid");
+    let invalid = run(&repo, args.clone());
+    code(&invalid, "INVALID_PARAMS");
+    assert_eq!(
+        invalid["error"]["field"],
+        "semantic_configuration.crates[0].edition"
+    );
+    args["resolve_semantic"] = json!(false);
     code(&run(&repo, args.clone()), "CRATE_IDENTITY_UNCERTAIN");
+    args["resolve_semantic"] = json!(true);
     args["semantic_configuration"] = configuration.clone();
     let duplicate = args["semantic_configuration"]["crates"][0].clone();
     args["semantic_configuration"]["crates"]
         .as_array_mut()
         .unwrap()
         .push(duplicate);
+    let invalid = run(&repo, args.clone());
+    code(&invalid, "INVALID_PARAMS");
+    assert_eq!(
+        invalid["error"]["field"],
+        "semantic_configuration.crates[1].name"
+    );
+    args["resolve_semantic"] = json!(false);
     code(&run(&repo, args.clone()), "CRATE_IDENTITY_UNCERTAIN");
+    args["resolve_semantic"] = json!(true);
     args["semantic_configuration"] = configuration;
     for (written, reason) in [
         (

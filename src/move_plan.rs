@@ -1506,6 +1506,15 @@ fn build(
     }
     result.account(inputs.accounted_allocation())?;
     let files: BTreeMap<_, _> = files.into_iter().map(|f| (f.path.clone(), f)).collect();
+    if request.resolve_semantic
+        && let Some(config) = &request.semantic_configuration
+    {
+        semantic::validate(
+            config,
+            &files.keys().map(String::as_str).collect(),
+            Some(&request.crate_root),
+        )?;
+    }
     if !files.contains_key(&request.crate_root) {
         let mut diagnostic = items::ChainDiagnostic::boundary(
             &request.crate_root,

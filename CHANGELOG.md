@@ -17,6 +17,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Reject unusable supplied semantic configurations with `INVALID_PARAMS`, an
+  indexed input field, offending-value preview and actionable reason, even when
+  no resolution needs are collected. Explain Rust crate names versus hyphenated
+  Cargo package names; keep skipped resolution labeled `not_performed` and the
+  written-only configuration path unchanged.
 * Allow consumer path-prefix repair through well-formed composite pattern
   alternatives that provably cannot bind the queried spelling. Matching possible
   binders, macros, recovery and unknown syntax retain anchored uncertainty;

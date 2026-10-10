@@ -400,14 +400,26 @@ names stay unresolved. A dependency edge is
 prelude spelling and `crate_name` names another entry in `crates`. Crate names
 and roots must be unique; graphs are acyclic and capped at 32 crates with 32
 edges per crate. Editions are `2015`, `2018`, `2021` or `2024`.
+Crate names and dependency aliases are Rust crate identifiers, not Cargo package
+names: pass `my_package`, not `my-package`; no implicit normalization occurs.
+With `resolve_semantic:true`, unusable supplied configurations return
+`INVALID_PARAMS` with an indexed `error.field` (for example,
+`semantic_configuration.crates[0].name`) and a bounded offending-value preview
+plus the reason. This includes unadmitted/missing roots, duplicate names/roots,
+missing dependency targets, cycles, invalid editions and configuration limits.
+Validation occurs even when there are no eligible resolution needs. Invalid
+configuration never starts resolution or produces `resolution_coverage`;
+`integrity.semantic` remains `not_performed`. The written-cfg path with
+`resolve_semantic:false` is unchanged.
 
 Each crate declares its selected `features`, `cfg` atoms and dependencies, with
 no implicit defaults. A cfg atom is `{"key":"unix","value":null}` or
 `{"key":"target_os","value":"linux"}`; each selected feature also sets
 `feature="name"`. These are caller-provided inputs, not discovered Cargo facts.
 There is no build-script environment, target data layout or implicit standard
-library source. Missing/invalid/incomplete graph evidence does not acknowledge
-away a blocker: the original typed needs remain.
+library source. Absent configuration or incomplete binding evidence does not
+acknowledge away a blocker: the original typed needs remain. Unusable supplied
+configuration instead returns the field-specific input error described above.
 
 The resolution context gate evaluates written `cfg` and `cfg_attr` predicates:
 bare atoms, string-valued atoms (including `feature="name"`), `true`/`false`,

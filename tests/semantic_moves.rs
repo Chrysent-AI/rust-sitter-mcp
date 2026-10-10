@@ -10,6 +10,134 @@ use rust_sitter_mcp::{engine::Engine, move_plan::MoveRequest};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
+#[test]
+fn invalid_semantic_configuration_is_actionable_before_resolution() {
+    let text = "fn selected(value: crate::Value) -> u32 { value.read() }";
+    let repo = fixture(text);
+    let mut args = request(&repo, text);
+    args["resolve_semantic"] = json!(true);
+    args["semantic_configuration"] = config();
+    args["semantic_configuration"]["crates"][0]["name"] = json!("fixture-package");
+    let result = run(&repo, args);
+    assert_eq!(result["error"]["code"], "INVALID_PARAMS", "{result}");
+    assert_eq!(
+        result["error"]["field"],
+        "semantic_configuration.crates[0].name"
+    );
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fixture-package")
+    );
+    assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    assert!(result["plan"]["resolution_coverage"].is_null());
+}
+
+#[test]
+fn semantic_configuration_error_matrix_includes_empty_candidate_batches() {
+    for text in [
+        "fn selected() {}",
+        "fn selected(value: crate::Value) -> u32 { value.read() }",
+    ] {
+        let repo = fixture(text);
+        let base = config();
+        let entry = base["crates"][0].clone();
+        let mut cases = Vec::new();
+        for (key, value, why) in [
+            ("name", json!("fixture-package"), "Cargo package"),
+            ("name", json!("9bad"), "identifier"),
+            ("name", json!(""), "identifier"),
+            ("root_file", json!("cases/layout/missing.rs"), "admitted"),
+            ("edition", json!("2099"), "2015"),
+        ] {
+            let mut c = base.clone();
+            c["crates"][0][key] = value.clone();
+            cases.push((
+                c,
+                format!("semantic_configuration.crates[0].{key}"),
+                value.as_str().unwrap().to_owned(),
+                why,
+            ));
+        }
+        for (key, value, why) in [
+            ("name", json!("fixture"), "duplicate crate name"),
+            (
+                "root_file",
+                json!("cases/layout/lib.rs"),
+                "duplicate crate root",
+            ),
+        ] {
+            let mut second = entry.clone();
+            second["name"] = json!("other");
+            second["root_file"] = json!("cases/layout/destination.rs");
+            second[key] = value.clone();
+            cases.push((
+                json!({"crates":[entry.clone(),second]}),
+                format!("semantic_configuration.crates[1].{key}"),
+                value.as_str().unwrap().to_owned(),
+                why,
+            ));
+        }
+        for (target, why) in [("absent", "explicitly configured"), ("fixture", "cycle")] {
+            let mut c = base.clone();
+            c["crates"][0]["dependencies"] = json!([{"name":"edge","crate_name":target}]);
+            cases.push((
+                c,
+                "semantic_configuration.crates[0].dependencies[0].crate_name".into(),
+                target.into(),
+                why,
+            ));
+        }
+        let mut second = entry.clone();
+        second["name"] = json!("other");
+        second["root_file"] = json!("cases/layout/destination.rs");
+        second["dependencies"] = json!([{"name":"back","crate_name":"fixture"}]);
+        let mut first = entry.clone();
+        first["dependencies"] = json!([{"name":"forward","crate_name":"other"}]);
+        cases.push((
+            json!({"crates":[first,second]}),
+            "semantic_configuration.crates[1].dependencies[0].crate_name".into(),
+            "fixture".into(),
+            "cycle",
+        ));
+        for (configuration, field, value, why) in cases {
+            let mut args = request(&repo, text);
+            args["resolve_semantic"] = json!(true);
+            args["semantic_configuration"] = configuration.clone();
+            let result = run(&repo, args.clone());
+            assert_eq!(result["error"]["code"], "INVALID_PARAMS", "{result}");
+            assert_eq!(result["error"]["field"], field, "{result}");
+            let message = result["error"]["message"].as_str().unwrap();
+            assert!(
+                message.contains(&value) && message.contains(why),
+                "{message}"
+            );
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            assert!(result["plan"]["resolution_coverage"].is_null());
+            args["resolve_semantic"] = json!(false);
+            let off = run(&repo, args);
+            assert!(off["error"].is_null(), "{off}");
+            assert_eq!(off["plan"]["integrity"]["semantic"], "not_performed");
+            assert!(off["plan"]["resolution_coverage"].is_null());
+        }
+        let mut args = request(&repo, text);
+        args["resolve_semantic"] = json!(true);
+        args["semantic_configuration"] = base;
+        args["semantic_configuration"]["crates"][0]["name"] = json!("fixture_package");
+        let valid = run(&repo, args);
+        assert_eq!(valid["plan"]["applicable"], true, "{valid}");
+        assert_eq!(
+            valid["plan"]["integrity"]["semantic"],
+            if text.contains("value.read") {
+                "resolution_performed"
+            } else {
+                "not_performed"
+            }
+        );
+    }
+}
+
 fn config() -> Value {
     json!({"crates":[{"name":"fixture","root_file":"cases/layout/lib.rs","edition":"2024","features":[],"cfg":[],"dependencies":[]}]})
 }
@@ -311,7 +439,10 @@ fn configuration_changes_fingerprint_and_missing_graph_keeps_blockers() {
     );
     args["semantic_configuration"]["crates"][0]["root_file"] = json!("cases/layout/missing.rs");
     let missing = run(&repo, args);
-    assert!(reason(&missing, "member_or_constructor_unproved"));
+    assert_eq!(
+        missing["error"]["field"],
+        "semantic_configuration.crates[0].root_file"
+    );
 }
 
 #[test]
