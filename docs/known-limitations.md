@@ -19,17 +19,21 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   cfg/provider/derive attributes, macros, recovery, cycles and exhausted budgets
   remain uncertainty. Consumer reachability exclusions do not prove namespace
   absence, and third-file glob consumers still block without repair or waiver.
-- **The final pattern check covers only the new glob-assisted proof.** Every
-  such binder, including unread ones, and its affected reference identity must
-  survive exact origin mapping and revalidation against the complete assembled
-  bytes, final ancestors/globs/exporters and captured or validated creation
-  edges. Missing evidence or destination/companion competition withholds all
-  artifacts. This is not a general final lexical audit. A historical composite
-  binder proved without the new glob evidence can still become a constant
-  pattern after relocation into a competing destination; that pre-existing
-  limitation remains. Always compile/check the externally applied full batch.
-  No new assumption flag, public proof class or semantic claim accompanies this
-  capability.
+- **Final written binder identity covers moved items, not retained code.** Every
+  proved written binder in a selected item, including unread and non-glob-assisted
+  binders, and its affected references must survive unique byte-exact origin
+  mapping. The whole pattern is copied, while its scope is re-derived from the
+  final CST with the same pattern node and scope kind and no recovery/missing
+  nodes. Repairs outside the pattern can preserve identity; constructor-path or
+  guard rewrites inside the witnessed pattern still refuse. Final ancestors,
+  globs/exporters and captured or validated creation edges are revalidated.
+  Missing evidence or destination/companion competition withholds all artifacts.
+  This is not a general final lexical audit: pre-existing retained items in a
+  receiving file are not enrolled. Moving a competing constant into that file
+  or its exporter can therefore change a retained binder's interpretation
+  (the inverse direction). Type checking and inferred binding modes are not
+  certified. Always compile/check the externally applied full batch. No new
+  assumption flag, public proof class or semantic claim accompanies this check.
 
 - **Let-chain proof is lexical only.** Supported if/while `&&` chains expose
   admitted pattern bindings to later operands and the success body, not their

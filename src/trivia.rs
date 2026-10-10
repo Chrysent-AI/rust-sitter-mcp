@@ -14,7 +14,7 @@ use std::{
 };
 use tree_sitter::{Node, ParseOptions, Parser, Tree};
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct Trivia {
     pub range: Range<usize>,
     kind: String,

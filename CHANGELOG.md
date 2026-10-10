@@ -10,12 +10,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Changed
 
 * Prove spelling-specific pattern binders through fully admitted noncompeting
-  direct globs, rechecking every newly assisted binder and affected reference
-  against complete final batch bytes before publishing move artifacts. Unknown
-  routes, competing names and existing independent blockers still refuse;
-  historical unassisted locals do not gain a general final lexical audit.
+  direct globs. Unknown routes, competing names and existing independent
+  blockers still refuse.
 * Prove supported ordered if/while let-chain local scopes, preserving outer
   bindings and shadowing without relaxing independent move blockers.
+
+### Fixed
+
+* Withhold `move_item` artifacts when any proved written binder in a moved item
+  loses final identity or encounters destination/companion competition, even
+  without glob evidence or reads. Copy identifier, whole pattern and references
+  exactly; derive valid final scopes so type-path repairs outside patterns stay
+  applicable. Rewrites inside patterns still refuse. Retained code is not
+  enrolled; externally compile/check the full batch.
 
 ## [0.5.0] - 2026-10-10
 

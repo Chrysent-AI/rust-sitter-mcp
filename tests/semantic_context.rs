@@ -262,11 +262,9 @@ fn final_destination_context_is_evaluated_independently() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|d| d["refusal_basis"]
-                .as_array()
-                .unwrap()
+            .any(|d| d["refusal_basis"].as_array().is_some_and(|basis| basis
                 .iter()
-                .any(|b| b["class"] == "semantic_final_fact_unproved"))
+                .any(|b| b["class"] == "semantic_final_fact_unproved")))
     );
 }
 

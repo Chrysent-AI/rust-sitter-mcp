@@ -2211,14 +2211,14 @@ fn build(
         &request.crate_root,
         (deadline, cancelled),
     )?;
-    let glob_bindings = items::glob_bindings(
+    let pattern_bindings = items::pattern_bindings(
         &files,
         &parsed,
         &tuples,
         &pattern_routes,
         (deadline, cancelled),
     )?;
-    result.account(descriptor_bytes(&glob_bindings)?)?;
+    result.account(descriptor_bytes(&pattern_bindings)?)?;
     let (needs, candidates) = items::dependencies(
         &files,
         &parsed,
@@ -2486,7 +2486,7 @@ fn build(
         &selected,
         &mut creations,
         &analysis.repairs,
-        (&glob_bindings, &new_contexts),
+        (&pattern_bindings, &new_contexts),
         (deadline, cancelled),
         request.resolve_semantic.then_some(&mut overlay),
         result,
@@ -3270,7 +3270,7 @@ fn assemble(
     selected: &[Selection],
     creations: &mut BTreeMap<String, Creation>,
     repairs: &[Repair],
-    glob_proof: (&[items::GlobBinding], &BTreeMap<String, ModuleEvidence>),
+    pattern_proof: (&[items::PatternBinding], &BTreeMap<String, ModuleEvidence>),
     controls: (Instant, &AtomicBool),
     overlay: Option<&mut BTreeMap<String, String>>,
     result: &mut MoveEnvelope,
@@ -4090,7 +4090,15 @@ fn assemble(
         result.blocker("ATTRIBUTE_ATTACHMENT_CHANGED", "path-qualified exact-once copied trivia/item bytes or protected owners did not survive reparsing", None, None);
     }
     glob_patterns::audit(
-        request, files, &outputs, &edits, creations, glob_proof, controls, result,
+        request,
+        files,
+        parsed,
+        &outputs,
+        &edits,
+        creations,
+        pattern_proof,
+        controls,
+        result,
     )?;
     items::check(deadline, cancelled)?;
     for (index, origin) in result.plan.origins.iter_mut().enumerate() {

@@ -206,7 +206,7 @@ fn pattern_proof<'a>(
                     };
                     if definite {
                         binds = true;
-                        if binder.replace(node).is_some() && !provenance.is_empty() {
+                        if binder.replace(node).is_some() {
                             unknown.get_or_insert((LexicalReason::UnsupportedPattern, node));
                         }
                     } else {
@@ -413,7 +413,17 @@ fn assess_pattern(
     );
     Ok(
         match pattern_proof(pattern, source, name, simple, controls, path, globs)? {
-            PatternProof::Binds(_, _) => Some(value_binding(path, name, scope, pattern, reference)),
+            PatternProof::Binds(binder, _) => Some(value_binding(
+                path,
+                name,
+                scope,
+                if reference.kind() == "type_identifier" {
+                    pattern
+                } else {
+                    binder
+                },
+                reference,
+            )),
             PatternProof::Disjoint => None,
             PatternProof::Unproved(reason, p) => {
                 Some(uncertain(path, name, scope, reason, Some(p)))
@@ -855,9 +865,9 @@ fn lexical_context(
     }
     Ok(LexicalAssessment::definite(LexicalBinding::Absent))
 }
-/// Private provenance is limited to bindings admitted by spelling-specific glob proof.
+/// Private witnesses for every proved written binder in selected items.
 #[derive(Serialize)]
-pub(crate) struct GlobBinding {
+pub(crate) struct PatternBinding {
     pub item_id: String,
     pub destination: String,
     pub identifier: LexicalLocation,
@@ -896,13 +906,13 @@ fn pattern_site<'a>(
     }
     Ok(None)
 }
-pub(crate) fn glob_bindings(
+pub(crate) fn pattern_bindings(
     files: &std::collections::BTreeMap<String, super::FileSnapshot>,
     parsed: &std::collections::BTreeMap<String, super::ParsedFile>,
     selected: &[(String, super::Item, String)],
     globs: &super::GlobRoutes<'_>,
     controls: (Instant, &AtomicBool),
-) -> Result<Vec<GlobBinding>, DomainError> {
+) -> Result<Vec<PatternBinding>, DomainError> {
     let mut ledger = Vec::new();
     let mut bytes = 0;
     let mut work = 0;
@@ -929,12 +939,12 @@ pub(crate) fn glob_bindings(
             ) {
                 continue;
             }
-            if node.kind() == "identifier" {
+            if matches!(node.kind(), "identifier" | "shorthand_field_identifier") {
                 work += 1;
                 if work > 100_000 {
                     return Err(DomainError::new(
                         "reference_work_limit",
-                        "glob pattern ledger work guard reached",
+                        "pattern binding ledger work guard reached",
                     ));
                 }
                 if super::reference_role(node) {
@@ -944,9 +954,8 @@ pub(crate) fn glob_bindings(
                     if let PatternProof::Binds(identifier, routes) =
                         pattern_proof(pattern, source, name, simple, controls, path, Some(globs))?
                         && identifier == node
-                        && !routes.is_empty()
                     {
-                        let entry = GlobBinding {
+                        let entry = PatternBinding {
                             item_id: item.id.clone(),
                             destination: destination.clone(),
                             identifier: location(path, identifier),
@@ -963,7 +972,7 @@ pub(crate) fn glob_bindings(
                         if bytes > 128 * 1024 * 1024 {
                             return Err(DomainError::new(
                                 "analysis_descriptor_bytes",
-                                "glob pattern ledger guard reached",
+                                "pattern binding ledger guard reached",
                             ));
                         }
                         ledger.push(entry);
@@ -996,12 +1005,12 @@ pub(crate) fn glob_bindings(
             {
                 for entry in &mut ledger[start..] {
                     check(controls.0, controls.1)?;
-                    if entry.spelling == name && entry.pattern.range == binding.range {
+                    if entry.spelling == name && entry.identifier.range == binding.range {
                         bytes += path.len() + 256;
                         if bytes > 128 * 1024 * 1024 {
                             return Err(DomainError::new(
                                 "analysis_descriptor_bytes",
-                                "glob reference ledger guard reached",
+                                "pattern reference ledger guard reached",
                             ));
                         }
                         entry.references.push(location(path, node));
@@ -1012,21 +1021,30 @@ pub(crate) fn glob_bindings(
     }
     Ok(ledger)
 }
-pub(crate) fn final_glob_binding(
+#[allow(clippy::too_many_arguments)] // Scope kind and route admission are separate witness obligations.
+pub(crate) fn final_pattern_binding(
     path: &str,
     identifier: Node<'_>,
     pattern: Node<'_>,
-    scope: Node<'_>,
+    scope_kind: &str,
     source: &str,
     globs: &super::GlobRoutes<'_>,
+    require_module_context: bool,
     controls: (Instant, &AtomicBool),
 ) -> Result<bool, DomainError> {
     let Some((actual_scope, actual_pattern, simple)) = pattern_site(identifier, controls)? else {
         return Ok(false);
     };
-    if actual_scope != scope
+    // pattern_site reaches the actual declaration's pattern field through the
+    // identifier's ancestors, establishing identifier → pattern → scope
+    // enclosure without treating repaired scope bytes as copied identity.
+    if actual_scope.kind() != scope_kind
         || actual_pattern != pattern
-        || !globs.pattern_context(path, identifier)?
+        || actual_scope.has_error()
+        || actual_scope.is_missing()
+        || pattern.has_error()
+        || pattern.is_missing()
+        || (require_module_context && !globs.pattern_context(path, identifier)?)
     {
         return Ok(false);
     }
