@@ -203,6 +203,46 @@ requires a separate API decision; no facade, compatibility shim or re-export is
 synthesized. An unsupported consumer route remains a written-binding or
 conditional-context blocker, not permission to bypass it with an override.
 
+### Opt-in standard `matches!` consumers
+
+`standard_matches_assertions` is an optional list of whole-invocation
+`SourceAnchor` objects: `{path, range:{start_byte,end_byte}, expected_text}`.
+The range is half-open in the captured original file, excluding an enclosing
+semicolon or method chain. Omission, null or `[]` keeps conservative macro
+handling. The caller asserts only that each exact invocation uses the standard
+`matches!` contract, not that its spelling establishes macro identity. Stale,
+duplicate, overlapping, non-invocation or out-of-scope anchors return
+`INVALID_PARAMS` with indexed `error.field`.
+
+The bounded adapter accepts bare parenthesized `matches!` with a simple
+identifier/path/literal expression (optionally parenthesized), a written unit
+enum-variant path or top-level `|` alternatives, and an optional trailing comma.
+Wildcard/literal alternatives introduce no binding references. It parses copied
+argument slices solely to classify roles, maps sites back byte-exactly, verifies
+the written enum owner and unit variant, and uses ordinary import/path, lexical,
+module, access and collision checks. Only the enum-owner prefix can be spliced;
+`::Variant` remains exact. Strings/comments do not create reference sites.
+
+Known local/module/ancestor macro shadows, renamed imports, visible globs,
+`macro_use`, unknown providers and final destination shadows still refuse with
+original witnesses. Qualified macro names, guards, binders, tuple/record
+constructors, generics/associated paths, nested/token-generating macros and
+malformed/recovered syntax are outside the subset. Assertions are invocation
+specific: another macro's lexical or imported-alias veto is not waived. All
+independent API, attribute, module, trivia and final moved-binder blockers remain.
+
+Successful affected occurrences have `plan.binding_proofs` class
+`assumed_standard_matches`, containing original occurrence and invocation
+anchors, `item_ids`, actual `destination_path`, declaration and optional variant
+anchors, `written_route` and an explicit caller-assumption `basis`.
+`coverage.assumed_standard_matches` separately counts unique discharged
+occurrences, including omitted proof records; it never increments `ra_resolved`.
+With `resolve_semantic:false`, `semantic:"not_performed"` remains unchanged.
+There is no expansion, hygiene, compilation or equivalence verification. Review
+the full plan, externally apply it only when applicable, and run the caller's
+compiler/tests. Advisory macro token candidates never become proof merely from
+spelling.
+
 ### Opt-in standard-prelude assumptions
 
 `assume_standard_prelude` is a request-level boolean, default `false`. Omission or

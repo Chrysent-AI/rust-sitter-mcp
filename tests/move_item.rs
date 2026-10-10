@@ -8,6 +8,8 @@ mod dead_import_tests;
 mod derive_tests;
 #[path = "support/fixture_gen.rs"]
 mod fixture_gen;
+#[path = "support/matches_tests.rs"]
+mod matches_tests;
 #[path = "support/move_artifacts.rs"]
 mod move_artifacts;
 #[path = "support/prelude_scope_tests.rs"]

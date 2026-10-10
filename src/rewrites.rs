@@ -1,5 +1,6 @@
 //! Bounded written-binding repairs. Evidence is syntactic, never symbol resolution.
 mod associated;
+mod matches;
 use crate::{
     items::{self, DecisionReason, Item, ModuleEvidence, Need, ParsedFile},
     move_plan::{MoveRequest, RewriteTarget, VisibilityConsumer, VisibilityExplanation},
@@ -7,6 +8,7 @@ use crate::{
     result::{ByteRange, DomainError},
     scope::FileSnapshot,
 };
+pub use matches::MatchesProof;
 use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Instant};
 use tree_sitter::Node;
 
@@ -33,6 +35,7 @@ pub(crate) struct Analysis {
     pub repairs: Vec<Repair>,
     pub needs: Vec<Need>,
     pub descriptor_bytes: usize,
+    pub matches_proofs: Vec<MatchesProof>,
 }
 fn span(start: usize, end: usize) -> ByteRange {
     ByteRange {
@@ -117,6 +120,7 @@ fn common_region(left: &[String], right: &[String]) -> Vec<String> {
         .map(|(segment, _)| segment.clone())
         .collect()
 }
+#[derive(Clone)]
 struct VisibilityRegion {
     defining: Vec<String>,
     required: Vec<String>,
@@ -132,7 +136,7 @@ impl VisibilityRegion {
         }
     }
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct VisibilityObservations {
     consumers: Vec<VisibilityConsumer>,
     preserved_original_access_regions: Vec<Vec<String>>,
@@ -318,6 +322,9 @@ struct Analyzer<'a> {
     exceeded: bool,
     controls: (Instant, &'a AtomicBool),
     pattern_routes: items::GlobRoutes<'a>,
+    matches_ledger: Vec<matches::Invocation>,
+    matches_proofs: Vec<MatchesProof>,
+    active_matches: Option<ByteRange>,
 }
 impl Analyzer<'_> {
     fn lexical_binding(
@@ -1522,6 +1529,50 @@ impl Analyzer<'_> {
                 stack.push(node.named_child(i as u32).expect("child"));
             }
         }
+        for proof in &self.matches_proofs {
+            if proof.anchor.path != path {
+                continue;
+            }
+            let text = if proof.variant.is_some() {
+                proof
+                    .anchor
+                    .expected_text
+                    .rsplit_once("::")
+                    .map(|(owner, _)| owner)
+                    .unwrap_or("")
+            } else {
+                proof.anchor.expected_text.as_str()
+            };
+            if text != binding {
+                continue;
+            }
+            let range = span(
+                proof.anchor.range.start_byte,
+                proof.anchor.range.start_byte + text.len(),
+            );
+            let node = self.parsed[path]
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(range.start_byte, range.start_byte + 1)?;
+            if self.consumer(path, node) != self.consumer(path, owner)
+                || self.lexical_module(path, node, false).as_deref() != Some(module)
+                || owner.parent().is_none_or(|p| {
+                    p.kind() != "source_file"
+                        && (p.start_byte() > node.start_byte() || p.end_byte() < node.end_byte())
+                })
+            {
+                continue;
+            }
+            reference_bytes += path.len() + text.len() + 128;
+            if self.descriptor_bytes + reference_bytes > 128 * 1024 * 1024 {
+                self.exceeded = true;
+                return None;
+            }
+            let a = anchor(self.files, path, &range);
+            if !references.contains(&a) {
+                references.push(a);
+            }
+        }
         Some(references)
     }
     fn resolve_use(
@@ -1706,6 +1757,7 @@ impl Analyzer<'_> {
                                 self.controls.1,
                             )
                             .unwrap_or(true)
+                            && !self.matches_alias_repair(need, candidate, &leaf.binding)
                         {
                             need.reason = DecisionReason::MacroContextUnexamined;
                             need.category = "macro_dependency";
@@ -1980,10 +2032,13 @@ impl Analyzer<'_> {
         found
     }
     fn path_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
+        self.path_site_repair(need, node, span(node.start_byte(), node.end_byte()))
+    }
+    fn path_site_repair(&mut self, need: &mut Need, node: Node<'_>, range: ByteRange) -> bool {
         if items::check(self.controls.0, self.controls.1).is_err() {
             return false;
         }
-        let text = &self.files[&need.path].source[node.byte_range()];
+        let text = &self.files[&need.path].source[range.start_byte..range.end_byte];
         let Some(old_module) = self.lexical_module(&need.path, node, false) else {
             need.reason = DecisionReason::ConditionalOrInheritedContext;
             need.category = "module_context";
@@ -1997,7 +2052,7 @@ impl Analyzer<'_> {
         let first = text.split("::").next().unwrap_or("");
         let local_aliases = self.scoped_imports(&need.path, &old_module, node, first);
         if !matches!(first, "crate" | "self" | "super") {
-            let Ok(assessment) = items::lexical_assessment_with_globs(
+            let Ok(assessment) = items::lexical_assessment_with_matches(
                 &need.path,
                 node,
                 &self.files[&need.path].source,
@@ -2006,6 +2061,7 @@ impl Analyzer<'_> {
                 local_aliases.len() == 1,
                 self.cfg.as_ref(),
                 Some(&self.pattern_routes),
+                self.active_matches.as_ref(),
             ) else {
                 return false;
             };
@@ -2057,12 +2113,7 @@ impl Analyzer<'_> {
             return false;
         }
         if after != old || old_module != using {
-            self.source_repair(
-                need,
-                span(node.start_byte(), node.end_byte()),
-                after,
-                "path",
-            );
+            self.source_repair(need, range.clone(), after, "path");
             self.path_evidence(need, &resolved.evidence);
         }
         self.visibility_need(
@@ -2074,7 +2125,7 @@ impl Analyzer<'_> {
             access(
                 self.files,
                 &need.path,
-                &span(node.start_byte(), node.end_byte()),
+                &range,
                 "written_path",
                 &old_module,
                 &using,
@@ -2650,13 +2701,15 @@ impl Analyzer<'_> {
                             .is_some_and(|c| c.module_segments.starts_with(&scope))
                 });
         }
+        if need.reason == DecisionReason::MacroContextUnexamined && self.matches_repair(need) {
+            return true;
+        }
         if need.category != "unsupported_dependency_form"
             && need.reason != DecisionReason::LexicalContextUnproved
         {
             return false;
         }
         let data = &self.parsed[&need.path];
-        let source = &self.files[&need.path].source;
         let Some(node) = data
             .tree
             .root_node()
@@ -2686,6 +2739,10 @@ impl Analyzer<'_> {
         if !matches!(node.kind(), "identifier" | "type_identifier") {
             return false;
         }
+        self.bare_site_repair(need, node)
+    }
+    fn bare_site_repair(&mut self, need: &mut Need, node: Node<'_>) -> bool {
+        let source = &self.files[&need.path].source;
         let name = &source[node.byte_range()];
         let consumer = self.consumer(&need.path, node);
         let Some(module) = self.lexical_module(&need.path, node, false) else {
@@ -2710,7 +2767,7 @@ impl Analyzer<'_> {
             })
             .cloned()
             .collect();
-        let Ok(assessment) = items::lexical_assessment_with_globs(
+        let Ok(assessment) = items::lexical_assessment_with_matches(
             &need.path,
             node,
             source,
@@ -2719,6 +2776,7 @@ impl Analyzer<'_> {
             !local_imports.is_empty(),
             self.cfg.as_ref(),
             Some(&self.pattern_routes),
+            self.active_matches.as_ref(),
         ) else {
             return false;
         };
@@ -2973,7 +3031,17 @@ pub(crate) fn analyze(
             controls,
         )?,
         controls,
+        matches_ledger: matches::validate(request, files, parsed, controls)?,
+        matches_proofs: Vec::new(),
+        active_matches: None,
     };
+    analyzer.descriptor_bytes = request
+        .standard_matches_assertions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|a| a.path.len() + a.expected_text.len() + 256)
+        .sum();
     for (path, data) in parsed {
         let mut stack = vec![data.tree.root_node()];
         while let Some(node) = stack.pop() {
@@ -3075,6 +3143,7 @@ pub(crate) fn analyze(
     }
     analyzer.explain_visibility()?;
     remaining.extend(analyzer.choices()?);
+    remaining.extend(analyzer.matches_final_shadows());
     items::check(controls.0, controls.1)?;
     if analyzer.exceeded {
         return Err(DomainError::new(
@@ -3086,5 +3155,6 @@ pub(crate) fn analyze(
         repairs: analyzer.repairs,
         needs: remaining,
         descriptor_bytes: analyzer.descriptor_bytes,
+        matches_proofs: analyzer.matches_proofs,
     })
 }

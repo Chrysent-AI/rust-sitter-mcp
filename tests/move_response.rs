@@ -61,6 +61,36 @@ fn run(repo: &Fixture, args: Value) -> Value {
 }
 
 #[test]
+fn assumed_matches_coverage_survives_proof_omission() {
+    let selected = "pub(crate) enum Choice { First }";
+    let patterns = std::iter::repeat_n("Choice::First", 80)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let invocation = format!("matches!(value, {patterns})");
+    let repo = fixture(&format!(
+        "{selected}\nfn probe(value: Choice) -> bool {{ {invocation} }}\n"
+    ));
+    let mut args = request(&repo, &[selected]);
+    args["standard_matches_assertions"] =
+        json!([anchor(&repo, "cases/layout/source.rs", &invocation)]);
+    args["limits"] = json!({"response_bytes":65536});
+    let result = run(&repo, args);
+    assert_eq!(
+        result["coverage"]["assumed_standard_matches"], 80,
+        "{result}"
+    );
+    assert!(
+        result["counts"]["omissions"]["binding_proofs"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "{result}"
+    );
+    assert!(result["coverage"].get("ra_resolved").is_none());
+    assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+}
+
+#[test]
 fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
     let selected: Vec<_> = (0..30)
         .map(|i| {

@@ -26,7 +26,7 @@ pub(crate) use lexical::LexicalLocation;
 pub use lexical::LexicalUncertainty;
 pub(crate) use lexical::{
     LexicalBinding, LexicalReason, PatternBinding, final_pattern_binding, lexical_assessment,
-    lexical_assessment_with_globs, pattern_bindings,
+    lexical_assessment_with_globs, lexical_assessment_with_matches, pattern_bindings,
 };
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;

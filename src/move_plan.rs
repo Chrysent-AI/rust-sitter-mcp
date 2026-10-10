@@ -204,6 +204,8 @@ pub struct MoveRequest {
     /// Resolve a bounded set of written occurrences under an explicit configuration.
     #[serde(default)]
     pub resolve_semantic: bool,
+    /// Assert the standard matches! contract for exact whole invocations only.
+    pub standard_matches_assertions: Option<Vec<SourceAnchor>>,
     pub semantic_configuration: Option<semantic::Configuration>,
 }
 impl MoveRequest {
@@ -535,6 +537,7 @@ pub struct WorkLimits {
 #[serde(untagged)]
 pub enum BindingProof {
     Standard(prelude::BindingProof),
+    AssumedStandardMatches(crate::rewrites::MatchesProof),
     RaResolved(Box<semantic::Proof>),
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -2253,6 +2256,13 @@ fn build(
         &mut result.counts.reference_candidates,
     )?;
     result.account(analysis.descriptor_bytes)?;
+    result.coverage.assumed_standard_matches = analysis.matches_proofs.len();
+    result.plan.binding_proofs.extend(
+        analysis
+            .matches_proofs
+            .drain(..)
+            .map(BindingProof::AssumedStandardMatches),
+    );
     if request.assume_standard_prelude {
         let proofs = prelude::discharge(
             &files,

@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+* Add invocation-specific `standard_matches_assertions` for bounded standard
+  `matches!` consumers, with separate `assumed_standard_matches` proofs and
+  coverage. Preserve ordinary written-binding checks, exact variant suffixes,
+  known-shadow refusals and conservative defaults; no expansion or semantic
+  verification is claimed.
+
 ### Changed
 
 * Prove spelling-specific pattern binders through fully admitted noncompeting

@@ -531,6 +531,30 @@ pub(crate) fn lexical_assessment_with_globs(
     cfg: Option<&super::DeclaredCfg>,
     globs: Option<&super::GlobRoutes<'_>>,
 ) -> Result<LexicalAssessment, DomainError> {
+    lexical_assessment_with_matches(
+        path,
+        node,
+        source,
+        name,
+        controls,
+        proven_import,
+        cfg,
+        globs,
+        None,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lexical_assessment_with_matches(
+    path: &str,
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+    proven_import: bool,
+    cfg: Option<&super::DeclaredCfg>,
+    globs: Option<&super::GlobRoutes<'_>>,
+    invocation: Option<&ByteRange>,
+) -> Result<LexicalAssessment, DomainError> {
     lexical_context(
         path,
         node,
@@ -542,6 +566,7 @@ pub(crate) fn lexical_assessment_with_globs(
         true,
         cfg,
         globs,
+        invocation,
     )
 }
 /// Audit written bindings only for test-risk acknowledgment, never as a binding proof.
@@ -564,6 +589,7 @@ pub(crate) fn test_consumer_binding(
         false,
         None,
         None,
+        None,
     )
     .map(|a| a.binding)
 }
@@ -579,6 +605,7 @@ fn lexical_context(
     statement_macros: bool,
     cfg: Option<&super::DeclaredCfg>,
     globs: Option<&super::GlobRoutes<'_>>,
+    invocation: Option<&ByteRange>,
 ) -> Result<LexicalAssessment, DomainError> {
     // Direct invocations, macro expression statements and unexamined outer
     // attributes can introduce block items, visible even before the expansion.
@@ -611,12 +638,21 @@ fn lexical_context(
                         Some(statement),
                     ));
                 }
+                let macro_node = if statement.kind() == "macro_invocation" {
+                    Some(statement)
+                } else if statement.kind() == "expression_statement" {
+                    statement
+                        .named_child(0)
+                        .filter(|n| n.kind() == "macro_invocation")
+                } else {
+                    None
+                };
                 if statement_macros
-                    && (statement.kind() == "macro_invocation"
-                        || (statement.kind() == "expression_statement"
-                            && statement
-                                .named_child(0)
-                                .is_some_and(|n| n.kind() == "macro_invocation")))
+                    && macro_node.is_some_and(|n| {
+                        invocation.is_none_or(|r| {
+                            r.start_byte != n.start_byte() || r.end_byte != n.end_byte()
+                        })
+                    })
                 {
                     let mut assessment = uncertain(
                         path,
@@ -1090,6 +1126,7 @@ pub(crate) fn local(
         true,
         None,
         globs,
+        None,
     )
     .is_ok_and(|a| a.binding == LexicalBinding::Independent)
 }

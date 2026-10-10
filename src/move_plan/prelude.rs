@@ -45,6 +45,9 @@ pub struct MoveCoverage {
     /// Number of unshadowed compiler-built-in derive names discharged.
     #[serde(skip_serializing_if = "is_zero")]
     pub standard_builtin_derive: usize,
+    /// Occurrences relying on an invocation-specific standard matches! assertion.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub assumed_standard_matches: usize,
     /// Occurrences discharged by pure RA resolution, independent of caller assumptions.
     #[serde(skip_serializing_if = "is_zero")]
     pub ra_resolved: usize,
