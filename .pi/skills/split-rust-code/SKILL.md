@@ -136,6 +136,8 @@ If `span.text` is `null` or `text_omitted: true`, obtain complete bytes this way
 
 **Probe before large batches.** Submit 1–2 representative items first. If the probe blocks with any `unsupported_in_engine` route — `member_or_constructor_unproved`, `external_or_missing_binding`, `macro_context_unexamined`, `lexical_context_unproved`, `glob_binding_unproved`, `conditional_or_inherited_context` — on the items' own bodies (method calls, prelude/external types, macro invocations, `#[derive]` attributes) **or their consumers** (call sites inside macros, `tokio::select!`, inline test modules), every similar item will block too: that is the syntactic-only boundary, not a recoverable error. Rethink the selection or produce a design report before spending a large call.
 
+Written lexical proof supports ordered if/while `&&` let chains with admitted patterns: bindings start in later operands and the success body, not their own initializer, earlier operands, else branches or following code. Disjoint patterns preserve outer lookup; later binders shadow earlier ones. Parenthesized Boolean operands are supported, not parenthesized let conditions. Closures may capture locals; nested items cannot. Let-chain match guards and independent pattern/constant competition, glob, constructor, method, macro, conditional and recovery uncertainty still block; no evidence flag is needed or waived.
+
 Submit all moves as **one batch** (the server plans them together, all-or-nothing):
 
 **Optional `move_item` evidence flags** (default off):

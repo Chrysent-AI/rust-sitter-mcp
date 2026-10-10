@@ -383,7 +383,7 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
             "unsupported_pattern",
         ),
         (
-            "fn caller() { if let Some(other) = value && other { selected(); } }",
+            "fn caller() { if let A(other) | B(other) = value && other { selected(); } }",
             "unsupported_pattern",
         ),
         ("fn caller() { m!(); selected(); }", "unsupported_pattern"),
@@ -449,6 +449,8 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
 fn binding_scope_boundaries_keep_real_file_consumers_repairable() {
     for caller in [
         "let selected = selected;",
+        "if let [other] = [selected] && true { other(); }",
+        "while let [other] = [selected] && true { other(); break; }",
         "for selected in [selected] {}",
         "if let Some(selected) = Some(selected()) {} else { selected(); }",
         "while let Some(selected) = Some(selected()) { break; }",
@@ -814,6 +816,76 @@ fn path_prefix_and_caller_selected_alias_fail_with_specific_witnesses() {
                 && d["lexical_uncertainty"]["reason"] == "identifier_pattern_binding_or_constant"),
         "{result}"
     );
+}
+#[test]
+fn ordered_chain_extractions_apply_and_compile_without_semantic_assumptions() {
+    for moved in [
+        "fn moved(input: u8) -> u8 { if let [first] = [input] && (first > 0) && let [second] = [first + input] { second } else { input } }",
+        "fn moved(mut input: u8) -> u8 { while let [first] = [input] && first > 0 && let [second] = [first - 1] { input = second; } input }",
+        "fn moved(input: u8) -> u8 { if let [input] = [input + 1] && let [input] = [input + 1] && input > 0 { let capture = || input; capture() } else { input } }",
+    ] {
+        let repo = spawner_precision::load(moved);
+        compile(&repo);
+        let result = run(&repo, request(&repo, moved));
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        let applied = move_artifacts::apply(&repo, &result);
+        compile(&applied);
+        assert!(
+            fs::read_to_string(
+                applied
+                    .0
+                    .join("cases/precision/subagent/probe_constants.rs")
+            )
+            .unwrap()
+            .contains(moved)
+        );
+    }
+}
+#[test]
+fn chain_improvement_never_waives_independent_move_blockers() {
+    for (prefix, moved, reason) in [
+        (
+            "",
+            "fn moved(input: u8) { if let [binding] = [input] && binding > 0 { binding.count_ones(); } }",
+            "member_or_constructor_unproved",
+        ),
+        (
+            "use external::*;\n",
+            "fn moved(input: u8) { if let [binding] = [input] && binding > 0 { binding; } }",
+            "glob_binding_unproved",
+        ),
+        (
+            "",
+            "fn moved(input: u8) { if let [binding] = [input] && binding > 0 { unknown(binding); } }",
+            "external_or_missing_binding",
+        ),
+        (
+            "",
+            "fn moved(input: u8) { if let [binding] = [input] && binding > 0 { emit!(); } }",
+            "macro_context_unexamined",
+        ),
+    ] {
+        let repo = spawner_precision::load(&format!("{prefix}{moved}\n"));
+        let mut args = request(&repo, moved);
+        args["moves"][0]["destination"] = json!({"kind":"new_child", "parent_path":SOURCE, "path":"cases/precision/subagent/spawner/detail.rs"});
+        let result = run(&repo, args);
+        assert_eq!(result["schema_version"], 3);
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == reason),
+            "{result}"
+        );
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        assert!(
+            result["plan"]["directory_preconditions"].is_null(),
+            "{result}"
+        );
+    }
 }
 #[test]
 fn mandatory_lexical_witnesses_survive_display_caps_or_are_explicitly_omitted() {

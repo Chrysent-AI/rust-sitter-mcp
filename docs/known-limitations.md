@@ -9,6 +9,15 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Proof-tier boundaries
 
+- **Let-chain proof is lexical only.** Supported if/while `&&` chains expose
+  admitted pattern bindings to later operands and the success body, not their
+  own initializers, earlier operands, else branches or following code. Disjoint
+  patterns preserve outer lookup, and later binders shadow earlier ones. Nested
+  closures may capture bindings; nested items cannot. Parenthesized Boolean
+  operands are supported, not parenthesized let conditions. Let-chain match
+  guards, unsupported/recovered patterns, macro/conditional context, unresolved
+  glob constant competition and constructor identity remain independent refusals.
+
 - **Sysroot and external-crate member calls block.** Method calls on `std`/external types
   (`.iter()`, `.push()`, `format!`-adjacent chains) cannot be proven: the admitted graph
   contains only explicitly configured crates, and no sysroot is loaded. Crate-local
