@@ -76,7 +76,7 @@ impl Need {
     }
 }
 enum PatternProof<'a> {
-    Binds,
+    Binds(Node<'a>, Vec<crate::plan::SourceAnchor>),
     Disjoint,
     Unproved(LexicalReason, Node<'a>),
 }
@@ -147,12 +147,15 @@ enum IdentifierPosition {
     Ambiguous,
 }
 /// Only binding positions are visited. Every child must be admitted, even after a binder.
+#[allow(clippy::too_many_arguments)]
 fn pattern_proof<'a>(
     pattern: Node<'a>,
     source: &str,
     name: &str,
     simple: bool,
     controls: (Instant, &AtomicBool),
+    path: &str,
+    globs: Option<&super::GlobRoutes<'_>>,
 ) -> Result<PatternProof<'a>, DomainError> {
     let mut stack = vec![(
         pattern,
@@ -163,6 +166,8 @@ fn pattern_proof<'a>(
         },
     )];
     let mut competitor = None;
+    let mut provenance = Vec::new();
+    let mut binder = None;
     let mut binds = false;
     let mut unknown = None;
     while let Some((node, position)) = stack.pop() {
@@ -182,8 +187,17 @@ fn pattern_proof<'a>(
                             let competing = if let Some(competing) = competitor {
                                 competing
                             } else {
-                                let competing =
+                                let original =
                                     super::pattern_name_competes(pattern, source, name, controls)?;
+                                let competing = if original && globs.is_some() {
+                                    let (competing, trace) = super::pattern_competition(
+                                        pattern, source, name, controls, path, globs,
+                                    )?;
+                                    provenance = trace;
+                                    competing
+                                } else {
+                                    original
+                                };
                                 competitor = Some(competing);
                                 competing
                             };
@@ -192,6 +206,9 @@ fn pattern_proof<'a>(
                     };
                     if definite {
                         binds = true;
+                        if binder.replace(node).is_some() && !provenance.is_empty() {
+                            unknown.get_or_insert((LexicalReason::UnsupportedPattern, node));
+                        }
                     } else {
                         unknown.get_or_insert((
                             LexicalReason::IdentifierPatternBindingOrConstant,
@@ -310,7 +327,7 @@ fn pattern_proof<'a>(
     Ok(if let Some((reason, node)) = unknown {
         PatternProof::Unproved(reason, node)
     } else if binds {
-        PatternProof::Binds
+        PatternProof::Binds(binder.expect("binding witness"), provenance)
     } else {
         PatternProof::Disjoint
     })
@@ -323,6 +340,7 @@ pub(crate) fn pattern_uncertainty(
     node: Node<'_>,
     source: &str,
     controls: (Instant, &AtomicBool),
+    globs: Option<&super::GlobRoutes<'_>>,
 ) -> Result<Option<LexicalAssessment>, DomainError> {
     let name = source[node.byte_range()].trim_start_matches("r#");
     let mut child = node;
@@ -346,8 +364,10 @@ pub(crate) fn pattern_uncertainty(
                     "let_declaration" | "parameter" | "closure_parameters"
                 ),
                 controls,
+                path,
+                globs,
             )? && witness == node
-                && super::pattern_name_competes(child, source, name, controls)?
+                && super::pattern_competition(child, source, name, controls, path, globs)?.0
             {
                 return Ok(Some(uncertain(
                     path,
@@ -376,6 +396,7 @@ fn assess_pattern(
     reference: Node<'_>,
     controls: (Instant, &AtomicBool),
     cfg: Option<&super::DeclaredCfg>,
+    globs: Option<&super::GlobRoutes<'_>>,
 ) -> Result<Option<LexicalAssessment>, DomainError> {
     if attributed(scope, source, cfg) || attributed(pattern, source, cfg) {
         return Ok(Some(uncertain(
@@ -391,8 +412,8 @@ fn assess_pattern(
         "let_declaration" | "function_item" | "closure_expression"
     );
     Ok(
-        match pattern_proof(pattern, source, name, simple, controls)? {
-            PatternProof::Binds => Some(value_binding(path, name, scope, pattern, reference)),
+        match pattern_proof(pattern, source, name, simple, controls, path, globs)? {
+            PatternProof::Binds(_, _) => Some(value_binding(path, name, scope, pattern, reference)),
             PatternProof::Disjoint => None,
             PatternProof::Unproved(reason, p) => {
                 Some(uncertain(path, name, scope, reason, Some(p)))
@@ -416,6 +437,7 @@ fn assess_chain(
     reference: Node<'_>,
     controls: (Instant, &AtomicBool),
     cfg: Option<&super::DeclaredCfg>,
+    globs: Option<&super::GlobRoutes<'_>>,
 ) -> Result<Option<LexicalAssessment>, DomainError> {
     let mut stack = vec![chain];
     let mut preceding = Vec::new();
@@ -445,9 +467,9 @@ fn assess_chain(
     // own pattern is excluded, so its initializer still sees the outer binding.
     for pattern in preceding.into_iter().rev() {
         check(controls.0, controls.1)?;
-        if let Some(proof) =
-            assess_pattern(path, scope, pattern, source, name, reference, controls, cfg)?
-        {
+        if let Some(proof) = assess_pattern(
+            path, scope, pattern, source, name, reference, controls, cfg, globs,
+        )? {
             return Ok(Some(proof));
         }
     }
@@ -473,6 +495,19 @@ pub(crate) fn lexical_assessment_with_cfg(
     proven_import: bool,
     cfg: Option<&super::DeclaredCfg>,
 ) -> Result<LexicalAssessment, DomainError> {
+    lexical_assessment_with_globs(path, node, source, name, controls, proven_import, cfg, None)
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lexical_assessment_with_globs(
+    path: &str,
+    node: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+    proven_import: bool,
+    cfg: Option<&super::DeclaredCfg>,
+    globs: Option<&super::GlobRoutes<'_>>,
+) -> Result<LexicalAssessment, DomainError> {
     lexical_context(
         path,
         node,
@@ -483,6 +518,7 @@ pub(crate) fn lexical_assessment_with_cfg(
         None,
         true,
         cfg,
+        globs,
     )
 }
 /// Audit written bindings only for test-risk acknowledgment, never as a binding proof.
@@ -504,6 +540,7 @@ pub(crate) fn test_consumer_binding(
         None,
         false,
         None,
+        None,
     )
     .map(|a| a.binding)
 }
@@ -518,6 +555,7 @@ fn lexical_context(
     boundary: Option<Node<'_>>,
     statement_macros: bool,
     cfg: Option<&super::DeclaredCfg>,
+    globs: Option<&super::GlobRoutes<'_>>,
 ) -> Result<LexicalAssessment, DomainError> {
     // Direct invocations, macro expression statements and unexamined outer
     // attributes can introduce block items, visible even before the expansion.
@@ -627,6 +665,7 @@ fn lexical_context(
                         node,
                         controls,
                         cfg,
+                        globs,
                     )? {
                         return Ok(proof);
                     }
@@ -672,9 +711,9 @@ fn lexical_context(
                     }
                 }
             }
-            if let Some(proof) =
-                assess_pattern(path, parent, pattern, source, name, node, controls, cfg)?
-            {
+            if let Some(proof) = assess_pattern(
+                path, parent, pattern, source, name, node, controls, cfg, globs,
+            )? {
                 return Ok(proof);
             }
         }
@@ -693,8 +732,9 @@ fn lexical_context(
                 if let Some(pattern) = parameter
                     .child_by_field_name("pattern")
                     .or_else(|| (parent.kind() == "closure_expression").then_some(parameter))
-                    && let Some(proof) =
-                        assess_pattern(path, parent, pattern, source, name, node, controls, cfg)?
+                    && let Some(proof) = assess_pattern(
+                        path, parent, pattern, source, name, node, controls, cfg, globs,
+                    )?
                 {
                     return Ok(proof);
                 }
@@ -728,8 +768,9 @@ fn lexical_context(
                 }
                 if statement.kind() == "let_declaration"
                     && let Some(pattern) = statement.child_by_field_name("pattern")
-                    && let Some(proof) =
-                        assess_pattern(path, statement, pattern, source, name, node, controls, cfg)?
+                    && let Some(proof) = assess_pattern(
+                        path, statement, pattern, source, name, node, controls, cfg, globs,
+                    )?
                 {
                     return Ok(proof);
                 }
@@ -814,24 +855,210 @@ fn lexical_context(
     }
     Ok(LexicalAssessment::definite(LexicalBinding::Absent))
 }
+/// Private provenance is limited to bindings admitted by spelling-specific glob proof.
+#[derive(Serialize)]
+pub(crate) struct GlobBinding {
+    pub item_id: String,
+    pub destination: String,
+    pub identifier: LexicalLocation,
+    pub pattern: LexicalLocation,
+    pub scope: LexicalLocation,
+    pub spelling: String,
+    pub routes: Vec<crate::plan::SourceAnchor>,
+    pub references: Vec<LexicalLocation>,
+}
+fn pattern_site<'a>(
+    node: Node<'a>,
+    controls: (Instant, &AtomicBool),
+) -> Result<Option<(Node<'a>, Node<'a>, bool)>, DomainError> {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        check(controls.0, controls.1)?;
+        if (matches!(
+            parent.kind(),
+            "let_declaration" | "parameter" | "let_condition" | "match_arm" | "for_expression"
+        ) && parent.child_by_field_name("pattern") == Some(child))
+            || parent.kind() == "closure_parameters"
+        {
+            return Ok(Some((
+                parent,
+                child,
+                matches!(
+                    parent.kind(),
+                    "let_declaration" | "parameter" | "closure_parameters"
+                ),
+            )));
+        }
+        if matches!(parent.kind(), "block" | "source_file") {
+            break;
+        }
+        child = parent;
+    }
+    Ok(None)
+}
+pub(crate) fn glob_bindings(
+    files: &std::collections::BTreeMap<String, super::FileSnapshot>,
+    parsed: &std::collections::BTreeMap<String, super::ParsedFile>,
+    selected: &[(String, super::Item, String)],
+    globs: &super::GlobRoutes<'_>,
+    controls: (Instant, &AtomicBool),
+) -> Result<Vec<GlobBinding>, DomainError> {
+    let mut ledger = Vec::new();
+    let mut bytes = 0;
+    let mut work = 0;
+    for (path, item, destination) in selected {
+        check(controls.0, controls.1)?;
+        let source = &files[path].source;
+        let root = parsed[path]
+            .tree
+            .root_node()
+            .named_descendant_for_byte_range(item.span.range.start_byte, item.span.range.end_byte)
+            .expect("selected item");
+        let mut stack = vec![root];
+        let mut references = Vec::new();
+        let start = ledger.len();
+        while let Some(node) = stack.pop() {
+            check(controls.0, controls.1)?;
+            if matches!(
+                node.kind(),
+                "token_tree"
+                    | "macro_definition"
+                    | "macro_invocation"
+                    | "attribute_item"
+                    | "inner_attribute_item"
+            ) {
+                continue;
+            }
+            if node.kind() == "identifier" {
+                work += 1;
+                if work > 100_000 {
+                    return Err(DomainError::new(
+                        "reference_work_limit",
+                        "glob pattern ledger work guard reached",
+                    ));
+                }
+                if super::reference_role(node) {
+                    references.push(node);
+                } else if let Some((scope, pattern, simple)) = pattern_site(node, controls)? {
+                    let name = source[node.byte_range()].trim_start_matches("r#");
+                    if let PatternProof::Binds(identifier, routes) =
+                        pattern_proof(pattern, source, name, simple, controls, path, Some(globs))?
+                        && identifier == node
+                        && !routes.is_empty()
+                    {
+                        let entry = GlobBinding {
+                            item_id: item.id.clone(),
+                            destination: destination.clone(),
+                            identifier: location(path, identifier),
+                            pattern: location(path, pattern),
+                            scope: location(path, scope),
+                            spelling: name.into(),
+                            routes,
+                            references: Vec::new(),
+                        };
+                        bytes += serde_json::to_vec(&entry)
+                            .expect("private provenance")
+                            .len()
+                            + 256;
+                        if bytes > 128 * 1024 * 1024 {
+                            return Err(DomainError::new(
+                                "analysis_descriptor_bytes",
+                                "glob pattern ledger guard reached",
+                            ));
+                        }
+                        ledger.push(entry);
+                    }
+                }
+            }
+            for i in (0..node.named_child_count()).rev() {
+                check(controls.0, controls.1)?;
+                stack.push(node.named_child(i as u32).expect("child"));
+            }
+        }
+        for node in references {
+            check(controls.0, controls.1)?;
+            let name = source[node.byte_range()].trim_start_matches("r#");
+            if !ledger[start..].iter().any(|b| b.spelling == name) {
+                continue;
+            }
+            let assessment = lexical_assessment_with_globs(
+                path,
+                node,
+                source,
+                name,
+                controls,
+                false,
+                None,
+                Some(globs),
+            )?;
+            if assessment.binding == LexicalBinding::Independent
+                && let Some(binding) = assessment.definite_binding
+            {
+                for entry in &mut ledger[start..] {
+                    check(controls.0, controls.1)?;
+                    if entry.spelling == name && entry.pattern.range == binding.range {
+                        bytes += path.len() + 256;
+                        if bytes > 128 * 1024 * 1024 {
+                            return Err(DomainError::new(
+                                "analysis_descriptor_bytes",
+                                "glob reference ledger guard reached",
+                            ));
+                        }
+                        entry.references.push(location(path, node));
+                    }
+                }
+            }
+        }
+    }
+    Ok(ledger)
+}
+pub(crate) fn final_glob_binding(
+    path: &str,
+    identifier: Node<'_>,
+    pattern: Node<'_>,
+    scope: Node<'_>,
+    source: &str,
+    globs: &super::GlobRoutes<'_>,
+    controls: (Instant, &AtomicBool),
+) -> Result<bool, DomainError> {
+    let Some((actual_scope, actual_pattern, simple)) = pattern_site(identifier, controls)? else {
+        return Ok(false);
+    };
+    if actual_scope != scope
+        || actual_pattern != pattern
+        || !globs.pattern_context(path, identifier)?
+    {
+        return Ok(false);
+    }
+    let name = source[identifier.byte_range()].trim_start_matches("r#");
+    // Recheck all final ancestors even when the source glob did not move.
+    if super::pattern_competition(pattern, source, name, controls, path, Some(globs))?.0 {
+        return Ok(false);
+    }
+    Ok(
+        matches!(pattern_proof(pattern, source, name, simple, controls, path, Some(globs))?, PatternProof::Binds(binder, _) if binder == identifier),
+    )
+}
 pub(crate) fn local(
+    path: &str,
     node: Node<'_>,
     item: Node<'_>,
     source: &str,
     name: &str,
-    deadline: Instant,
-    cancelled: &AtomicBool,
+    controls: (Instant, &AtomicBool),
+    globs: Option<&super::GlobRoutes<'_>>,
 ) -> bool {
     lexical_context(
-        "",
+        path,
         node,
         source,
         name,
-        (deadline, cancelled),
+        controls,
         false,
         Some(item),
         true,
         None,
+        globs,
     )
     .is_ok_and(|a| a.binding == LexicalBinding::Independent)
 }

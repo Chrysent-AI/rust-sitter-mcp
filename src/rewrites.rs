@@ -317,23 +317,26 @@ struct Analyzer<'a> {
     reference_candidates: &'a mut usize,
     exceeded: bool,
     controls: (Instant, &'a AtomicBool),
+    pattern_routes: items::GlobRoutes<'a>,
 }
 impl Analyzer<'_> {
     fn lexical_binding(
         &self,
+        path: &str,
         node: Node<'_>,
         source: &str,
         name: &str,
         proven_import: bool,
     ) -> items::LexicalBinding {
-        items::lexical_assessment_with_cfg(
-            "",
+        items::lexical_assessment_with_globs(
+            path,
             node,
             source,
             name,
             self.controls,
             proven_import,
             self.cfg.as_ref(),
+            Some(&self.pattern_routes),
         )
         .map(|a| a.binding)
         .unwrap_or(items::LexicalBinding::Uncertain)
@@ -1502,7 +1505,7 @@ impl Analyzer<'_> {
                 }) {
                     return None;
                 }
-                match self.lexical_binding(node, source, binding, true) {
+                match self.lexical_binding(path, node, source, binding, true) {
                     items::LexicalBinding::Independent => {}
                     items::LexicalBinding::Uncertain => return None,
                     items::LexicalBinding::Absent => references.push(anchor(
@@ -1543,7 +1546,7 @@ impl Analyzer<'_> {
             && aliases[0].leaf.public
             && !aliases[0].conditioned
             && text == first
-            && self.lexical_binding(node, &self.files[path].source, first, true)
+            && self.lexical_binding(path, node, &self.files[path].source, first, true)
                 == items::LexicalBinding::Absent
         {
             return self.resolve_in(path, module, text, false);
@@ -1552,7 +1555,7 @@ impl Analyzer<'_> {
             if aliases.len() != 1
                 || aliases[0].conditioned
                 || aliases[0].leaf.public
-                || self.lexical_binding(node, &self.files[path].source, first, true)
+                || self.lexical_binding(path, node, &self.files[path].source, first, true)
                     != items::LexicalBinding::Absent
             {
                 return None;
@@ -1567,7 +1570,7 @@ impl Analyzer<'_> {
             }
             return Some(format!("{base}{}", text.strip_prefix(first)?));
         }
-        if self.lexical_binding(node, &self.files[path].source, first, false)
+        if self.lexical_binding(path, node, &self.files[path].source, first, false)
             != items::LexicalBinding::Absent
         {
             return None;
@@ -1605,7 +1608,7 @@ impl Analyzer<'_> {
             let Some(old) = self.resolve_use(&need.path, &module, node, &leaf.path) else {
                 let first = leaf.path.split("::").next().unwrap_or("");
                 if !matches!(first, "crate" | "self" | "super")
-                    && let Ok(assessment) = items::lexical_assessment_with_cfg(
+                    && let Ok(assessment) = items::lexical_assessment_with_globs(
                         &need.path,
                         node,
                         source,
@@ -1613,6 +1616,7 @@ impl Analyzer<'_> {
                         self.controls,
                         true,
                         self.cfg.as_ref(),
+                        Some(&self.pattern_routes),
                     )
                     && assessment.binding == items::LexicalBinding::Uncertain
                 {
@@ -1687,8 +1691,13 @@ impl Analyzer<'_> {
                     if matches!(candidate.kind(), "macro_invocation" | "macro_definition") {
                         if self.lexical_module(&need.path, candidate, false).as_deref()
                             == Some(module.as_slice())
-                            && self.lexical_binding(candidate, source, &leaf.binding, false)
-                                != items::LexicalBinding::Independent
+                            && self.lexical_binding(
+                                &need.path,
+                                candidate,
+                                source,
+                                &leaf.binding,
+                                false,
+                            ) != items::LexicalBinding::Independent
                             && items::token_candidate(
                                 candidate,
                                 source,
@@ -1988,7 +1997,7 @@ impl Analyzer<'_> {
         let first = text.split("::").next().unwrap_or("");
         let local_aliases = self.scoped_imports(&need.path, &old_module, node, first);
         if !matches!(first, "crate" | "self" | "super") {
-            let Ok(assessment) = items::lexical_assessment_with_cfg(
+            let Ok(assessment) = items::lexical_assessment_with_globs(
                 &need.path,
                 node,
                 &self.files[&need.path].source,
@@ -1996,6 +2005,7 @@ impl Analyzer<'_> {
                 self.controls,
                 local_aliases.len() == 1,
                 self.cfg.as_ref(),
+                Some(&self.pattern_routes),
             ) else {
                 return false;
             };
@@ -2155,8 +2165,13 @@ impl Analyzer<'_> {
             RewriteTarget::Source { .. } => self.consumer(&repair.path, node?),
         };
         if let Some(node) = node
-            && self.lexical_binding(node, &self.files[&repair.path].source, first, true)
-                != items::LexicalBinding::Absent
+            && self.lexical_binding(
+                &repair.path,
+                node,
+                &self.files[&repair.path].source,
+                first,
+                true,
+            ) != items::LexicalBinding::Absent
         {
             return None;
         }
@@ -2448,7 +2463,7 @@ impl Analyzer<'_> {
                                 )
                                 .expect("reference");
                             if !new_binding.is_empty() {
-                                let assessment = items::lexical_assessment_with_cfg(
+                                let assessment = items::lexical_assessment_with_globs(
                                     &reference.path,
                                     node,
                                     &self.files[&reference.path].source,
@@ -2456,6 +2471,7 @@ impl Analyzer<'_> {
                                     self.controls,
                                     false,
                                     self.cfg.as_ref(),
+                                    Some(&self.pattern_routes),
                                 )?;
                                 if assessment.binding != items::LexicalBinding::Absent {
                                     self.account_lexical(&assessment.uncertainty);
@@ -2694,7 +2710,7 @@ impl Analyzer<'_> {
             })
             .cloned()
             .collect();
-        let Ok(assessment) = items::lexical_assessment_with_cfg(
+        let Ok(assessment) = items::lexical_assessment_with_globs(
             &need.path,
             node,
             source,
@@ -2702,6 +2718,7 @@ impl Analyzer<'_> {
             self.controls,
             !local_imports.is_empty(),
             self.cfg.as_ref(),
+            Some(&self.pattern_routes),
         ) else {
             return false;
         };
@@ -2948,6 +2965,13 @@ pub(crate) fn analyze(
         descriptor_bytes: 0,
         reference_candidates,
         exceeded: false,
+        pattern_routes: items::GlobRoutes::strict(
+            files,
+            parsed,
+            contexts,
+            &request.crate_root,
+            controls,
+        )?,
         controls,
     };
     for (path, data) in parsed {

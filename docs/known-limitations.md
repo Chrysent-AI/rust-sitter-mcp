@@ -9,6 +9,28 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Proof-tier boundaries
 
+- **Glob-assisted pattern proof has a direct written envelope.** `move_item`
+  can prove a composite-pattern binder when every relevant glob follows a fully
+  admitted accessible ordinary file/inline route or evidenced module alias to
+  direct written exports that cannot compete with its spelling. Same-name
+  const/static and unit/tuple constructors remain conservative competitors;
+  functions and type-only declarations are distinguished. Forwarding/imports
+  in the target, enum globs, unknown/external/unadmitted or ambiguous routes,
+  cfg/provider/derive attributes, macros, recovery, cycles and exhausted budgets
+  remain uncertainty. Consumer reachability exclusions do not prove namespace
+  absence, and third-file glob consumers still block without repair or waiver.
+- **The final pattern check covers only the new glob-assisted proof.** Every
+  such binder, including unread ones, and its affected reference identity must
+  survive exact origin mapping and revalidation against the complete assembled
+  bytes, final ancestors/globs/exporters and captured or validated creation
+  edges. Missing evidence or destination/companion competition withholds all
+  artifacts. This is not a general final lexical audit. A historical composite
+  binder proved without the new glob evidence can still become a constant
+  pattern after relocation into a competing destination; that pre-existing
+  limitation remains. Always compile/check the externally applied full batch.
+  No new assumption flag, public proof class or semantic claim accompanies this
+  capability.
+
 - **Let-chain proof is lexical only.** Supported if/while `&&` chains expose
   admitted pattern bindings to later operands and the success body, not their
   own initializers, earlier operands, else branches or following code. Disjoint

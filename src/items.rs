@@ -22,9 +22,11 @@ pub use chain::{
 };
 pub(crate) use chain::{DeclaredCfg, declaration_reasons, finalize_chain};
 pub(crate) use globs::GlobRoutes;
+pub(crate) use lexical::LexicalLocation;
 pub use lexical::LexicalUncertainty;
 pub(crate) use lexical::{
-    LexicalBinding, LexicalReason, lexical_assessment, lexical_assessment_with_cfg,
+    GlobBinding, LexicalBinding, LexicalReason, final_glob_binding, glob_bindings,
+    lexical_assessment, lexical_assessment_with_globs,
 };
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
@@ -596,6 +598,17 @@ pub(crate) fn pattern_name_competes(
     name: &str,
     controls: (Instant, &AtomicBool),
 ) -> Result<bool, DomainError> {
+    Ok(pattern_competition(pattern, source, name, controls, "", None)?.0)
+}
+pub(crate) fn pattern_competition(
+    pattern: Node<'_>,
+    source: &str,
+    name: &str,
+    controls: (Instant, &AtomicBool),
+    path: &str,
+    globs: Option<&GlobRoutes<'_>>,
+) -> Result<(bool, Vec<crate::plan::SourceAnchor>), DomainError> {
+    let mut proof = Vec::new();
     let same_name = |node: Node<'_>| {
         node.child_by_field_name("name")
             .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
@@ -603,6 +616,11 @@ pub(crate) fn pattern_name_competes(
     let mut ancestor = pattern.parent();
     while let Some(scope) = ancestor {
         check(controls.0, controls.1)?;
+        if let Some(globs) = globs
+            && !globs.safe_attributes(scope, source)?
+        {
+            return Ok((true, Vec::new()));
+        }
         let module_body = scope.kind() == "declaration_list"
             && scope.parent().is_some_and(|p| p.kind() == "mod_item");
         let written_item_scope = matches!(scope.kind(), "block" | "source_file") || module_body;
@@ -610,6 +628,17 @@ pub(crate) fn pattern_name_competes(
             for i in 0..scope.named_child_count() {
                 check(controls.0, controls.1)?;
                 let item = scope.named_child(i as u32).expect("scope item");
+                if let Some(globs) = globs
+                    && ((matches!(item.kind(), "attribute_item" | "inner_attribute_item")
+                        && !context_independent_attribute(&source[item.byte_range()]))
+                        || matches!(
+                            item.kind(),
+                            "foreign_mod_item" | "extern_crate_declaration" | "macro_definition"
+                        )
+                        || !globs.safe_attributes(item, source)?)
+                {
+                    return Ok((true, Vec::new()));
+                }
                 // Item output is unknown in the containing module and every
                 // intervening block/declaration scope, before or after the pattern.
                 if item.kind() == "macro_invocation"
@@ -618,29 +647,54 @@ pub(crate) fn pattern_name_competes(
                             .named_child(0)
                             .is_some_and(|n| n.kind() == "macro_invocation"))
                 {
-                    return Ok(true);
+                    return Ok((true, Vec::new()));
                 }
                 if !written_item_scope {
                     continue;
                 }
                 if matches!(item.kind(), "const_item" | "static_item") && same_name(item) {
-                    return Ok(true);
+                    return Ok((true, Vec::new()));
                 }
                 // Unit structs are written value constructors too. Do not prove
                 // a binder merely because the competitor is not an enum variant.
                 if item.kind() == "struct_item"
-                    && item.child_by_field_name("body").is_none()
+                    && item.child_by_field_name("body").is_none_or(|body| {
+                        globs.is_some() && body.kind() == "ordered_field_declaration_list"
+                    })
                     && same_name(item)
                 {
-                    return Ok(true);
+                    return Ok((true, Vec::new()));
                 }
-                if item.kind() == "use_declaration"
-                    && (use_facts(item, source, controls)?.0
-                        || use_leaves(item, source, controls)?
-                            .iter()
-                            .any(|l| l.binding.trim_start_matches("r#") == name))
-                {
-                    return Ok(true);
+                if item.kind() == "use_declaration" {
+                    if use_leaves(item, source, controls)?
+                        .iter()
+                        .any(|l| l.binding.trim_start_matches("r#") == name)
+                    {
+                        return Ok((true, Vec::new()));
+                    }
+                    if use_facts(item, source, controls)?.0 {
+                        match globs
+                            .map(|g| g.pattern_competition(path, item, name))
+                            .transpose()?
+                        {
+                            Some(globs::PatternCompetition::Noncompeting(trace)) => {
+                                let bytes = proof
+                                    .iter()
+                                    .chain(&trace)
+                                    .map(|a| a.path.len() + a.expected_text.len() + 128)
+                                    .sum::<usize>();
+                                if bytes > 128 * 1024 * 1024 || proof.len() + trace.len() > 100_000
+                                {
+                                    return Err(DomainError::new(
+                                        "analysis_descriptor_bytes",
+                                        "pattern competition evidence guard reached",
+                                    ));
+                                }
+                                proof.extend(trace);
+                            }
+                            _ => return Ok((true, Vec::new())),
+                        }
+                    }
                 }
                 if item.kind() == "enum_item"
                     && let Some(body) = item.child_by_field_name("body")
@@ -652,7 +706,7 @@ pub(crate) fn pattern_name_competes(
                             && variant.child_by_field_name("body").is_none()
                             && same_name(variant)
                         {
-                            return Ok(true);
+                            return Ok((true, Vec::new()));
                         }
                     }
                 }
@@ -667,13 +721,13 @@ pub(crate) fn pattern_name_competes(
                 check(controls.0, controls.1)?;
                 let parameter = parameters.named_child(i as u32).expect("generic parameter");
                 if parameter.kind() == "const_parameter" && same_name(parameter) {
-                    return Ok(true);
+                    return Ok((true, Vec::new()));
                 }
             }
         }
         ancestor = scope.parent();
     }
-    Ok(false)
+    Ok((false, proof))
 }
 /// Written use leaves retain original ranges; lists are never regenerated.
 #[derive(Clone)]
@@ -941,6 +995,7 @@ pub fn dependencies(
         .map(|c| c.crate_root.as_str())
         .unwrap_or("");
     let glob_routes = GlobRoutes::new(files, parsed, root, controls)?;
+    let pattern_routes = GlobRoutes::strict(files, parsed, contexts, root, controls)?;
     let mut needs = Vec::new();
     let mut seen_needs = 0;
     for (index, (path, item, destination)) in selected.iter().enumerate() {
@@ -1155,8 +1210,13 @@ pub fn dependencies(
             }
             if kind == "identifier"
                 && !reference_role(current)
-                && let Some(assessment) =
-                    lexical::pattern_uncertainty(source_path, current, source, controls)?
+                && let Some(assessment) = lexical::pattern_uncertainty(
+                    source_path,
+                    current,
+                    source,
+                    controls,
+                    Some(&pattern_routes),
+                )?
             {
                 let mut value = need(
                     DecisionReason::LexicalContextUnproved,
@@ -1189,7 +1249,15 @@ pub fn dependencies(
                 let own = item.enclosing_impl.is_none()
                     && item.name.as_deref().map(|n| n.trim_start_matches("r#")) == Some(name);
                 let bound = possible_locals.contains(name)
-                    && lexical::local(current, node, source, name, deadline, cancelled);
+                    && lexical::local(
+                        source_path,
+                        current,
+                        node,
+                        source,
+                        name,
+                        controls,
+                        Some(&pattern_routes),
+                    );
                 let co_moved = selected.iter().any(|(p, other, dest)| {
                     p == source_path
                         && dest == destination
@@ -1446,13 +1514,15 @@ pub fn dependencies(
                             let assessment = if path_reference {
                                 None
                             } else {
-                                Some(lexical_assessment(
+                                Some(lexical_assessment_with_globs(
                                     path,
                                     current,
                                     other_source,
                                     name,
                                     controls,
                                     false,
+                                    None,
+                                    Some(&pattern_routes),
                                 )?)
                             };
                             match assessment
@@ -1483,13 +1553,15 @@ pub fn dependencies(
                             let imports =
                                 glob_routes.consumer_imports(path, current, source_path, name)?;
                             if !imports.is_empty() {
-                                let assessment = lexical_assessment(
+                                let assessment = lexical_assessment_with_globs(
                                     path,
                                     current,
                                     other_source,
                                     name,
                                     controls,
                                     false,
+                                    None,
+                                    Some(&pattern_routes),
                                 )?;
                                 if assessment.binding != LexicalBinding::Independent {
                                     let mut value = need(

@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Prove spelling-specific pattern binders through fully admitted noncompeting
+  direct globs, rechecking every newly assisted binder and affected reference
+  against complete final batch bytes before publishing move artifacts. Unknown
+  routes, competing names and existing independent blockers still refuse;
+  historical unassisted locals do not gain a general final lexical audit.
 * Prove supported ordered if/while let-chain local scopes, preserving outer
   bindings and shadowing without relaxing independent move blockers.
 
