@@ -322,7 +322,7 @@ fn balanced_options_survive_full_compact_and_retained_historical_groups() {
             );
             assert_eq!(
                 retained["retention"]["provenance"]["server_version"],
-                "0.5.0"
+                env!("CARGO_PKG_VERSION")
             );
             let mut detail = json!({"analysis_handle":retained["retention"]["analysis_handle"],"snapshot_id":retained["snapshot_id"],"selector":{"kind":"page","collection":"groups","page_size":100},"limits":{"response_bytes":2097152}});
             let historical = client.call("get_split_detail", detail.clone());
