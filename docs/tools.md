@@ -1707,8 +1707,15 @@ These decision fields apply to both `move_item`'s `plan.decisions[]` and
   sibling-scope invocations alone do not compete.
   Successful let-else bindings are out of scope in the initializer and failure
   block; match-arm bindings apply only to the guard and arm value. Non-binding
-  literal/scoped-path or-pattern alternatives are admitted; binding or unresolved
-  bare alternatives remain unsupported. Macro/attribute vetoes still apply.
+  literal/scoped-path or-pattern alternatives are admitted. Well-formed composite
+  alternatives can also prove disjointness when none of their binding-capable
+  positions has the queried spelling (including a consumer path prefix or alias).
+  Constructor paths and explicit field labels are not binders; shorthand fields,
+  captures, explicit binders and ambiguous arguments are checked, including
+  nested alternatives. A matching possible binder in any alternative remains
+  unsupported: this negative proof does not establish a shared binder identity.
+  Macros, unknown shapes, recovery and exhausted budgets never prove disjointness.
+  Macro/attribute vetoes still apply.
   A same-spelled value binding does not prove a type reference independent;
   that namespace uncertainty remains blocked rather than silently discarding
   the type dependency. The main decision retains the original occurrence

@@ -17,6 +17,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Allow consumer path-prefix repair through well-formed composite pattern
+  alternatives that provably cannot bind the queried spelling. Matching possible
+  binders, macros, recovery and unknown syntax retain anchored uncertainty;
+  final moved-binder identity and independent blockers remain unchanged.
 * Withhold `move_item` artifacts when any proved written binder in a moved item
   loses final identity or encounters destination/companion competition, even
   without glob evidence or reads. Copy identifier, whole pattern and references

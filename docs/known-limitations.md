@@ -9,6 +9,13 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 
 ## Proof-tier boundaries
 
+- **Composite alternatives prove disjointness, not shared binder identity.**
+  Well-formed nested patterns can permit lookup of an unrelated spelling,
+  including a path prefix or alias. Any matching binding-capable position in
+  an alternative still refuses; macros, recovery, unsupported syntax and
+  exhausted budgets never supply disjointness evidence. Constructor/constant
+  identity and the final moved-binder audit remain independent.
+
 - **Glob-assisted pattern proof has a direct written envelope.** `move_item`
   can prove a composite-pattern binder when every relevant glob follows a fully
   admitted accessible ordinary file/inline route or evidenced module alias to

@@ -145,6 +145,8 @@ enum IdentifierPosition {
     Explicit,
     Argument,
     Ambiguous,
+    // Enumerate possible binders only; never establish identity in an alternative.
+    DisjointOnly,
 }
 /// Only binding positions are visited. Every child must be admitted, even after a binder.
 #[allow(clippy::too_many_arguments)]
@@ -181,6 +183,10 @@ fn pattern_proof<'a>(
             "identifier" | "shorthand_field_identifier" => {
                 if matches(node, source, name) {
                     let definite = match position {
+                        IdentifierPosition::DisjointOnly => {
+                            unknown.get_or_insert((LexicalReason::UnsupportedPattern, node));
+                            continue;
+                        }
                         IdentifierPosition::Explicit => true,
                         IdentifierPosition::Ambiguous => false,
                         IdentifierPosition::Argument => {
@@ -259,8 +265,9 @@ fn pattern_proof<'a>(
                 }
             }
             "or_pattern" => {
-                // Admit only written non-binding alternatives, never a binder
-                // from one arm or an unresolved bare constant/binder alternative.
+                // Existing non-binding alternatives retain their proof. Other
+                // alternatives may prove only spelling disjointness, not a binder
+                // identity shared by all arms.
                 for i in 0..node.named_child_count() {
                     check(controls.0, controls.1)?;
                     let child = node.named_child(i as u32).expect("alternative pattern");
@@ -281,7 +288,7 @@ fn pattern_proof<'a>(
                     ) {
                         children.push((child, IdentifierPosition::Ambiguous));
                     } else {
-                        unknown.get_or_insert((LexicalReason::UnsupportedPattern, child));
+                        children.push((child, IdentifierPosition::DisjointOnly));
                     }
                 }
             }
@@ -321,7 +328,13 @@ fn pattern_proof<'a>(
         }
         for child in children.into_iter().rev() {
             check(controls.0, controls.1)?;
-            stack.push(child);
+            stack.push(if matches!(position, IdentifierPosition::DisjointOnly) {
+                // Explicit mut/ref, captures and shorthand cannot escape the
+                // alternative's negative-only proof envelope.
+                (child.0, IdentifierPosition::DisjointOnly)
+            } else {
+                child
+            });
         }
     }
     Ok(if let Some((reason, node)) = unknown {

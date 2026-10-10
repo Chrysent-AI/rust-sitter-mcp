@@ -24,6 +24,63 @@ fn request(repo: &Fixture, text: &str) -> Value {
     json!({"repo_path":repo.0,"crate_root":"cases/precision/lib.rs","paths":["cases/precision"],"limits":{"text_bytes":0},"moves":[{"item":anchor(repo,SOURCE,text),"destination":{"kind":"new_sibling","path":"cases/precision/subagent/probe_constants.rs","parent_path":"cases/precision/subagent/mod.rs"}}]})
 }
 #[test]
+fn unrelated_composite_alternatives_allow_path_prefix_repair() {
+    let moved = "fn selected() {}";
+    let source = format!(
+        "{moved}\nuse crate::subagent::spawner as prefix;\nstruct Record {{ value: u8 }}\nfn caller(input: Record) {{ match input {{ Record {{ value: 1 }} | Record {{ value: 2 }} => prefix::selected(), _ => {{}} }} }}\n"
+    );
+    let repo = spawner_precision::load(&source);
+    compile(&repo);
+    let result = run(&repo, request(&repo, moved));
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["blocks_applicability"] == false),
+        "{result}"
+    );
+    assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    let applied = move_artifacts::apply(&repo, &result);
+    compile(&applied);
+    assert!(
+        fs::read_to_string(applied.0.join(SOURCE))
+            .unwrap()
+            .contains("crate::subagent::probe_constants::selected()")
+    );
+}
+
+#[test]
+fn competing_composite_alternatives_keep_anchored_prefix_uncertainty() {
+    for pattern in [
+        "Record { prefix } | Record { prefix }",
+        "Record { value: prefix } | Record { value: prefix }",
+        "Record { value: (other @ (1 | prefix)) } | Record { value: 2 }",
+        "Record { value: p!() } | Record { value: 2 }",
+    ] {
+        let repo = spawner_precision::load(&format!(
+            "fn selected() {{}}\nuse crate::subagent::spawner as prefix;\nfn caller(input: Record) {{ match input {{ {pattern} => prefix::selected(), _ => {{}} }} }}\n"
+        ));
+        let result = run(&repo, request(&repo, "fn selected() {}"));
+        withheld(&result);
+        let decision = result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["lexical_uncertainty"]["spelling"] == "prefix")
+            .unwrap();
+        assert_eq!(decision["reason"], "lexical_context_unproved", "{result}");
+        assert_eq!(
+            decision["lexical_uncertainty"]["reason"],
+            "unsupported_pattern"
+        );
+        let range = &decision["lexical_uncertainty"]["pattern"]["range"];
+        assert!(range["end_byte"].as_u64().unwrap() > range["start_byte"].as_u64().unwrap());
+    }
+}
+
+#[test]
 fn raw_line_replica_applies_losslessly() {
     let repo = spawner_precision::load(include_str!("fixtures/spawner_precision/raw_line.rs"));
     let result = run(
@@ -78,7 +135,7 @@ fn compile(repo: &Fixture) {
     copy.write("Cargo.toml", "[package]\nname = \"fixture-corpus\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"cases/precision/lib.rs\"\n");
     let result = Command::new("cargo")
         .current_dir(&copy.0)
-        .args(["check", "--locked", "--offline", "--quiet"])
+        .args(["check", "--all-targets", "--locked", "--offline", "--quiet"])
         .output()
         .unwrap();
     assert!(
@@ -226,6 +283,7 @@ fn closure_binders_are_not_dependencies_but_body_and_type_references_are() {
 #[test]
 fn admitted_patterns_repair_only_free_accesses_and_compile_after_application() {
     for local in [
+        "if let Ok(other) | Err(other) = Ok::<u8, u8>(1) && other > 0 { selected(); }",
         "let (other, mut another) = (1, 2); selected();",
         "for other in [1] { selected(); }",
         "if let Some(other) = Some(1) { selected(); }",
@@ -380,10 +438,6 @@ fn ambiguity_matrix_agrees_between_advice_and_move_with_anchored_witnesses() {
         ),
         (
             "fn caller() { match value { selected @ (1 | 2) if let Some(x) = value && x > 0 => selected(), _ => {} } }",
-            "unsupported_pattern",
-        ),
-        (
-            "fn caller() { if let A(other) | B(other) = value && other { selected(); } }",
             "unsupported_pattern",
         ),
         ("fn caller() { m!(); selected(); }", "unsupported_pattern"),

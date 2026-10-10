@@ -26,6 +26,8 @@ fn assess(source: &str, name: &str, proven_import: bool) -> LexicalAssessment {
 #[test]
 fn disjoint_binding_positions_and_scope_boundaries() {
     for source in [
+        "fn f() { if let A(x) | B(x) = value { selected(); } }",
+        "fn f() { if let A(x) | B(x) = value && x > 0 { selected(); } }",
         "fn f() { let (x, mut y) = pair; selected(); }",
         "fn f() { let [x, y] = pair; selected(); }",
         "fn f() { let C(x, y) = pair; selected(); }",
@@ -85,6 +87,55 @@ fn disjoint_binding_positions_and_scope_boundaries() {
         LexicalBinding::Absent
     );
 }
+#[test]
+fn composite_alternatives_enumerate_only_binding_capable_positions() {
+    for pattern in [
+        "Record { selected: other } | Record { selected: other }",
+        "selected::Record { other } | selected::Record { other }",
+        "Record { other } | Record { other }",
+        "A(other) | B(other)",
+        "(other,) | (other,)",
+        "[other, ..] | [other, ..]",
+        "&A(ref other) | &B(ref other)",
+        "other @ (A(_) | B(_))",
+        "A((other @ (1 | 2), [ref next])) | B((other @ (1 | 2), [ref next]))",
+        "A(r#other) | B(r#other)",
+        "() | ()",
+    ] {
+        let source = format!(
+            "fn f() {{ match value {{ {pattern} if selected() => selected(), _ => {{}} }} }}"
+        );
+        let proof = assess(&source, "selected", false);
+        assert_eq!(proof.binding, LexicalBinding::Absent, "{source}");
+        assert!(proof.uncertainty.is_none(), "{source}");
+    }
+    for pattern in [
+        "Record { selected } | Record { selected }",
+        "Record { other: selected } | Record { other: selected }",
+        "A(mut selected) | B(mut selected)",
+        "A(ref selected) | B(ref selected)",
+        "[selected] | [selected]",
+        "(&selected,) | (&selected,)",
+        "other @ (A(selected @ _) | B(selected @ _))",
+        "A(r#selected) | B(r#selected)",
+        "A(_) | B(other @ (1 | selected))",
+        "A(_) | B(p!())",
+        "A(_) | B(const { 1 })",
+    ] {
+        let source = format!("fn f() {{ match value {{ {pattern} => selected(), _ => {{}} }} }}");
+        let proof = assess(&source, "selected", false);
+        assert_eq!(proof.binding, LexicalBinding::Uncertain, "{source}");
+        let witness = proof.uncertainty.unwrap();
+        assert_eq!(
+            witness.reason,
+            LexicalReason::UnsupportedPattern,
+            "{source}"
+        );
+        let range = witness.pattern.unwrap().range;
+        assert!(range.end_byte > range.start_byte);
+    }
+}
+
 #[test]
 fn forced_and_existing_simple_binders_are_independent() {
     for source in [
@@ -217,14 +268,6 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
         ),
         (
             "fn f() { match value { const { 1 } => selected(), _ => {} } }",
-            LexicalReason::UnsupportedPattern,
-        ),
-        (
-            "fn f() { if let A(x) | B(x) = value { selected(); } }",
-            LexicalReason::UnsupportedPattern,
-        ),
-        (
-            "fn f() { if let A(x) | B(x) = value && x > 0 { selected(); } }",
             LexicalReason::UnsupportedPattern,
         ),
         (
@@ -489,6 +532,8 @@ fn definite_bindings_retain_declaration_coordinates() {
 #[test]
 fn syntax_recovery_is_not_a_disjointness_proof() {
     for source in [
+        "fn f() { match value { Record { other: } | Record { other } => selected(), _ => {} } }",
+        "fn f() { match value { A(other) | B( => selected(), _ => {} } }",
         "fn f() { @ selected(); }",
         "fn f() { if let [other] = value && @ selected() {} }",
         "fn f() { while let [other] = value && @ selected() {} }",
@@ -859,7 +904,7 @@ fn chains_keep_independent_uncertainties_and_item_boundaries() {
 }
 #[test]
 fn interrupted_work_never_supplies_positive_proof() {
-    let source = "fn f() { for x in values { selected(); } }";
+    let source = "fn f() { match value { A(other) | B(other) => selected(), _ => {} } }";
     let flag = AtomicBool::new(false);
     let tree = crate::trivia::parse(source, Instant::now() + Duration::from_secs(5), &flag)
         .unwrap()
