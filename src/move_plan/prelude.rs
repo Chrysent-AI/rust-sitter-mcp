@@ -48,6 +48,9 @@ pub struct MoveCoverage {
     /// Occurrences relying on an invocation-specific standard matches! assertion.
     #[serde(skip_serializing_if = "is_zero")]
     pub assumed_standard_matches: usize,
+    /// Whole derive invocations admitted only under exact caller relocation assertions.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub assumed_derive_relocation: usize,
     /// Occurrences discharged by pure RA resolution, independent of caller assumptions.
     #[serde(skip_serializing_if = "is_zero")]
     pub ra_resolved: usize,

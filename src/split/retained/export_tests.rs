@@ -71,6 +71,7 @@ fn export_preserves_exact_generic_where_header_and_strict_defaults() {
         for field in [
             "assume_standard_prelude",
             "assume_declared_helpers",
+            "derived_attribute_relocations",
             "acknowledge_test_consumers",
             "resolve_semantic",
             "semantic_configuration",

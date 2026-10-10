@@ -364,7 +364,7 @@ explicit caller-assumption `basis`. `coverage.standard_builtin_derive` counts
 name occurrences separately from the five type names. Contextual derives on
 retained or destination declarations are recorded too when they relieve a veto;
 the same occurrence/destination is counted once and its contributing items are
-merged. Unknown names never receive proof records. Counts survive response fitting;
+merged. Unknown names never receive proof records under this flag. Counts survive response fitting;
 `counts.omissions.binding_proofs` discloses omitted records, and oversized audits
 withhold all artifacts. Empty derive proof/count fields are omitted.
 
@@ -375,6 +375,79 @@ outside the bridge. All other collisions, missing context and blockers still app
 entire batch. Original bytes remain lossless, no `Cargo.toml` is read, and
 `semantic:"not_performed"` is unchanged. This option does not make idiomatic Rust
 relocation generally executable.
+
+### Conditional written derive relocation
+
+`derived_attribute_relocations` is optional (omission/null/`[]` keeps the existing
+`derive_veto`). Each entry asserts one exact **outer bare `derive(...)` attribute**
+attached to a selected written struct/enum, its registered helpers, and unchanged
+provider bindings:
+
+```text
+{
+  invocation: {path, range:{start_byte,end_byte}, expected_text},
+  helpers: [{anchor:{path,range,expected_text}, derive_name:"Serialize"}],
+  bindings: [{
+    name:"Serialize", provider_path:"serde::Serialize",
+    original_import:{path,range,expected_text},
+    destination_import:{path,range,expected_text}
+  }]
+}
+```
+
+Every anchor uses full captured original bytes. The caller asserts that the named
+invocation and helper payloads preserve their dependency interpretation (including
+imports, relative paths and helper strings), that helpers are registered by the
+named derive rather than replacing attribute providers, and that relocation
+introduces no conflicting namespace bindings, including generated imports. This
+is **not** an assertion of expansion inertness, generated-member existence, or
+engine-classified macro identity. No allowlist of serde or other derive spellings
+is used and no procedural macro/build script is executed.
+
+Each custom derive name needs exactly one explicit binding story: the original
+and destination anchors must each name an unchanged, unconditional file-root
+`use` with one named leaf whose written external route equals `provider_path` and
+whose bound name equals `name`. Both files must already contain these imports;
+this bridge does not synthesize imports or admit absent destinations. Renamed
+imports qualify only with this explicit matching route/alias story. Qualified
+derive names, local `crate`/`self`/`super` routes, globs, missing/ambiguous imports
+and unasserted names remain refused. Existing separately audited
+`standard_builtin_derive` name proofs can cover compiler-built-in names in a
+mixed invocation without another binding entry; otherwise an explicit route is
+required for them too. Provider identity behind the written external route is a
+caller premise, not rust-analyzer evidence.
+
+Helper anchors must name exact attached outer attributes or attributes inside the
+selected type (fields/variants), with `derive_name` naming a derive in this exact
+invocation. Control attributes cannot be declared helpers. Known competing
+written helper imports, same-name provider declarations, macros, inner attributes,
+recovery, competing import bindings, globs and other unasserted custom attribute/
+derive providers in source/destination files, their captured filesystem ancestors
+or other arriving items' source files conservatively retain refusal. This bounded
+bridge does not analyze another provider's generated imports. Attributes/imports
+cannot be edited by a repair, or kept behind/reattached by a trivia override, while
+using this assertion. All ordinary access, origin/attachment, independent body,
+module-chain, API, cfg/provider and final binder audits remain in force. Unknown
+or inactive cfg still blocks; this assertion clears no cfg predicate.
+
+Stale/non-node/non-type-attached invocation anchors, duplicate invocations,
+invalid helper anchors/registration associations and descriptor-cap violations
+return indexed `INVALID_PARAMS` at `derived_attribute_relocations[i]`. Assertions
+are bounded by `max_moves × 64`, 4,096 helpers and 1,024 binding stories per entry,
+and a 128-MiB text/descriptor guard. Missing or unmatched binding stories and
+namespace/repair vetoes retain the ordinary anchored context refusal instead of
+silently accepting the assertion.
+
+Successful discharge records `plan.binding_proofs.class:"assumed_derive_relocation"`
+with the invocation, helpers, original/destination binding anchors, selected
+`item_ids`, `destination_path` and explicit conditional `basis`.
+`coverage.assumed_derive_relocation` counts whole discharged invocations, including
+omitted proof records, separately from `ra_resolved` and written-binding evidence.
+This field needs neither `resolve_semantic` nor `assume_declared_helpers` and does
+not change their contracts. With `resolve_semantic:false`, semantic labeling stays
+`not_performed`; generated methods/constructors/trait implementations and dependent
+semantic facts remain unproved. Apply and compile/check the complete patch
+externally. Exported inactive scaffolds never supply this assertion implicitly.
 
 ### Declared configuration in written audits
 

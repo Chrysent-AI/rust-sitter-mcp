@@ -1,6 +1,7 @@
 //! One simultaneous, read-only relocation plan with itemized written-binding repairs.
 mod actions;
 mod dead_imports;
+mod derive_relocation;
 pub(crate) mod ergonomics;
 mod glob_patterns;
 mod prelude;
@@ -206,6 +207,8 @@ pub struct MoveRequest {
     pub resolve_semantic: bool,
     /// Assert the standard matches! contract for exact whole invocations only.
     pub standard_matches_assertions: Option<Vec<SourceAnchor>>,
+    /// Exact derive/helper relocation assertions with explicit written provider routes.
+    pub derived_attribute_relocations: Option<Vec<derive_relocation::Assertion>>,
     pub semantic_configuration: Option<semantic::Configuration>,
 }
 impl MoveRequest {
@@ -538,6 +541,7 @@ pub struct WorkLimits {
 pub enum BindingProof {
     Standard(prelude::BindingProof),
     AssumedStandardMatches(crate::rewrites::MatchesProof),
+    AssumedDeriveRelocation(derive_relocation::Proof),
     RaResolved(Box<semantic::Proof>),
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -2295,6 +2299,24 @@ fn build(
             result.account(descriptor_bytes(&result.plan.binding_proofs)?)?;
         }
     }
+    let derive_proofs = derive_relocation::discharge(
+        request,
+        &files,
+        &parsed,
+        &tuples,
+        contexts,
+        &result.plan.binding_proofs,
+        &analysis.repairs,
+        &mut analysis.needs,
+        (deadline, cancelled),
+    )?;
+    result.coverage.assumed_derive_relocation = derive_proofs.len();
+    result.account(descriptor_bytes(&derive_proofs)?)?;
+    result.plan.binding_proofs.extend(
+        derive_proofs
+            .into_iter()
+            .map(BindingProof::AssumedDeriveRelocation),
+    );
     if request.acknowledge_test_consumers {
         let routes =
             items::GlobRoutes::new(&files, &parsed, &request.crate_root, (deadline, cancelled))?;

@@ -4,6 +4,8 @@ mod chain_fixture;
 mod chain_tests;
 #[path = "support/dead_import_tests.rs"]
 mod dead_import_tests;
+#[path = "support/derive_relocation_tests.rs"]
+mod derive_relocation_tests;
 #[path = "support/derive_tests.rs"]
 mod derive_tests;
 #[path = "support/fixture_gen.rs"]

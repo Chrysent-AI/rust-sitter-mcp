@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add exact `derived_attribute_relocations` caller assertions for unchanged
+  written derive invocations and registered helpers with explicit provider import
+  routes at both ends. Label admission as `assumed_derive_relocation` with separate
+  coverage, not resolved evidence or generated-member proof; default and
+  independent cfg, namespace, access, body and attachment vetoes remain strict.
+
 * Add invocation-specific `standard_matches_assertions` for bounded standard
   `matches!` consumers, with separate `assumed_standard_matches` proofs and
   coverage. Preserve ordinary written-binding checks, exact variant suffixes,

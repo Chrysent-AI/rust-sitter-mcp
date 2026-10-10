@@ -98,6 +98,7 @@ fn ordinary_json(request: &MoveRequest) -> Value {
         "include_unselected_trivia",
         "assume_standard_prelude",
         "assume_declared_helpers",
+        "derived_attribute_relocations",
         "acknowledge_test_consumers",
         "resolve_semantic",
         "semantic_configuration",
