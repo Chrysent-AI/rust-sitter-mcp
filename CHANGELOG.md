@@ -7,6 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+* Prove supported ordered if/while let-chain local scopes, preserving outer
+  bindings and shadowing without relaxing independent move blockers.
+
 ## [0.5.0] - 2026-10-10
 
 ### Added

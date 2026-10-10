@@ -403,6 +403,56 @@ fn assess_pattern(
 fn contains(scope: Option<Node<'_>>, node: Node<'_>) -> bool {
     scope.is_some_and(|p| p.start_byte() <= node.start_byte() && p.end_byte() >= node.end_byte())
 }
+/// Only chain CST nodes are flattened; expressions (including parentheses,
+/// closures and nested conditions) do not contribute binders to this chain.
+#[allow(clippy::too_many_arguments)]
+fn assess_chain(
+    path: &str,
+    scope: Node<'_>,
+    chain: Node<'_>,
+    in_body: bool,
+    source: &str,
+    name: &str,
+    reference: Node<'_>,
+    controls: (Instant, &AtomicBool),
+    cfg: Option<&super::DeclaredCfg>,
+) -> Result<Option<LexicalAssessment>, DomainError> {
+    let mut stack = vec![chain];
+    let mut preceding = Vec::new();
+    while let Some(operand) = stack.pop() {
+        check(controls.0, controls.1)?;
+        if operand.kind() == "let_chain" {
+            for i in (0..operand.named_child_count()).rev() {
+                check(controls.0, controls.1)?;
+                stack.push(operand.named_child(i as u32).expect("chain operand"));
+            }
+        } else if operand.kind() == "let_condition"
+            && (in_body || operand.end_byte() <= reference.start_byte())
+        {
+            let Some(pattern) = operand.child_by_field_name("pattern") else {
+                return Ok(Some(uncertain(
+                    path,
+                    name,
+                    scope,
+                    LexicalReason::UnsupportedPattern,
+                    Some(operand),
+                )));
+            };
+            preceding.push(pattern);
+        }
+    }
+    // Later successful bindings shadow earlier ones. The containing operand's
+    // own pattern is excluded, so its initializer still sees the outer binding.
+    for pattern in preceding.into_iter().rev() {
+        check(controls.0, controls.1)?;
+        if let Some(proof) =
+            assess_pattern(path, scope, pattern, source, name, reference, controls, cfg)?
+        {
+            return Ok(Some(proof));
+        }
+    }
+    Ok(None)
+}
 /// The first relevant inner uncertainty wins; a definite outer parameter cannot bypass it.
 pub(crate) fn lexical_assessment(
     path: &str,
@@ -567,15 +617,22 @@ fn lexical_context(
                 if condition.is_some_and(|c| c.kind() == "let_chain")
                     && (contains(body, node) || contains(condition, node))
                 {
-                    return Ok(uncertain(
+                    if let Some(proof) = assess_chain(
                         path,
-                        name,
                         parent,
-                        LexicalReason::UnsupportedPattern,
-                        condition,
-                    ));
-                }
-                if contains(body, node) {
+                        condition.expect("chain condition"),
+                        contains(body, node),
+                        source,
+                        name,
+                        node,
+                        controls,
+                        cfg,
+                    )? {
+                        return Ok(proof);
+                    }
+                    // A disjoint chain leaves the enclosing scope available.
+                    None
+                } else if contains(body, node) {
                     condition
                         .filter(|c| c.kind() == "let_condition")
                         .and_then(|c| c.child_by_field_name("pattern"))

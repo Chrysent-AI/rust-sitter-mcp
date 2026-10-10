@@ -56,6 +56,7 @@ fn disjoint_binding_positions_and_scope_boundaries() {
         "fn f() { for selected in selected() {} }",
         "fn f() { let _ = |(x, y)| selected(); }",
         "fn f() { let _ = async move |x| selected(); }",
+        "fn f() { if (if let mut selected = 1 && true { true } else { false }) && let mut other = 1 { selected; } }",
     ] {
         let assessment = assess(source, "selected", false);
         assert_eq!(
@@ -223,7 +224,7 @@ fn genuine_unknowns_veto_outer_proofs_with_precise_witnesses() {
             LexicalReason::UnsupportedPattern,
         ),
         (
-            "fn f() { if let Some(x) = value && x > 0 { selected(); } }",
+            "fn f() { if let A(x) | B(x) = value && x > 0 { selected(); } }",
             LexicalReason::UnsupportedPattern,
         ),
         (
@@ -489,6 +490,8 @@ fn definite_bindings_retain_declaration_coordinates() {
 fn syntax_recovery_is_not_a_disjointness_proof() {
     for source in [
         "fn f() { @ selected(); }",
+        "fn f() { if let [other] = value && @ selected() {} }",
+        "fn f() { while let [other] = value && @ selected() {} }",
         "fn f() { match value { selected @ => selected(), _ => {} } }",
         "fn f() { match value { selected @ (1 | ) => selected(), _ => {} } }",
     ] {
@@ -730,6 +733,123 @@ fn scoped_paths_are_disjoint_and_let_else_keeps_failure_outside_binding_scope() 
             .binding,
         LexicalBinding::Absent
     );
+}
+#[test]
+fn ordered_chains_respect_introduction_and_nearest_shadowing() {
+    for keyword in ["if", "while"] {
+        for (condition, body, declaration) in [
+            ("let mut other = selected && other > 0", "", "selected: u8"),
+            (
+                "let mut other = 1 && let mut next = selected",
+                "",
+                "selected: u8",
+            ),
+            ("selected > 0 && let mut other = 1", "", "selected: u8"),
+            ("let mut selected = selected && true", "", "selected: u8"),
+            ("let mut selected = 1 && (selected > 0)", "", "mut selected"),
+            (
+                "let mut selected = 1 && let ref selected = selected",
+                "selected;",
+                "ref selected",
+            ),
+            (
+                "let mut selected = 1 && let ref selected = selected",
+                "",
+                "mut selected",
+            ),
+            (
+                "let [selected] = [1] && selected > 0",
+                "selected;",
+                "[selected]",
+            ),
+            (
+                "let mut selected = 1 && true",
+                "let _ = || selected;",
+                "mut selected",
+            ),
+            (
+                "let mut selected = 1 && true",
+                "let selected = 2; selected;",
+                "selected",
+            ),
+            ("let mut other = 1 && true", "selected;", "selected: u8"),
+        ] {
+            let source = format!("fn f(selected: u8) {{ {keyword} {condition} {{ {body} }} }}");
+            let assessment = assess(&source, "selected", false);
+            assert_eq!(assessment.binding, LexicalBinding::Independent, "{source}");
+            let range = assessment.definite_binding.unwrap().range;
+            assert_eq!(
+                &source[range.start_byte..range.end_byte],
+                declaration.split(':').next().unwrap(),
+                "{source}"
+            );
+        }
+        for condition in [
+            "selected > 0 && let mut selected = 1",
+            "let mut selected = selected && true",
+            "let mut other = selected && let mut selected = 1",
+        ] {
+            let source = format!("fn f() {{ {keyword} {condition} {{}} }}");
+            assert_eq!(
+                assess(&source, "selected", false).binding,
+                LexicalBinding::Absent,
+                "{source}"
+            );
+        }
+    }
+    for source in [
+        "fn f() { if let mut selected = 1 && true {} else { selected; } }",
+        "fn f() { if let mut selected = 1 && true {} selected; }",
+        "fn f() { while let mut selected = 1 && true {} selected; }",
+        "fn f() { if let mut selected = 1 && true {} else if selected > 0 {} }",
+    ] {
+        assert_eq!(
+            assess(source, "selected", false).binding,
+            LexicalBinding::Absent,
+            "{source}"
+        );
+        let with_outer = source.replacen("fn f()", "fn f(selected: u8)", 1);
+        let proof = assess(&with_outer, "selected", false);
+        assert_eq!(proof.binding, LexicalBinding::Independent, "{with_outer}");
+        assert_eq!(proof.definite_binding.unwrap().kind, "identifier");
+    }
+}
+#[test]
+fn chains_keep_independent_uncertainties_and_item_boundaries() {
+    for (source, reason) in [
+        (
+            "fn f(selected: u8) { if let other @ p!() = value && true { selected; } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "use external::*; fn f() { if let [selected] = value && true { selected; } }",
+            LexicalReason::IdentifierPatternBindingOrConstant,
+        ),
+        (
+            "fn f() { if let selected = value && true { selected; } }",
+            LexicalReason::IdentifierPatternBindingOrConstant,
+        ),
+        (
+            "fn f() { if let mut selected = 1 && true { fn inner() { selected; } } }",
+            LexicalReason::ConditionalLocalContext,
+        ),
+        (
+            "fn f() { if let mut selected = 1 && true { selected; m!(); } }",
+            LexicalReason::UnsupportedPattern,
+        ),
+        (
+            "fn f(selected: u8) { #[cfg(test)] if let mut other = 1 && true { selected; } }",
+            LexicalReason::ConditionalLocalContext,
+        ),
+        (
+            "fn f() { if let mut selected = 1 && true { let _: selected; } }",
+            LexicalReason::ValueBindingInTypePosition,
+        ),
+    ] {
+        let assessment = assess(source, "selected", false);
+        assert_eq!(assessment.binding, LexicalBinding::Uncertain, "{source}");
+        assert_eq!(assessment.uncertainty.unwrap().reason, reason, "{source}");
+    }
 }
 #[test]
 fn interrupted_work_never_supplies_positive_proof() {
