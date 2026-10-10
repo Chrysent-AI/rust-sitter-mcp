@@ -22,6 +22,8 @@ Do not use `--no-verify` unless a maintainer explicitly asks for it in a specifi
 |---|---|
 | Identifier-leak gate | `bash scripts/check-leaked-identifiers.sh` (added lines + commit message) |
 | Secret scan (staged) | `gitleaks protect --staged` |
+| Hook activation | `bash scripts/check-hooks.sh` |
+| Test version provenance | `bash scripts/check-test-versions.sh` |
 | Formatting | `cargo fmt --all -- --check` |
 | Lint | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |
 | Tests | `cargo test --workspace --all-features --locked` |
@@ -30,6 +32,26 @@ Do not use `--no-verify` unless a maintainer explicitly asks for it in a specifi
 | Tooling regressions | disposable hook/gate fixtures |
 
 Missing a gate tool? `make install-tools` installs pinned versions (`cargo-deny`, `cargo-machete`; gitleaks via Homebrew, `go install`, or a release binary).
+
+## Version bumps
+
+Run `make bump-version BUMP=patch` (or `minor`, `major`, or `VERSION=x.y.z`).
+The helper requires active, executable tracked hooks, rejects direct test
+comparisons against the current package-version literal before and after the
+rewrite, refreshes the package lock entry offline, and runs the workspace tests.
+Verification failure leaves any manifest/lock diff visible for inspection; it
+never commits or tags. Derive current-version expectations with
+`env!("CARGO_PKG_VERSION")`; historical prose and other fixture versions are
+allowed. The lexical guard checks integration test sources and inline
+`#[test]`/`#[cfg(test)]` blocks. It also checks literals inside `concat!` and
+`stringify!` when those macros are direct `assert_eq!`/`assert_ne!` operands.
+It does not resolve variables, assemble versions from fragments, inspect other
+operand wrappers (including function calls), expand arbitrary macros, or handle
+custom test frameworks; bump-time tests are the backstop for stale expectations.
+
+Hook checks detect missing or misconfigured activation when the helper or gate
+runs. They cannot prevent Git's explicit `--no-verify` bypass, which remains
+prohibited without specific maintainer authorization.
 
 ## Commit format
 

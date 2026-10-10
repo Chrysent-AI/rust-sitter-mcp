@@ -10,7 +10,7 @@ cp -R "$root/.githooks" "$root/scripts" "$root/src" "$repo/"
 # The protected-name list is untracked by design; fresh checkouts lack it.
 rm -f "$repo/.githooks/protected-names.local"
 cp "$root/Cargo.toml" "$root/Cargo.lock" "$root/rust-toolchain.toml" "$root/Makefile" "$repo/"
-mkdir "$repo/docs"
+mkdir "$repo/docs" "$repo/tests"
 cp "$root/docs/dependency-log.md" "$repo/docs/"
 # A fixture-local final gate prevents recursive execution of this suite.
 printf '%s\n' '#!/usr/bin/env bash' 'echo fixture-tooling-gate' > "$repo/scripts/test-tooling.sh"
@@ -81,6 +81,15 @@ IFS= read -r first_gate < "$FAKE_LOG"
 [[ "$first_gate" == 'gitleaks protect --staged --redact --no-banner --log-level warn --exit-code 1' ]]
 grep -q '^machete$' "$FAKE_LOG"
 grep -q 'fixture-tooling-gate' "$scratch/clean.log"
+# A hardcoded package-version comparison cannot pass the real pre-commit path.
+current_version=$(awk '/^\[package\]/ { package=1; next } /^\[/ { package=0 } package && /^version = / { gsub(/"/, "", $3); print $3 }' Cargo.toml)
+printf 'assert_eq!(actual, "%s");\n' "$current_version" > tests/version.rs
+git add tests/version.rs
+reject commit -qm 'test: reject current version literal'
+grep -q 'hardcoded current package version' "$scratch/rejection.log"
+printf 'assert_eq!(actual, env!("CARGO_PKG_VERSION"));\n' > tests/version.rs
+git add tests/version.rs
+commit -qm 'test: accept derived package version' > "$scratch/version.log" 2>&1
 # Scanner failures other than the findings code must fail before Cargo checks.
 for code in 2 126; do
   export FAIL_GITLEAKS="$code"
@@ -229,4 +238,5 @@ test -f target/receipt-sentinel
 git worktree add -q -b fixture-linked "$scratch/linked checkout"
 (cd "$scratch/linked checkout" && make install-hooks && make install-hooks) > "$scratch/linked.log"
 test -x "$scratch/linked checkout/.githooks/pre-commit"
-printf '%s\n' 'Tooling fixtures passed: staged secrets/clean content, scanner errors/missing/version, idempotency/conflicts, five failing and missing Cargo gates, parity, messages, dependency ordering/notes, receipts, linked worktrees.'
+bash "$root/scripts/test-version-tooling.sh"
+printf '%s\n' 'Tooling fixtures passed: staged secrets/clean content, scanner errors/missing/version, idempotency/conflicts, five failing and missing Cargo gates, parity, messages, dependency ordering/notes, receipts, linked worktrees, version provenance and hook activation.'

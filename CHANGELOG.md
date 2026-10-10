@@ -43,6 +43,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Verify version bumps with workspace tests and require active tracked hooks;
+  reject direct current-package-version literals in test comparisons before
+  they can drift. Leave failed bump diffs visible without committing or tagging.
+
 * Reject unusable supplied semantic configurations with `INVALID_PARAMS`, an
   indexed input field, offending-value preview and actionable reason, even when
   no resolution needs are collected. Explain Rust crate names versus hyphenated

@@ -16,6 +16,9 @@ fi
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_OBJECT_DIRECTORY GIT_DIR GIT_WORK_TREE \
   GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_INDEX_FILE GIT_NO_REPLACE_OBJECTS \
   GIT_REPLACE_REF_BASE GIT_PREFIX GIT_INTERNAL_SUPER_PREFIX GIT_SHALLOW_FILE GIT_COMMON_DIR
+bash scripts/check-hooks.sh
+printf '%s\n' 'Gate: test version provenance'
+bash scripts/check-test-versions.sh
 bash scripts/check-tools.sh
 printf '%s\n' 'Gate: formatting'
 cargo fmt --all -- --check

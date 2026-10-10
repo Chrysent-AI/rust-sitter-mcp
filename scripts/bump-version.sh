@@ -11,6 +11,9 @@ case "$choice" in
   major|minor|patch) ;;
   *) [[ "$choice" =~ ^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]] || { echo 'Expected major, minor, patch, or stable x.y.z.' >&2; exit 1; } ;;
 esac
+bash scripts/check-hooks.sh
+# Reject current-version expectations before the old version becomes stale.
+bash scripts/check-test-versions.sh
 tmp=$(mktemp ./Cargo.toml.bump.XXXXXX)
 trap 'rm -f "$tmp"' EXIT
 awk -v choice="$choice" '
@@ -41,5 +44,10 @@ chmod 644 "$tmp"
 mv "$tmp" Cargo.toml
 # Refresh only the package lock entry, without re-resolving dependencies.
 # Failure deliberately leaves a visible diff; no automatic commit or tag.
-cargo check --offline --quiet
-printf '%s\n' 'Version updated; inspect Cargo.toml and Cargo.lock before committing.'
+if ! cargo check --offline --quiet ||
+   ! bash scripts/check-test-versions.sh ||
+   ! cargo test --workspace --all-features --locked --offline --quiet; then
+  echo 'Version verification failed; Cargo.toml and Cargo.lock changes are left visible for inspection. No commit or tag was created.' >&2
+  exit 1
+fi
+printf '%s\n' 'Version updated and workspace tests passed; inspect Cargo.toml and Cargo.lock before committing.'
