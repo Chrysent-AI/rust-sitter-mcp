@@ -5,11 +5,40 @@ description: Split or reorganize Rust files into modules using the rust-sitter-m
 
 # Split Rust Code into Modules
 
-Use the rust-sitter-mcp MCP server to split, extract, or reorganize Rust code. Discover `suggest_split` and `move_item` before use; optionally discover `get_split_detail` for explicitly retained historical advice and the seventh read-only tool, `export_move_request`, when you want a separate inactive request from an explicit retained selection. In Pi, MCP exposure depends on configuration: use `tool_search` when the tools are not already exposed (deferred/codemode tools can be loaded this way); in other harnesses, follow that harness's guidance for loading MCP tools. Invoke the exact names and schemas exposed by the client (prefixes vary). The server is **read-only**: advice has no patch, export returns only an inactive request, and applicable move plans return patches you review and apply externally.
+Use the rust-sitter-mcp MCP server to split, extract, or reorganize Rust code. Discover `suggest_split` and `move_item` before use; optionally discover `get_split_detail` for explicitly retained historical advice and `export_move_request`, when you want a separate inactive request from an explicit retained selection. In Pi, MCP exposure depends on configuration: use `tool_search` when the tools are not already exposed (deferred/codemode tools can be loaded this way); in other harnesses, follow that harness's guidance for loading MCP tools. Invoke the exact names and schemas exposed by the client (prefixes vary). The server is **read-only**: advice has no patch, export returns only an inactive request, and applicable move plans return patches you review and apply externally.
 
 **Not for:** semantic renames (requires type knowledge), inline `mod x { ... }` body extraction, cross-crate moves, macro-body refactoring, or same-file reordering. By default the engine is syntactic only — it never claims your code compiles. Opt-in evidence flags (Step 3) add bounded, explicitly-configured resolution without ever claiming compilation or equivalence.
 
 **Set expectations first.** Idiomatic application Rust — functions calling methods, prelude types (`Option`, `String`), `#[derive]`/proc-macro attributes, macro invocations (`println!`, `vec!`, `format!`), consumers inside inline `#[cfg(test)]` modules — is exactly what the evidence tiers were built to handle, but the default syntactic-only call still blocks most of it. The standard recipe for application code: pass `assume_standard_prelude: true` plus an explicit `semantic_configuration` (admitted crate graph, edition, declared features/cfg) on `move_item` — under that configuration, prelude types, built-in derives, variant paths, and prelude constructors discharge with real proofs, written re-export routes repair consumer imports automatically, and idiomatic batches reach `applicable: true` (proven end-to-end on a large application crate). Remaining honest walls: excluded trait/unsafe/cfg/generic members (ordinary inherent methods and consts are selectable), macro expansion beyond the bounded declarative declaration-identity tier below, glob-only consumers (surface as `glob_consumer_unrepaired` — migrate the consumer to explicit imports, then re-plan), and sysroot/external-crate member calls. Without the configuration and flag, expect a **design report** (inventory + grouping), not an applicable patch; `supported_unit` eligibility counts overstate what is actually movable. For an impl-dominated file, select whole written inherent methods or consts with their exact header-only `enclosing_impl.anchor`; see associated-item selection below.
+
+## Read the bundled guide from the binary
+
+If you have only the server binary, discover `read_skill_guide` and call it
+with `{}`. It returns this canonical Markdown guide followed by every bundled
+reference, in lexicographic reference-path order, embedded at build time. Each
+segment is headed by its document ID, source path and digest. To retrieve one
+verbatim document without segment headers, pass an exact `documents[].id`:
+
+    {"document":"guide"}
+    {"document":"references/failure-recovery.md"}
+    {"document":"references/rust-modularization.md"}
+
+Every response includes the complete `documents` index (`id`, `path`, `digest`,
+`bytes`) and the full concatenation's `bytes`/`digest`. `content_bytes` and
+`content_digest` identify the chosen content before response fitting. Digests
+are `git-blob-sha1:<hex>` over the exact Git blob bytes/header; they identify
+content, not a signature or semantic verification.
+
+`limits` accepts only `response_bytes` (65536–16777216, default 2097152).
+The budget includes both structured and text JSON, escaping and framing reserve.
+If content does not fit, `status` is `partial`, `content` is null,
+`omitted_bytes` reports its complete byte count and `omission_reason` is
+`response_bytes`; the complete index and exact digests remain available.
+Raise the limit or request a document slice; a large slice can also be omitted.
+Never treat omitted content as an empty guide. Unknown IDs or invalid fields/
+limits fail with `INVALID_PARAMS`. The tool needs no `repo_path`, inspects no
+caller repository, reads no skill directory at runtime, and changes nothing;
+`integrity.semantic` stays `not_performed`.
 
 ## Workflow checklist
 

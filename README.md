@@ -8,6 +8,7 @@ It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comm
 
 | Tool | What it does |
 |---|---|
+| `read_skill_guide` | The full build-time bundled Markdown skill and all references, or one exact document, with a complete byte-size/digest index; no caller-repository inspection |
 | `search` | Structural search with SSR-style sugar patterns: `$a.unwrap()`, `$a.expect($b)`, `pair($a, $a)` (repeated names must match byte-identical source) |
 | `search_query` | Raw [tree-sitter queries](https://tree-sitter.github.io/tree-sitter/using-parsers/queries) for anything the sugar grammar doesn't cover |
 | `replace` | Structural search-and-replace → dry-run plan: exact template substitution, all-or-nothing patches, trivia decisions surfaced with overrides |
@@ -33,7 +34,12 @@ limit. Release is explicit, there is no silent eviction, and restart loses recor
 
 Every mutating tool returns a **plan** (`applicable` / `blocked` / `incomplete`), a **unified diff**, and a **JSON edit list** that reconstructs the same bytes. Ambiguous situations (comment ownership, import/visibility rewrites under shadowing or glob imports, parse recovery) are surfaced as explicit, overridable decisions — never guessed. See [`docs/tools.md`](docs/tools.md) for the complete contracts.
 
-This repository also ships a pi agent skill at [`.pi/skills/split-rust-code/`](.pi/skills/split-rust-code/SKILL.md) — pi users get a guided end-to-end workflow (advice triage, anchor construction, failure recovery) automatically.
+This repository also ships a pi agent skill at [`.pi/skills/split-rust-code/`](.pi/skills/split-rust-code/SKILL.md) — pi users get a guided end-to-end workflow (advice triage, anchor construction, failure recovery) automatically. Binary-only callers can use `read_skill_guide` with `{}` to retrieve
+that same guide and all references embedded at build time, or select a document
+using an exact `documents[].id`. Every response carries exact byte counts and
+`git-blob-sha1` digests. If the duplicated JSON response exceeds
+`limits.response_bytes`, content is omitted explicitly with the index intact;
+raise the limit or fetch a slice. See `docs/tools.md` for the response contract.
 
 ## Safety model
 
@@ -62,7 +68,7 @@ make install        # builds and installs the release binary (no tests, no gate 
 Contributors: run `make setup` instead — it additionally installs the pinned gate
 tools and Git hooks and runs the full verification suite before installing.
 
-The server speaks MCP over stdio and takes no arguments — every tool call names its target via `repo_path`.
+The server speaks MCP over stdio and takes no arguments — repository tools name their target via `repo_path`; `read_skill_guide` needs no repository.
 
 ## Configure (MCP client)
 

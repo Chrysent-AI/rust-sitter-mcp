@@ -3,6 +3,7 @@ use crate::{
     move_plan::{MoveEnvelope, MoveRequest},
     plan::{PlanEnvelope, ReplaceRequest},
     result::{DomainError, Limits, PatternRequest, SearchEnvelope, SearchRequest},
+    skill_guide::{GuideEnvelope, GuideRequest},
     split::{
         DetailEnvelope, DetailRequest, ExportEnvelope, ExportRequest, SplitResponse,
         SuggestSplitEnvelope, SuggestSplitRequest,
@@ -352,8 +353,36 @@ fn suggest_wire(result: SplitResponse) -> CallToolResult {
         CallToolResult::structured(value)
     }
 }
+fn guide_wire(result: GuideEnvelope) -> CallToolResult {
+    let failed = result.error.is_some();
+    let value = serde_json::to_value(result).expect("serializable guide");
+    if failed {
+        CallToolResult::structured_error(value)
+    } else {
+        CallToolResult::structured(value)
+    }
+}
 #[tool_router]
 impl Server {
+    #[tool(name = "read_skill_guide", description = r#"Read the full bundled usage skill as canonical Markdown from this binary, without inspecting any repository.
+Use first when only the binary is available: {} returns SKILL.md followed by all references in lexicographic relative-path order, with id/source/digest segment headers. Optional document selects an exact documents[].id (guide or references/<path>); slices contain verbatim source bytes without wrapper headers.
+Every response includes the complete documents index (id, path, git-blob-sha1 digest, bytes) and full concatenation bytes/digest. content_bytes/content_digest describe the chosen content. No network, runtime skill-directory reads, writes, compilation or semantic checking; integrity.semantic:not_performed.
+limits accepts only response_bytes (65536–16777216, default 2097152), accounting for duplicated structured/text JSON and framing reserve. If content does not fit it is omitted whole: status:partial, content:null, omitted_bytes and omission_reason:response_bytes; the index and exact sizes/digests remain intact. Raise the limit or fetch a document slice. Unknown IDs/invalid limits return INVALID_PARAMS. See docs/tools.md."#, output_schema = rmcp::handler::server::tool::schema_for_output::<GuideEnvelope>(), annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false))]
+    async fn read_skill_guide(
+        &self,
+        Parameters(request): Parameters<GuideRequest>,
+    ) -> CallToolResult {
+        let Ok(_permit) = self.admission.clone().try_acquire_owned() else {
+            return guide_wire(GuideEnvelope::failed(busy_error()));
+        };
+        if self.active.lock().expect("active lock").cancelled {
+            return guide_wire(GuideEnvelope::failed(DomainError::new(
+                "CANCELLED",
+                "server is shutting down",
+            )));
+        }
+        guide_wire(crate::skill_guide::read(request))
+    }
     #[tool(name = "export_move_request", description = r#"Export one complete inactive ordinary move_item request from explicitly retained completed advice.
 Use for: explicit nonempty analysis-qualified unit IDs and caller-chosen existing/new_sibling/new_child/existing_impl destinations; full exact frozen item bytes and header-only enclosing_impl anchors.
 Does NOT: infer destinations, select companions, rerun grouping, submit move_item, audit move applicability, write files, compile or approve a plan.
@@ -591,6 +620,7 @@ impl ServerHandler for Server {
             && request.name != "suggest_split"
             && request.name != "get_split_detail"
             && request.name != "export_move_request"
+            && request.name != "read_skill_guide"
         {
             return Err(rmcp::ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
@@ -600,7 +630,11 @@ impl ServerHandler for Server {
         let decoded = if serde_json::to_vec(&args).expect("JSON args").len() > 8 * 1024 * 1024 {
             Err("decoded arguments exceed 8 MiB".into())
         } else {
-            if request.name == "export_move_request" {
+            if request.name == "read_skill_guide" {
+                serde_json::from_value::<GuideRequest>(args)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else if request.name == "export_move_request" {
                 serde_json::from_value::<ExportRequest>(args)
                     .map(|_| ())
                     .map_err(|e| e.to_string())
@@ -640,6 +674,13 @@ impl ServerHandler for Server {
                 // Leave room for the hint inside DomainError's bounded message.
                 message = message.chars().take(800).collect();
                 message.push_str(" (a client may have stringified an object parameter; omit optional object parameters instead of passing null)");
+            }
+            if request.name == "read_skill_guide" {
+                return Ok(guide_wire(GuideEnvelope::failed(DomainError::new(
+                    "INVALID_PARAMS",
+                    message,
+                )))
+                .into());
             }
             if request.name == "export_move_request" {
                 return Ok(export_wire(ExportEnvelope::failed(DomainError::new(

@@ -106,7 +106,7 @@ fn real_stdio_balanced_flag_discovery_default_matrix_and_original_order() {
     let mut client = Client::new();
     let tools = client.rpc("tools/list", json!({}));
     let tools = tools["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 8);
     for tool in tools.iter().filter(|tool| tool["name"] != "suggest_split") {
         assert!(
             tool["inputSchema"]["properties"]

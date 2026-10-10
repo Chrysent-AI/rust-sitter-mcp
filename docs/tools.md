@@ -1,6 +1,6 @@
 # Structural Rust search, move plans and split advice
 
-`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, `get_split_detail` for explicitly retained historical evidence/release, and `export_move_request` for inactive exact-anchor requests from an explicit retained selection. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
+`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises `read_skill_guide` for embedded usage guidance, primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, `get_split_detail` for explicitly retained historical evidence/release, and `export_move_request` for inactive exact-anchor requests from an explicit retained selection. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
 
 A stdio launch configuration is:
 
@@ -9,6 +9,60 @@ A stdio launch configuration is:
 ```
 
 Build with `cargo build --locked`; `target/debug/rust-sitter-mcp --version` reports the package version and embedded build revision. No Git version command runs at startup. Logging uses stderr, controlled by `RUST_LOG`; source/query/capture bodies are not logged. Stdout is exclusively newline-delimited MCP JSON-RPC while serving.
+
+## Bundled usage guidance (`read_skill_guide`)
+
+This read-only tool requires no repository. It serves only canonical Markdown
+embedded when the binary was built: `SKILL.md` first, then **all** files under
+`references/**` in lexicographic relative-path order. Reference IDs are their
+relative paths, including `references/`; the guide ID is `guide`. Examples:
+
+```json
+{}
+```
+
+```json
+{"document":"references/failure-recovery.md","limits":{"response_bytes":2097152}}
+```
+
+The schema-1 response has `tool:"read_skill_guide"`, `status`, `documents`,
+`bytes`, `digest`, `document`, `content_bytes`, `content_digest`, `content`,
+`omitted_bytes`, `omission_reason`, `limits`, `integrity` and `error`.
+Every response, including errors and omissions, includes the complete
+`documents` index: each record contains `id`, source `path`, `digest` and exact
+UTF-8 `bytes`. Top-level `bytes`/`digest` always identify the **full
+concatenation**, even on a slice response. `content_bytes`/`content_digest`
+identify the complete chosen content before fitting. Digests use
+`git-blob-sha1:<40 lowercase hex digits>`: SHA-1 over Git's blob header
+(`blob <byte-length>` followed by a NUL) plus exact bytes. They identify content,
+not a signature or authentication guarantee.
+
+With `document` omitted, `content` contains the concatenation. Each segment starts
+with `# Bundled document: <id>`, a blank line, `Source: \`<path>\``, a blank line,
+`Digest: \`<digest>\``, and a blank line, followed by the verbatim document bytes.
+Two additional LF bytes separate segments. With an exact `documents[].id`,
+`content` is that document alone, byte-for-byte, without a segment header. The
+server performs no Markdown conversion, newline normalization, runtime skill
+filesystem reads, network access or caller-repository inspection. Build-time
+embedding watches the entire skill tree, including newly added references;
+the drift test compares working-tree inventory, exact bytes and digests with the
+compiled copy. Editing the tree triggers a rebuild; running the already-built
+test executable against an edited tree fails the guard.
+
+`limits` accepts **only** `response_bytes`, from 65536 through 16777216 inclusive
+(default 2097152). The budget counts duplicated text/structured JSON with escaping
+and a 4096-byte framing reserve, not just the Markdown. If chosen content exceeds
+it, the response keeps the complete index and exact sizes/digests but returns
+`status:"partial"`, `content:null`, `omitted_bytes:content_bytes` and
+`omission_reason:"response_bytes"`. No silent prefix or cut is returned. Raise the
+limit or select a document; a large slice can itself be omitted. Complete content
+has `status:"complete"`, `omitted_bytes:0` and `omission_reason:null`.
+
+Unknown IDs, unknown request/limit fields and invalid limits return
+`INVALID_PARAMS`, `status:"failed"`, `content:null` and the complete index.
+Failed requests use default limits and no selected content digest. Calls share
+the server's admission slot; `BUSY` starts no work. The tool changes no files and
+performs no analysis; `integrity.semantic` is always `"not_performed"`.
 
 ## Calls
 
@@ -1743,7 +1797,7 @@ The separately invoked export below can perform a current observational recheck.
 {"analysis_handle":"opaque-analysis-token","snapshot_id":"sha1:captured-corpus-hash","selection":[{"unit_ref":{"analysis_id":"opaque-analysis-identity","item_id":"i/src/worker.rs/0/14"},"destination":{"kind":"new_sibling","parent_path":"src/lib.rs","path":"src/helpers.rs"}}],"limits":{"response_bytes":2097152}}
 ```
 
-This seventh read-only tool accepts a **nonempty explicit selection**, not a
+This read-only tool accepts a **nonempty explicit selection**, not a
 candidate/group ID or implicit companion closure. Required identity is the retained
 `analysis_handle` and expected `snapshot_id`; optional top-level `analysis_id` and
 `scope_input_digest` must match when supplied. Every entry requires an

@@ -49,7 +49,7 @@ fn real_stdio_inactive_export_separate_hand_anchor_move_and_later_stale_check() 
     let root_before = fs::read(repo.0.join("lib.rs")).unwrap();
     let mut client = Client::new();
     let tools = client.rpc("tools/list", json!({}));
-    assert_eq!(tools["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(tools["tools"].as_array().unwrap().len(), 8);
     let advice = client.call("suggest_split", json!({"repo_path":repo.0,"crate_root":"lib.rs","source_path":"worker.rs","paths":["."],"retain_snapshot":true,"limits":{"text_bytes":0}}));
     assert_eq!(advice["retention"]["state"], "retained");
     let item = advice["inventory"]

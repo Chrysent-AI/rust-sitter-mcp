@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add `read_skill_guide` for binary-only callers: serve the complete bundled
+  Markdown guide and references, or one document, with exact byte counts and
+  Git blob SHA-1 digests. Preserve the document index when response limits
+  explicitly omit content; perform no runtime skill or repository reads.
+
 * Add explicit `parent_facade` for private-child moves, preserving old named
   paths through region-bounded parent re-exports while keeping the child private.
   Only proven unchanged named/direct-glob routes discharge their path needs;

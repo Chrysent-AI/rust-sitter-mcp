@@ -387,7 +387,7 @@ fn real_stdio_export_new_child_is_inactive_and_exact_roundtrip() {
     let before = observe(&repo.0);
     let mut client = Client::new();
     let tools = client.rpc("tools/list", json!({}));
-    assert_eq!(tools["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(tools["tools"].as_array().unwrap().len(), 8);
     for name in ["move_item", "export_move_request"] {
         let tool = tools["tools"]
             .as_array()

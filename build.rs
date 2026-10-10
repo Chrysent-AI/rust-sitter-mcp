@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[path = "build/skill_guide.rs"]
+mod skill_guide;
+use skill_guide::embed_skill;
 
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
@@ -61,6 +64,7 @@ fn main() {
     let manifest_dir = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo provides CARGO_MANIFEST_DIR"),
     );
+    embed_skill(&manifest_dir);
     let sha = revision(&manifest_dir).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=GIT_SHA={sha}");
     println!(

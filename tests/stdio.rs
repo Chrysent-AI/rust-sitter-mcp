@@ -50,7 +50,67 @@ fn real_stdio_query() {
     exchange(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let tools = exchange(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
     let advertised = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(advertised.len(), 7);
+    assert_eq!(advertised.len(), 8);
+    let guide_tool = advertised
+        .iter()
+        .find(|t| t["name"] == "read_skill_guide")
+        .unwrap();
+    assert!(guide_tool["outputSchema"].is_object());
+    assert_eq!(guide_tool["annotations"]["readOnlyHint"], true);
+    assert_eq!(guide_tool["inputSchema"]["additionalProperties"], false);
+    let guide = exchange(
+        json!({"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"read_skill_guide","arguments":{}}}),
+    );
+    let bundled = &guide["result"]["structuredContent"];
+    assert_eq!(bundled["status"], "complete");
+    assert_eq!(bundled["integrity"]["semantic"], "not_performed");
+    assert_eq!(
+        bundled["content"].as_str().unwrap().len() as u64,
+        bundled["bytes"].as_u64().unwrap()
+    );
+    assert_eq!(bundled["content_digest"], bundled["digest"]);
+    let index = bundled["documents"].clone();
+    for document in index.as_array().unwrap() {
+        let slice = exchange(
+            json!({"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"read_skill_guide","arguments":{"document":document["id"]}}}),
+        );
+        let slice = &slice["result"]["structuredContent"];
+        assert_eq!(slice["content_digest"], document["digest"]);
+        assert_eq!(
+            slice["content"].as_str().unwrap().as_bytes(),
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(document["path"].as_str().unwrap())
+            )
+            .unwrap()
+        );
+        assert_eq!(slice["documents"], index);
+    }
+    let omitted = exchange(
+        json!({"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"read_skill_guide","arguments":{"limits":{"response_bytes":65536}}}}),
+    );
+    assert!(serde_json::to_vec(&omitted).unwrap().len() <= 65536);
+    assert_eq!(omitted["result"]["structuredContent"]["status"], "partial");
+    assert_eq!(
+        omitted["result"]["structuredContent"]["omitted_bytes"],
+        bundled["bytes"]
+    );
+    assert_eq!(omitted["result"]["structuredContent"]["documents"], index);
+    for arguments in [
+        json!({"document":"missing"}),
+        json!({"limits":{"response_bytes":1}}),
+        json!({"repo_path":"."}),
+    ] {
+        let invalid = exchange(
+            json!({"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"read_skill_guide","arguments":arguments}}),
+        );
+        assert_eq!(invalid["result"]["isError"], true);
+        assert_eq!(
+            invalid["result"]["structuredContent"]["error"]["code"],
+            "INVALID_PARAMS"
+        );
+        assert_eq!(invalid["result"]["structuredContent"]["documents"], index);
+    }
     let export_tool = advertised
         .iter()
         .find(|t| t["name"] == "export_move_request")

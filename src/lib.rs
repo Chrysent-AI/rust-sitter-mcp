@@ -13,6 +13,7 @@ mod query;
 pub mod result;
 mod rewrites;
 mod scope;
+mod skill_guide;
 pub mod split;
 mod template;
 mod trivia;
