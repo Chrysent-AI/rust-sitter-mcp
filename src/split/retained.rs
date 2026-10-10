@@ -1244,6 +1244,8 @@ pub struct Manifest {
     pub snapshot_id: Option<String>,
     pub totals: Value,
     pub coverage: Value,
+    pub extraction_payoff: ExtractionPayoff,
+    pub inspection_partitions: Vec<InspectionPartition>,
     pub candidate_summaries: Vec<Value>,
     pub draft_memberships: Vec<DraftMembership>,
     pub consequence_summaries: Vec<Value>,
@@ -1272,6 +1274,7 @@ impl Manifest {
                     .groups
                     .iter()
                     .map(|g| GroupMembership {
+                        selection_completeness: g.selection_completeness.clone(),
                         consequence_summary: g.consequence_summary.clone(),
                         kind: g.kind.clone(),
                         destination_path: g.destination.as_ref().map(|d| d.path.clone()),
@@ -1322,6 +1325,8 @@ impl Manifest {
                 .iter()
                 .map(|c| json!({"candidate_id":c.id,"summary":c.consequence_summary}))
                 .collect(),
+            extraction_payoff: full.extraction_payoff.clone(),
+            inspection_partitions: full.inspection_partitions.clone(),
             candidate_summaries: candidates,
             draft_memberships: memberships,
             decision_groups: full.decision_groups.clone(),
@@ -1351,6 +1356,13 @@ impl Manifest {
     }
     fn overflow(&mut self) {
         self.manifest_complete = false;
+        self.extraction_payoff = ExtractionPayoff::default();
+        self.omissions.insert(
+            "inspection_partitions".into(),
+            self.inspection_partitions.len(),
+        );
+        self.inspection_partitions.clear();
+        self.omissions.insert("extraction_payoff".into(), 1);
         self.error = Some(DomainError::new(
             "ADVICE_MANIFEST_TOO_LARGE",
             "mandatory membership/consequence/coverage manifest cannot fit; no handle published",

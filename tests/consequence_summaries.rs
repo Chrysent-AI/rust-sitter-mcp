@@ -39,6 +39,14 @@ fn summaries(result: &Value) -> Vec<Value> {
                 .flat_map(|d| d["groups"].as_array().unwrap())
                 .map(|g| g["consequence_summary"].clone()),
         )
+        .chain(
+            result["inspection_partitions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|d| d["groups"].as_array().unwrap())
+                .map(|g| g["consequence_summary"].clone()),
+        )
         .collect()
 }
 fn expanded(member: &Value) -> BTreeSet<(String, String)> {
@@ -92,7 +100,8 @@ fn uncapped_summaries_conserve_links_at_zero_default_and_full_expansion() {
     let full = &responses[2];
     assert_eq!(full["status"], "complete", "{full}");
     assert!(!full["ownership_candidates"].as_array().unwrap().is_empty());
-    assert!(!full["drafts"].as_array().unwrap().is_empty());
+    assert_eq!(full["drafts"], json!([]));
+    assert!(!full["inspection_partitions"].as_array().unwrap().is_empty());
     let expected = summaries(full);
     assert!(!expected.is_empty());
     let expected_advice_links = advice_links(&expected);

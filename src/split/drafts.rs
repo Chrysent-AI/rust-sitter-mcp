@@ -419,7 +419,16 @@ fn make_draft(
             signal_ids,
             prefix,
         } = group_facts(members, result, controls)?;
-        let destination = if index == 0 {
+        let item_ids: Vec<_> = members
+            .iter()
+            .map(|i| result.inventory[*i].id.clone())
+            .collect();
+        let selection_completeness = presentation::completeness(&item_ids, result, controls)?;
+        let incomplete_selection =
+            selection_completeness.state != "no_observed_missing_obligations";
+        let dominated_fallback =
+            !result.extraction_payoff.dominant_item_ids.is_empty() && prefix.is_none();
+        let destination = if index == 0 || incomplete_selection || dominated_fallback {
             None
         } else {
             let base = filename(request, prefix.as_deref());
@@ -429,6 +438,12 @@ fn make_draft(
             Some(value)
         };
         let mut warnings = Vec::new();
+        if index != 0 && incomplete_selection {
+            warnings.push("selection_incomplete_or_undetermined: review missing/uncertain impl obligations and explicit bundle alternatives; destination proposal withheld, not execution-ready".into());
+        }
+        if index != 0 && dominated_fallback {
+            warnings.push("dominant_indivisible_item: core remains inspection advice; uninformative fallback destination withheld; inspect extraction_payoff".into());
+        }
         if sizes.bytes > 64 * 1024 || sizes.lines > 256 {
             warnings
                 .push("group exceeds soft 64-KiB/256-line advice; not an execution limit".into());
@@ -443,7 +458,7 @@ fn make_draft(
                 ));
             }
         }
-        let high = !fallback && facts["independent_signal_families"] >= 2;
+        let high = !fallback && !incomplete_selection && facts["independent_signal_families"] >= 2;
         let rationale = if index == 0 {
             format!(
                 "retain unsupported/context-sensitive and unallocated units ({} items); scope trivia remains in this file",
@@ -468,8 +483,9 @@ fn make_draft(
             )
         };
         groups.push(Group {
+            selection_completeness,
             kind: if index == 0 { "retain" } else { "new_sibling" }.into(), destination,
-            item_ids: members.iter().map(|i| result.inventory[*i].id.clone()).collect(), rationale,
+            item_ids, rationale,
             confidence: Confidence { basis: "syntactic_heuristic".into(), level: if high { "high" } else { "low" }.into(), limitations: vec!["integer organization facts, not probability or move safety; symbols/types/cfg/macros/public API not verified".into()] },
             sizes, overlap_ids: Vec::new(), size_interpretation: None, signal_ids, facts, warnings,
             expected_to_block: ExpectedBlocks {
@@ -559,6 +575,51 @@ fn make_draft(
         cross_group_signal_ids, unresolved_decision_ids: Vec::new(),
     }))
 }
+fn publish_draft(result: &mut SuggestSplitEnvelope, draft: Draft) -> Result<(), DomainError> {
+    if draft.groups.iter().skip(1).all(|g| g.destination.is_some()) {
+        result.drafts.push(draft);
+    } else {
+        let partition = InspectionPartition {
+            rationale: draft.rationale,
+            id: format!("inspection/{}", result.inspection_partitions.len()),
+            source_snapshot_id: draft.source_snapshot_id,
+            groups: draft
+                .groups
+                .into_iter()
+                .map(|g| InspectionGroup {
+                    consequence_summary: g.consequence_summary,
+                    confidence: g.confidence,
+                    kind: if g.kind == "retain" {
+                        "retain"
+                    } else {
+                        "extraction_core"
+                    }
+                    .into(),
+                    item_ids: g.item_ids,
+                    selection_completeness: g.selection_completeness,
+                    sizes: g.sizes,
+                    rationale: g.rationale,
+                    warnings: g.warnings,
+                })
+                .collect(),
+            applicability: "not_assessed; inspection only, not execution-ready".into(),
+        };
+        result.account(descriptor_bytes(&partition)?)?;
+        result.inspection_partitions.push(partition);
+        if !result
+            .draft_eligibility
+            .reasons
+            .iter()
+            .any(|r| r == "inspection_only_selection_or_payoff")
+        {
+            result
+                .draft_eligibility
+                .reasons
+                .push("inspection_only_selection_or_payoff".into());
+        }
+    }
+    Ok(())
+}
 pub(super) fn build(
     scope: &Scope,
     request: &SuggestSplitRequest,
@@ -645,17 +706,22 @@ pub(super) fn build(
             .push("no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99".into());
         return Ok(());
     };
-    result.drafts.push(first);
+    publish_draft(result, first)?;
     if request.include_balanced.unwrap_or(false) {
         let b = balanced(result, controls)?;
         if a != b
             && let Some(second) = make_draft(b, true, &layout, parent, result)?
         {
-            result.drafts.push(second);
+            publish_draft(result, second)?;
         }
     }
     result.counts.drafts = result.drafts.len();
-    result.draft_eligibility.state = "drafted".into();
+    result.draft_eligibility.state = if result.drafts.is_empty() {
+        "no_draft"
+    } else {
+        "drafted"
+    }
+    .into();
     Ok(())
 }
 pub(super) fn finalize(

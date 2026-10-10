@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Disclose group-level `selection_completeness`, explicit reviewed supported
+  bundles and visible exclusions in `suggest_split`. Keep incomplete selections
+  and dominated files without supported names in destination-free
+  `inspection_partitions`; report dominant indivisible items and original-core
+  extraction payoff without changing honest negative outcomes or auto-selecting
+  companions. Full advice schema 2 and compact manifest schema 1 remain additive.
+
 * Add `read_skill_guide` for binary-only callers: serve the complete bundled
   Markdown guide and references, or one document, with exact byte counts and
   Git blob SHA-1 digests. Preserve the document index when response limits

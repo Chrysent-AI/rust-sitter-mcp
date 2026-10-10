@@ -162,7 +162,11 @@ fn real_stdio_balanced_flag_discovery_default_matrix_and_original_order() {
     let enabled = client.call("suggest_split", request(&repo, Some(true)));
     linked_evidence(&enabled);
     let drafts = enabled["drafts"].as_array().unwrap();
-    assert_eq!(drafts.len(), 2);
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(
+        enabled["inspection_partitions"].as_array().unwrap().len(),
+        1
+    );
     assert_eq!(enabled["partition_outcome"], "credible_written_candidates");
     for (plain, explicit) in omitted["drafts"][0]["groups"]
         .as_array()
@@ -172,10 +176,17 @@ fn real_stdio_balanced_flag_discovery_default_matrix_and_original_order() {
     {
         assert_eq!(plain["item_ids"], explicit["item_ids"]);
     }
-    assert!(drafts[1]["rationale"].as_str().unwrap().contains(
-        "low-confidence original-order balanced alternative; no semantic boundary claimed"
-    ));
-    let groups = drafts[1]["groups"].as_array().unwrap();
+    assert!(
+        enabled["inspection_partitions"][0]["rationale"]
+            .as_str()
+            .unwrap()
+            .contains(
+                "low-confidence original-order balanced alternative; no semantic boundary claimed"
+            )
+    );
+    let groups = enabled["inspection_partitions"][0]["groups"]
+        .as_array()
+        .unwrap();
     assert!(groups.iter().all(|g| g["confidence"]["level"] == "low"));
     assert!(groups.iter().skip(1).all(|g| {
         g["rationale"]

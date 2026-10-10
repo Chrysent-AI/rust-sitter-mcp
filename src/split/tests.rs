@@ -187,7 +187,7 @@ fn final_fit_tier_accounts_membership_without_losing_root_or_snapshot() {
 fn fitting_withheld_drafts_preserves_overlap_labels_and_accounts_records() {
     let repo = Fixture::new();
     fs::write(repo.0.join("lib.rs"),
-        "struct Recorder;\nimpl Recorder {\nfn record_start() {}\nfn record_stop() {}\nfn other() {}\n}\n").unwrap();
+        "impl Recorder {\nfn record_start(&self) { self.record_stop(); }\nfn record_stop(&self) {}\nfn other() {}\n}\n").unwrap();
     let mut result = run(&repo.0, repo.request(), &AtomicBool::new(false));
     assert_eq!(result.status, "complete");
     let expected: Vec<_> = result
@@ -249,6 +249,33 @@ fn fitting_withheld_drafts_preserves_overlap_labels_and_accounts_records() {
             .filter(|i| i.enclosing_impl.is_some())
             .all(|i| i.enclosing_impl_id.is_some() && i.size_interpretation.is_some())
     );
+    assert!(result.wire_bytes() <= result.limits.response_bytes);
+}
+
+#[test]
+fn fitting_inspection_partitions_reports_omissions_and_invalidates_payoff() {
+    let repo = Fixture::new();
+    fs::write(
+        repo.0.join("lib.rs"),
+        "struct State; impl State { fn read(&self) {} } fn other() {}\n",
+    )
+    .unwrap();
+    let mut result = run(&repo.0, repo.request(), &AtomicBool::new(false));
+    assert!(result.drafts.is_empty());
+    assert_eq!(result.inspection_partitions.len(), 1);
+    result.inspection_partitions[0].rationale = "x".repeat(100_000);
+    result.limits.response_bytes = 65_536;
+    result
+        .fit(Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &AtomicBool::new(false),
+        })
+        .unwrap();
+    assert_eq!(result.status, "partial");
+    assert!(result.inspection_partitions.is_empty());
+    assert_eq!(result.counts.omissions["inspection_partitions"], 1);
+    assert_eq!(result.counts.omissions["extraction_payoff"], 1);
+    assert!(!result.extraction_payoff.completed);
     assert!(result.wire_bytes() <= result.limits.response_bytes);
 }
 
@@ -348,9 +375,13 @@ fn impl_heavy_mixed_layout_drafts_members_without_duplicate_body_observations() 
     fs::write(repo.0.join("lib.rs"), "mod flat;\n").unwrap();
     fs::write(repo.0.join("flat.rs"), "mod legacy;\n").unwrap();
     fs::create_dir_all(repo.0.join("flat/legacy")).unwrap();
-    fs::write(repo.0.join("flat/legacy/mod.rs"), "mod heavy;\n").unwrap();
+    fs::write(
+        repo.0.join("flat/legacy/mod.rs"),
+        "struct Recorder; mod heavy;\n",
+    )
+    .unwrap();
     fs::write(repo.0.join("flat/legacy/heavy.rs"),
-        "struct Recorder;\nimpl Recorder {\nfn record_start() { missing(); self.record_stop(); }\nfn record_stop() {}\nfn other() {}\n#[cfg(unknown)] fn record_hidden() {}\n}\n").unwrap();
+        "use super::Recorder;\nfn unrelated() {}\nimpl Recorder {\nfn record_start() { missing(); self.record_stop(); }\nfn record_stop() {}\nfn other() {}\n#[cfg(unknown)] fn record_hidden() {}\n}\n").unwrap();
     let mut request = repo.request();
     request.source_path = "flat/legacy/heavy.rs".into();
     request.limits.diagnostic_count = 100_000;

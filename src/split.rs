@@ -9,6 +9,10 @@ pub use consequences::{
 mod ownership;
 pub mod retained;
 pub use retained::{DetailEnvelope, DetailRequest, ExportEnvelope, ExportRequest, SplitResponse};
+mod presentation;
+pub use presentation::{
+    ExtractionPayoff, InspectionGroup, InspectionPartition, SelectionCompleteness, SizedItem,
+};
 mod signals;
 mod test_observations;
 pub use boundary::{BoundaryCoverage, BoundaryObservation, BoundaryObservations};
@@ -293,6 +297,7 @@ pub struct AssessmentScope {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct Group {
+    pub selection_completeness: SelectionCompleteness,
     pub kind: String,
     pub destination: Option<ProposedDestination>,
     pub item_ids: Vec<String>,
@@ -332,6 +337,7 @@ pub struct DraftMembership {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GroupMembership {
+    pub selection_completeness: SelectionCompleteness,
     pub consequence_summary: ConsequenceSummary,
     pub kind: String,
     pub destination_path: Option<String>,
@@ -409,10 +415,12 @@ pub struct SuggestSplitEnvelope {
     pub advice_decisions: Vec<ConsequenceAdviceDecision>,
     pub decision_groups: Vec<AdviceDecisionGroup>,
     pub drafts: Vec<Draft>,
+    pub inspection_partitions: Vec<InspectionPartition>,
     pub ownership_candidates: Vec<OwnershipCandidate>,
     pub boundary_observations: BoundaryObservations,
     pub test_observations: TestObservations,
     pub partition_outcome: String,
+    pub extraction_payoff: ExtractionPayoff,
     /// Non-executable membership summaries when output fitting withholds full drafts.
     pub draft_summaries: Vec<DraftMembership>,
     pub draft_eligibility: DraftEligibility,
@@ -457,9 +465,11 @@ impl SuggestSplitEnvelope {
             advice_decisions: Vec::new(),
             decision_groups: Vec::new(),
             drafts: Vec::new(),
+            inspection_partitions: Vec::new(),
             ownership_candidates: Vec::new(),
             boundary_observations: BoundaryObservations::default(),
             test_observations: TestObservations::default(),
+            extraction_payoff: ExtractionPayoff::default(),
             partition_outcome: "incomplete_analysis".into(),
             draft_summaries: Vec::new(),
             draft_eligibility: DraftEligibility {
@@ -587,6 +597,9 @@ impl SuggestSplitEnvelope {
         self.drafts.clear();
     }
     fn incomplete(&mut self, reason: &str) {
+        self.omit("inspection_partitions", self.inspection_partitions.len());
+        self.inspection_partitions.clear();
+        self.extraction_payoff.completed = false;
         self.withhold();
         self.partition_outcome = "incomplete_analysis".into();
         self.boundary_observations.coverage.completed = false;
@@ -862,6 +875,7 @@ impl SuggestSplitEnvelope {
                         .groups
                         .iter()
                         .map(|group| GroupMembership {
+                            selection_completeness: group.selection_completeness.clone(),
                             consequence_summary: group.consequence_summary.clone(),
                             kind: group.kind.clone(),
                             destination_path: group.destination.as_ref().map(|d| d.path.clone()),
@@ -875,6 +889,8 @@ impl SuggestSplitEnvelope {
                 .collect();
         }
         self.incomplete("response_bytes");
+        self.extraction_payoff = ExtractionPayoff::default();
+        self.omit("extraction_payoff", 1);
         self.omit("ownership_candidates", self.ownership_candidates.len());
         self.ownership_candidates.clear();
         self.omit(
@@ -1124,6 +1140,9 @@ fn analyze_with_recheck(
     .and_then(|()| drafts::finalize(&mut result, controls))
     .and_then(|()| controls.check());
     if let Err(error) = outcome {
+        result.omit("inspection_partitions", result.inspection_partitions.len());
+        result.inspection_partitions.clear();
+        result.extraction_payoff.completed = false;
         // A stopped collector may still have provisional IDs. Never publish partial linked
         // evidence as finalized; keep its observed counts and explicit omission accounting.
         result.counts.signals = result.counts.signals.max(result.signals.len());
@@ -1513,6 +1532,7 @@ fn build(
         result,
     )?;
     ownership::build(result, controls)?;
+    presentation::payoff(result, controls)?;
     boundary::link(result, controls)?;
     test_observations::collect(
         request,

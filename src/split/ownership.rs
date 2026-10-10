@@ -145,6 +145,14 @@ pub(super) fn structural_signals(
                 "excluded_impl".into(),
                 usize::from(!identity.exclusions.is_empty()),
             );
+            value.facts.insert(
+                "generic_impl".into(),
+                usize::from(
+                    node.child_by_field_name("type_parameters").is_some()
+                        || node.child_by_field_name("where_clause").is_some()
+                        || ty.kind() == "generic_type",
+                ),
+            );
             value.limitations.push(format!("unique local written nominal association only; no trait or generic semantics; impl exclusions: {}", identity.exclusions.join(", ")));
             added.push(value);
         }
@@ -836,7 +844,14 @@ fn candidate(
             });
         }
     }
-    Ok(OwnershipCandidate { id: String::new(), consequence_summary: ConsequenceSummary::default(), core_item_ids: core.iter().map(|m| result.inventory[*m].id.clone()).collect(), structural_signal_ids: structural.into_iter().collect(), companions: companions.into_values().collect(), alternatives, ranking, observation_scope: "boundary_observations.coverage; written references, not resolved ownership".into(), selection_policy: "core only; companions and alternatives are inspection advice, never automatically selected".into() })
+    let core_ids: Vec<_> = core
+        .iter()
+        .map(|m| result.inventory[*m].id.clone())
+        .collect();
+    if let Some(bundle) = presentation::bundle_alternative(&core_ids, result, controls)? {
+        alternatives.push(bundle);
+    }
+    Ok(OwnershipCandidate { id: String::new(), consequence_summary: ConsequenceSummary::default(), core_item_ids: core_ids, structural_signal_ids: structural.into_iter().collect(), companions: companions.into_values().collect(), alternatives, ranking, observation_scope: "boundary_observations.coverage; written references, not resolved ownership".into(), selection_policy: "core only; companions and alternatives are inspection advice, never automatically selected".into() })
 }
 fn n_boundary(result: &SuggestSplitEnvelope, b: usize) -> usize {
     result.inventory.len() + b

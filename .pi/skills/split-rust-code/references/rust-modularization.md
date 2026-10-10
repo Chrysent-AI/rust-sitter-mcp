@@ -123,6 +123,8 @@ provides no atomic freshness guarantee.
 
 ## Reading structural ownership advice
 
+Group-level completeness and reviewed complete/subset bundle alternatives disclose local written type/impl obligations without mandating co-location or selecting companions. Keep trait/generic/member/overlap exclusions explicit. Destination-free inspection partitions preserve credible cores whose current selection or payoff does not justify a destination draft. Inspect dominant indivisible items and original-core extraction size before proposing a split; neither a small payoff nor an honest no-core result establishes semantic architecture or that the file is already modular.
+
 Name prefixes, banners, shared attributes and adjacency are displayed weak facts,
 not core-forming edges. Structural ownership advice is the default. Since v0.5.0,
 byte balancing is requested only with `include_balanced:true`, and only as the existing

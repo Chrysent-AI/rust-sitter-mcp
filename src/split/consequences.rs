@@ -376,6 +376,13 @@ pub(super) fn attach(
     for group in result.drafts.iter_mut().flat_map(|d| &mut d.groups) {
         group.consequence_summary = summarize(&group.item_ids)?;
     }
+    for group in result
+        .inspection_partitions
+        .iter_mut()
+        .flat_map(|d| &mut d.groups)
+    {
+        group.consequence_summary = summarize(&group.item_ids)?;
+    }
     result.account(bytes)
 }
 

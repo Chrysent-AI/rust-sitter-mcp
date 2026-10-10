@@ -1313,6 +1313,76 @@ The result has `advisory:true`, `source`, `inventory[]`, `overlaps[]`, `item_con
 - Unattached scope/prologue/ambiguous trivia has separate descriptors and a `keep_in_place` default. Banner links and `banner_section` signals mean adjacency only, never banner ownership. Internal scopes belong to their whole unit. Item contexts are original neighboring complete lines; the entire-source context has no lines outside the file.
 - Signals expose snake_case/CamelCase word prefixes (≥3 characters, ≥2 names), counted directed bare/simple-path candidates with occurrence spans, banner sections, adjacent shared outer attributes/doc headings and item sizes. `get`, `set`, `new`, duplicate/common names, uncertain lexical bindings, unexpanded macros and type-directed accesses are not strong evidence. Same-spelled recognized locals/parameters/generics are not file-level edges. Inline-module bodies, macro tokens, strings/comments and unrelated qualified suffixes do not supply file-level reference proof. Candidates are **not a resolved call graph**.
 
+### Selection completeness and extraction payoff
+
+Full schema-2 advice and compact schema-1 manifests add `inspection_partitions`
+and `extraction_payoff`; existing schema versions and field meanings are unchanged.
+Every draft/membership group and inspection group has `selection_completeness`:
+`state` is `incomplete`, `undetermined`, or `no_observed_missing_obligations`,
+with `missing_item_ids`, `uncertain_item_ids`, and `applicability:"not_assessed"`.
+Only the selected nominal's local written type/impl associations are assessed.
+A whole impl or all its supported members can represent an observed obligation;
+a subset, excluded trait/generic impl, or excluded member cannot. Ambiguous
+written association is undetermined, not invented ownership. The absence of an
+observed missing obligation says nothing about generated/outside-file obligations,
+semantic completeness or move applicability.
+
+When any extraction group's selection is incomplete/undetermined, the partition
+appears in `inspection_partitions`, **not** `drafts`. The same happens for a
+file with a dominant indivisible item when an extraction lacks a supported prefix
+name: no uninformative `_part.rs` destination draft is emitted. Inspection records
+have `id` (`inspection/N`), `source_snapshot_id`, `rationale`, `groups`, and an explicit
+inspection-only `applicability` note. Groups have `kind:"retain"` or
+`"extraction_core"`, exact-once `item_ids`, `selection_completeness`, original
+`sizes`, `rationale`, advisory `confidence`, uncapped `consequence_summary`, and
+`warnings`, but **no destination**. These are not execution
+requests, byte-disjoint partitions, or local blocker forecasts. Candidates and
+companions remain independently visible. `draft_eligibility.state:"no_draft"`
+with `inspection_only_selection_or_payoff` explains this presentation; completed
+analysis can still have `partition_outcome:"credible_written_candidates"`.
+Existing destination-bearing drafts, their null-destination retain sets and
+name-prefix/fallback collision ladder retain their meaning. Conceptual architecture
+is never inferred from a proposed prefix.
+
+Candidate `alternatives` additionally offer `kind:"complete_supported_bundle"`
+when all observed local impl obligations have a supported explicit representation,
+otherwise `"supported_bundle_subset"`. Both include the core, supported inherent
+members (or a supported whole impl with no inventoried members), visible
+`excluded_item_ids`, `overlap_ids`, and an inspection-only `applicability` note.
+Trait/generic/ambiguous impls and unsupported members stay excluded. The additive
+`impl_owner_bundle.facts.generic_impl` identifies generic/where headers or a
+parameterized written owner for bundle review, without changing the existing
+`excluded_impl` fact, companion traversal or member eligibility. Whole impl
+IDs excluded in favor of members remain visible as overlap exclusions; they do
+not alone make a supported member bundle incomplete. Review the alternative and
+explicitly select it: neither it nor a companion changes the primary core.
+
+`extraction_payoff.completed` indicates completed written payoff analysis.
+`source_bytes`, `largest_items` (the largest three top-level units in descending
+byte size/source order, with `item_id`, `bytes`, `lines`, and
+`supported_member_partition`), and `dominant_item_ids` describe source shape.
+Dominance uses the disclosed threshold of at least half of source bytes in one
+indivisible unit. An impl with supported member partitioning is not counted as
+indivisible, but a giant individual member can be; an impl with only excluded
+members remains indivisible for this advice. Resolve IDs against the inventory.
+`expected_useful_extraction` (`items`, unique original-range `bytes`, written
+`lines`) and `extraction_item_ids` describe the primary's core-only selection,
+not companions, balanced alternatives or generated file size. This estimate is
+independent of destination availability and is zero when no supported core exists.
+`basis` and `limitations` disclose these rules. Dominance never changes a negative
+into a positive or vice versa: `no_credible_written_partition` still means no
+supported core established, not that the file is already modular. A dominated
+file with a real smaller core preserves that core for inspection.
+
+Compact manifests carry both disclosures without fetching group detail. Retained
+full group records and fitted `draft_summaries` retain group completeness;
+inspection partitions are supplied directly, not a new detail-selector collection.
+Response-budget fallback withholds inspection partitions/payoff with exact
+`inspection_partitions`/`extraction_payoff` omission counts and sets payoff
+completion false; incomplete work cannot establish absence of obligations or
+useful extraction. No compilation, semantic verification or execution change is
+introduced.
+
 ### Reading and editing partitions
 
 Each draft has a nonempty retain group and up to two sibling groups. Every inventoried ID appears **exactly once** in each complete draft. A sibling destination supplies a proposed absent path, an evidenced ordinary declaration parent/module chain, and an existing matching declaration descriptor when reused. The server probes the base name then `_2` through `_99`, checking scope admission, ignores, filesystem/case/layout occupancy and declaration/import collisions. It never guesses a parent from the source basename.

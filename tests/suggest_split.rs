@@ -210,7 +210,13 @@ fn all_written_units_and_display_omission_preserve_complete_drafts() {
             .is_empty()
     );
     assert!(!result["scope_trivia"].as_array().unwrap().is_empty());
-    assert!(!result["drafts"].as_array().unwrap().is_empty());
+    assert_eq!(result["drafts"], json!([]));
+    assert!(
+        !result["inspection_partitions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     let by_id: BTreeMap<_, _> = inventory
         .iter()
         .map(|unit| (unit["id"].as_str().unwrap(), unit))
@@ -219,7 +225,7 @@ fn all_written_units_and_display_omission_preserve_complete_drafts() {
         .iter()
         .map(|record| (record["item_id"].as_str().unwrap(), record))
         .collect();
-    for draft in result["drafts"].as_array().unwrap() {
+    for draft in result["inspection_partitions"].as_array().unwrap() {
         let mut seen = BTreeSet::new();
         for group in draft["groups"].as_array().unwrap() {
             for id in group["item_ids"].as_array().unwrap() {
@@ -334,7 +340,8 @@ fn planted_cohesion_balanced_alternative_and_weak_fallback() {
         edge(&result, "beta_write", "alpha_parse").unwrap()["count"],
         1
     );
-    assert_eq!(result["drafts"].as_array().unwrap().len(), 2);
+    assert_eq!(result["drafts"].as_array().unwrap().len(), 1);
+    assert_eq!(result["inspection_partitions"].as_array().unwrap().len(), 1);
     let first = &result["drafts"][0];
     let groups = first["groups"].as_array().unwrap();
     let alpha = groups
@@ -421,7 +428,7 @@ fn common_prefixes_duplicate_names_and_indivisible_size_are_honest() {
     let huge = run(&repo, args(&repo, "src/weak.rs"));
     advice_flow::complete(&huge);
     assert!(
-        huge["drafts"][0]["groups"][0]["warnings"]
+        huge["inspection_partitions"][0]["groups"][0]["warnings"]
             .as_array()
             .unwrap()
             .iter()

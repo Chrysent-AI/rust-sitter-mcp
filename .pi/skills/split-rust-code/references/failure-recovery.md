@@ -290,6 +290,7 @@ recovery described above.
 | `incomplete` + `response_bytes` | Drafts/decisions withheld at the response cap | Retry with `limits: {"response_bytes": 8388608}` (≤16 MiB). Membership may still be complete — the inventory is usable. |
 | `no_draft` + `no_admitted_nonconflicting_name…` | Already modularized / too few movable units | Legitimate "nothing to do"; report the design, don't force a split. |
 | `no_draft` + chain reasons | Root/scope problem | Fix `crate_root`/`paths` per chain diagnostics. |
+| `no_draft` + `inspection_only_selection_or_payoff` | Completed inspection-only advice: the selection is incomplete/undetermined or the file is dominance-limited | Inspect `inspection_partitions`, group `selection_completeness`, reviewed bundle alternatives and `extraction_payoff`. Not response truncation, not proof the file is already modular, and not a reason to force balancing. Check `inspection_partitions`/`extraction_payoff` omission counts and `completed` before relying on disclosures; genuine budget omissions still need ordinary recovery. Inspection partitions are returned directly, not a new `get_split_detail` selector collection. |
 
 `root: null` in the advice envelope means the same response-budget truncation — recover the budget before constructing anchors.
 
