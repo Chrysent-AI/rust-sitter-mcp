@@ -378,6 +378,21 @@ fn registry_vendor_refusals_never_download_or_mutate_caller_storage() {
         }
         let before = observe(&repo.0);
         let cache = observe(&home.0);
+        if case == "transitive" {
+            let corpus = discover_fixture(&repo, &home, &state, &config).unwrap();
+            assert_eq!(corpus.coverage.consulted_roots.len(), 2);
+            assert_eq!(corpus.coverage.consulted_roots[1].package, "leaf");
+            corpus
+                .recheck((
+                    Instant::now() + Duration::from_secs(30),
+                    &AtomicBool::new(false),
+                ))
+                .unwrap();
+            assert_eq!(observe(&repo.0), before);
+            assert_eq!(observe(&home.0), cache);
+            assert!(fs::read_dir(&state.0).unwrap().next().is_none());
+            continue;
+        }
         let error = discover_fixture(&repo, &home, &state, &config)
             .err()
             .unwrap();
@@ -388,7 +403,7 @@ fn registry_vendor_refusals_never_download_or_mutate_caller_storage() {
                     "EXTERNAL_PACKAGE_UNAVAILABLE",
                 "features" | "alias_conflict" => "EXTERNAL_CONFIGURATION_MISMATCH",
                 "duplicates" | "lock_duplicate" => "EXTERNAL_PACKAGE_AMBIGUOUS",
-                "git" | "transitive" => "EXTERNAL_DEPENDENCY_UNSUPPORTED",
+                "git" => "EXTERNAL_DEPENDENCY_UNSUPPORTED",
                 "wrapper" | "build_script" | "proc_macro" | "global_config" | "target" =>
                     "EXTERNAL_CONFIGURATION_UNSUPPORTED",
                 "symlink" => "EXTERNAL_ROOT_UNSUPPORTED",

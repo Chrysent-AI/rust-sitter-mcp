@@ -1,4 +1,6 @@
 //! Request-local, read-only library evidence. Never part of repository edit admission.
+#[path = "external_graph.rs"]
+mod graph;
 #[cfg(test)]
 #[path = "external_registry_tests.rs"]
 mod registry_tests;
@@ -7,6 +9,9 @@ mod sources;
 #[cfg(test)]
 #[path = "external_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "external_transitive_tests.rs"]
+mod transitive_tests;
 use super::semantic::{Configuration, CrateInput, DependencyInput};
 use crate::{
     items,
@@ -58,6 +63,24 @@ pub struct Coverage {
     pub consulted_roots: Vec<ConsultedRoot>,
     pub corpus_digest: String,
     pub omissions: Vec<String>,
+    pub capture_usage: CaptureUsage,
+}
+/// Raw capture/comparison charges, not heap or Cargo-unpacker disk measurements.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct CaptureUsage {
+    pub max_files: usize,
+    pub max_file_bytes: usize,
+    pub max_source_bytes: usize,
+    pub input_files: usize,
+    pub input_bytes: usize,
+    pub observed_files: usize,
+    pub observed_bytes: usize,
+    pub archive_comparison_entries: usize,
+    pub archive_comparison_bytes: usize,
+    pub source_files_per_overlay: usize,
+    pub source_bytes_per_overlay: usize,
+    pub graph_edges: usize,
 }
 pub(crate) struct Corpus {
     pub texts: BTreeMap<String, String>,
@@ -1185,17 +1208,8 @@ fn discover_at_home(
             "only ordinary caller library/binary targets are supported",
         ));
     }
-    let resolve = metadata.resolve.as_ref().ok_or_else(|| {
-        refusal(
-            "EXTERNAL_DISCOVERY_FAILED",
-            "metadata has no resolved graph",
-        )
-    })?;
-    let caller_node = resolve
-        .nodes
-        .iter()
-        .find(|n| n.id == caller.id)
-        .ok_or_else(|| refusal("EXTERNAL_DISCOVERY_FAILED", "caller node absent"))?;
+    let graph = graph::Graph::new(&metadata, controls)?;
+    let caller_node = graph.node(&caller.id)?;
     let mut configuration = config.clone();
     let root_index = configuration
         .crates
@@ -1222,72 +1236,29 @@ fn discover_at_home(
     let mut roots = Vec::new();
     let mut identities = BTreeMap::new();
     let mut consulted = Vec::new();
-    // Package IDs, not bare Cargo/crate names, key the internal graph. Adapter
-    // labels are unique even when two versions share a library name or one
-    // package is reachable under multiple renamed edges.
-    let mut graph_nodes: BTreeMap<String, String> = BTreeMap::new();
-    let mut package_ids = BTreeSet::new();
-    let mut package_identities = BTreeSet::new();
-    let mut node_ids = BTreeSet::new();
-    if metadata.packages.iter().any(|p| {
-        !package_ids.insert(&p.id)
-            || !package_identities.insert((
-                &p.name,
-                &p.version,
-                &p.source,
-                p.source.is_none().then_some(&p.manifest_path),
-            ))
-    }) || resolve.nodes.iter().any(|n| !node_ids.insert(&n.id))
-    {
-        return Err(refusal(
-            "EXTERNAL_PACKAGE_AMBIGUOUS",
-            "duplicate package or resolved node identity",
-        ));
-    }
-    for edge in &caller_node.deps {
+    let libraries = graph.closure(
+        &caller.id,
+        graph::CRATE_CAP.saturating_sub(configuration.crates.len()),
+        controls,
+    )?;
+    // Every metadata-resolved manifest must already belong to the conservative
+    // preflight closure. A newly discovered path is never permission to read an
+    // unchecked root after scratch writes. Repeat the candidate walk using those
+    // exact manifests to bind transitive path/workspace inputs to the graph.
+    sources.bind_graph_inputs(&libraries, tree, limits, controls)?;
+    let mut usage = CaptureUsage {
+        max_files: limits.max_files,
+        max_file_bytes: limits.max_file_bytes,
+        max_source_bytes: limits.max_source_bytes,
+        input_files: observed.len(),
+        input_bytes: observed.values().map(Vec::len).sum(),
+        archive_comparison_entries: sources.comparison.0,
+        archive_comparison_bytes: sources.comparison.1,
+        ..CaptureUsage::default()
+    };
+    let mut graph_nodes = BTreeMap::from([(caller.id.clone(), root_index)]);
+    for package in &libraries {
         items::check(controls.0, controls.1)?;
-        if edge
-            .dep_kinds
-            .iter()
-            .all(|k| k.kind.as_deref() == Some("dev") || k.kind.as_deref() == Some("build"))
-        {
-            continue;
-        }
-        if edge.dep_kinds.iter().any(|k| k.target.is_some()) {
-            return Err(refusal(
-                "EXTERNAL_CONFIGURATION_UNSUPPORTED",
-                "target-conditional dependency edges are unsupported",
-            ));
-        }
-        let package = metadata
-            .packages
-            .iter()
-            .find(|p| p.id == edge.pkg)
-            .ok_or_else(|| {
-                refusal(
-                    "EXTERNAL_DISCOVERY_FAILED",
-                    "resolved dependency package absent",
-                )
-            })?;
-        let declared = caller
-            .dependencies
-            .iter()
-            .find(|d| {
-                d.kind.is_none()
-                    && d.rename.as_deref().unwrap_or(&d.name).replace('-', "_") == edge.name
-            })
-            .ok_or_else(|| {
-                refusal(
-                    "EXTERNAL_ROOT_UNSUPPORTED",
-                    "dependency is not a declared direct edge",
-                )
-            })?;
-        if declared.name != package.name || declared.source != package.source {
-            return Err(refusal(
-                "EXTERNAL_CONFIGURATION_MISMATCH",
-                "declared dependency name/source does not identify resolved package",
-            ));
-        }
         if package
             .source
             .as_ref()
@@ -1303,20 +1274,6 @@ fn discover_at_home(
                 refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid package manifest")
             })?)?;
         let provenance = sources.provenance(package, &root, controls)?;
-        if package.source.is_none()
-            && declared
-                .path
-                .as_ref()
-                .map(|p| p.canonicalize())
-                .transpose()
-                .map_err(io_error)?
-                != Some(root.clone())
-        {
-            return Err(refusal(
-                "EXTERNAL_CONFIGURATION_MISMATCH",
-                "declared path does not identify resolved package root",
-            ));
-        }
         disjoint(tree, [root.clone()])?;
         if provenance == "path" {
             config_guard(&root)?;
@@ -1327,17 +1284,7 @@ fn discover_at_home(
                 "external path library must be disjoint from caller repository",
             ));
         }
-        let node = resolve
-            .nodes
-            .iter()
-            .find(|n| n.id == package.id)
-            .ok_or_else(|| refusal("EXTERNAL_DISCOVERY_FAILED", "dependency node absent"))?;
-        if !node.deps.is_empty() {
-            return Err(refusal(
-                "EXTERNAL_DEPENDENCY_UNSUPPORTED",
-                "transitive dependency closures are not supported",
-            ));
-        }
+        let node = graph.node(&package.id)?;
         if package.targets.iter().any(|t| {
             t.kind
                 .iter()
@@ -1369,31 +1316,6 @@ fn discover_at_home(
             })?
             .to_str()
             .ok_or_else(|| refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid library path"))?;
-        if configuration.crates[root_index]
-            .dependencies
-            .iter()
-            .any(|d| d.name == edge.name)
-        {
-            return Err(refusal(
-                "EXTERNAL_CONFIGURATION_MISMATCH",
-                "external dependency alias conflicts with explicit graph",
-            ));
-        }
-        if configuration.crates[root_index].dependencies.len() >= 32 {
-            return Err(refusal(
-                "EXTERNAL_CORPUS_INCOMPLETE",
-                "external dependency edge cap exhausted",
-            ));
-        }
-        if let Some(name) = graph_nodes.get(&package.id) {
-            configuration.crates[root_index]
-                .dependencies
-                .push(DependencyInput {
-                    name: edge.name.clone(),
-                    crate_name: name.clone(),
-                });
-            continue;
-        }
         let index = roots.len();
         let namespace = format!("{PREFIX}{index}/");
         let name = format!("external_path_{index}");
@@ -1409,14 +1331,6 @@ fn discover_at_home(
                 "resolved package manifest was not captured before Cargo",
             ));
         }
-        if configuration.crates.len() >= 32
-            || configuration.crates[root_index].dependencies.len() >= 32
-        {
-            return Err(refusal(
-                "EXTERNAL_CORPUS_INCOMPLETE",
-                "external crate graph cap exhausted",
-            ));
-        }
         let (files, bytes) = capture(
             &root,
             &src,
@@ -1425,7 +1339,18 @@ fn discover_at_home(
             controls,
             &mut texts,
             &mut observed,
-        )?;
+        )
+        .map_err(|mut error| {
+            if error.code == "EXTERNAL_CORPUS_INCOMPLETE" {
+                error.message = format!(
+                    "{}; closure captured {} roots, {} source files/{} bytes; observed inputs {} files/{} bytes plus archive comparison {} entries/{} bytes; limits {} files, {} bytes per file, {} aggregate bytes",
+                    error.message, roots.len(), texts.len(), texts.values().map(String::len).sum::<usize>(),
+                    observed.len(), observed.values().map(Vec::len).sum::<usize>(), sources.comparison.0, sources.comparison.1,
+                    limits.max_files, limits.max_file_bytes, limits.max_source_bytes
+                );
+            }
+            error
+        })?;
         let root_file = format!("{namespace}{relative}");
         if !texts.contains_key(&root_file) {
             return Err(refusal(
@@ -1433,13 +1358,7 @@ fn discover_at_home(
                 "library root missing from captured sources",
             ));
         }
-        configuration.crates[root_index]
-            .dependencies
-            .push(DependencyInput {
-                name: edge.name.clone(),
-                crate_name: name.clone(),
-            });
-        graph_nodes.insert(package.id.clone(), name.clone());
+        graph_nodes.insert(package.id.clone(), configuration.crates.len());
         configuration.crates.push(CrateInput {
             name,
             root_file,
@@ -1469,12 +1388,43 @@ fn discover_at_home(
         identities.insert(root.clone(), (meta.dev(), meta.ino()));
         roots.push(root);
     }
+    for owner in std::iter::once(caller).chain(libraries) {
+        let index = graph_nodes[&owner.id];
+        for edge in graph::normal_edges(graph.node(&owner.id)?) {
+            items::check(controls.0, controls.1)?;
+            graph.check_edge(owner, edge)?;
+            let target_index = graph_nodes[&edge.pkg];
+            let name = configuration.crates[target_index].name.clone();
+            let dependencies = &mut configuration.crates[index].dependencies;
+            if dependencies.iter().any(|d| d.name == edge.name) {
+                return Err(refusal(
+                    "EXTERNAL_CONFIGURATION_MISMATCH",
+                    "external dependency alias conflicts with explicit graph",
+                ));
+            }
+            if dependencies.len() >= graph::CRATE_CAP {
+                return Err(refusal(
+                    "EXTERNAL_CORPUS_INCOMPLETE",
+                    "external dependency edge cap exhausted (32 per crate)",
+                ));
+            }
+            dependencies.push(DependencyInput {
+                name: edge.name.clone(),
+                crate_name: name,
+            });
+            usage.graph_edges += 1;
+        }
+    }
+    usage.observed_files = observed.len();
+    usage.observed_bytes = observed.values().map(Vec::len).sum();
+    usage.source_files_per_overlay = texts.len();
+    usage.source_bytes_per_overlay = texts.values().map(String::len).sum();
     let digest = scope::hash_serialized(
         repository,
         &(&consulted, &observed, &configuration),
         controls,
     )?;
-    Ok(Corpus { texts, configuration, coverage: Coverage { complete: true, consulted_roots: consulted, corpus_digest: digest, omissions: vec!["direct path/locally cached registry/source-replaced libraries only; no git or transitive closure; no build-script/proc-macro execution, sysroot or compilation".into()] }, observed, roots, identities, limits: limits.clone(), repository: repository.into(), crate_root: crate_root.into(), caller_configuration: config.clone(), cargo_home: cargo_home.into(), discovery_tree: tree.into() })
+    Ok(Corpus { texts, configuration, coverage: Coverage { complete: true, consulted_roots: consulted, corpus_digest: digest, omissions: vec!["bounded normal-edge path/locally cached registry/source-replaced library closure only; no dev/build-only edges, git, build-script/proc-macro execution, sysroot or compilation; source totals are per overlay, not heap or unpacker disk measurements".into()], capture_usage: usage }, observed, roots, identities, limits: limits.clone(), repository: repository.into(), crate_root: crate_root.into(), caller_configuration: config.clone(), cargo_home: cargo_home.into(), discovery_tree: tree.into() })
 }
 impl Corpus {
     pub(crate) fn recheck(&self, controls: Controls<'_>) -> Result<(), DomainError> {

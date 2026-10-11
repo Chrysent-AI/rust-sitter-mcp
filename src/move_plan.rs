@@ -1062,6 +1062,22 @@ impl MoveEnvelope {
         self.plan.moves.truncate(preview_count);
         self.plan.origins.truncate(preview_count);
     }
+    fn withhold_external_resolution(&mut self) {
+        if let Some(coverage) = &mut self.coverage.scan.external_dependencies {
+            // An interrupted or stale composite database must not publish even
+            // informational resolution proofs on a failed plan.
+            self.plan
+                .binding_proofs
+                .retain(|proof| !matches!(proof, BindingProof::RaResolved(_)));
+            self.coverage.ra_resolved = 0;
+            self.coverage.assumed_declared_identity = 0;
+            self.plan.resolution_coverage = None;
+            coverage.complete = false;
+            coverage
+                .omissions
+                .push("external publication failed; resolution proofs withheld".into());
+        }
+    }
     fn withhold(&mut self) {
         self.plan.applicable = false;
         self.plan.edits = None;
@@ -1316,6 +1332,7 @@ fn run_with_recheck(
     result.select_schema(request.artifact_schema_version());
     result.effective_work_limits.max_moves = request.max_moves;
     if let Err(error) = build(launch, &request, cancelled, before_recheck, &mut result) {
+        result.withhold_external_resolution();
         if matches!(
             error.code.as_str(),
             "planning_deadline"
@@ -2629,13 +2646,17 @@ fn build(
         result.account(descriptor_bytes(&result.plan.directory_preconditions)?)?;
     }
     items::check(deadline, cancelled)?;
-    if !result.plan.blockers.is_empty() {
+    if !result.plan.blockers.is_empty() && external.is_none() {
         result.plan.integrity.syntax = "blocked".into();
         return Ok(());
     }
     before_recheck();
     if let Some(corpus) = &external {
         corpus.recheck((deadline, cancelled))?;
+    }
+    if !result.plan.blockers.is_empty() {
+        result.plan.integrity.syntax = "blocked".into();
+        return Ok(());
     }
     // Check absence first so a newly discovered .rs file is explicitly a creation race.
     for (path, creation) in &creations {

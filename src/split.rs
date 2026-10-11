@@ -70,7 +70,7 @@ pub struct SuggestSplitRequest {
     /// Bounds displayed membership, not an execution selection. Default 500; 1–5000.
     #[serde(default = "default_max_items")]
     pub max_items: usize,
-    /// Capture direct path-library sources for disclosure only; advice is not an overlay proof.
+    /// Capture a bounded dependency-library closure for disclosure only; advice is not an overlay proof.
     #[serde(default, skip_serializing_if = "crate::move_plan::external::disabled")]
     pub external_path_dependencies: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -596,7 +596,7 @@ pub fn discharge(
     if external.is_some() {
         coverage.omissions[1] = coverage.omissions[1].replace(
             "sysroot/dependency sources",
-            "sysroot, git or transitive dependency sources",
+            "sysroot or git dependency sources",
         );
     }
     for (revision, inputs) in [("original", &old), ("final", &new)] {

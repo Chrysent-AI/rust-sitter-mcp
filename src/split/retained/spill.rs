@@ -452,6 +452,7 @@ mod tests {
             complete: true,
             corpus_digest: "captured".into(),
             omissions: Vec::new(),
+            capture_usage: crate::move_plan::external::CaptureUsage::default(),
             consulted_roots: vec![crate::move_plan::external::ConsultedRoot {
                 package_id: "path-library@0.1.0".into(),
                 package: "path-library".into(),

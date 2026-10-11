@@ -697,6 +697,13 @@ impl Sources {
                     ));
                 }
                 package.manifest_path = original;
+                for dependency in &mut package.dependencies {
+                    if let Some(path) = &mut dependency.path
+                        && let Ok(relative) = path.strip_prefix(scratch)
+                    {
+                        *path = self.home.join(relative);
+                    }
+                }
                 for target in &mut package.targets {
                     let relative = target
                         .src_path
@@ -704,6 +711,37 @@ impl Sources {
                         .map_err(|_| unsupported())?;
                     target.src_path = self.home.join(relative);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn bind_graph_inputs(
+        &self,
+        libraries: &[&Package],
+        tree: &Path,
+        limits: &Limits,
+        controls: Controls<'_>,
+    ) -> Result<(), DomainError> {
+        let mut seeds = BTreeSet::new();
+        for package in libraries {
+            items::check(controls.0, controls.1)?;
+            if !self.observed.contains_key(&package.manifest_path) {
+                return Err(refusal(
+                    "EXTERNAL_ROOT_UNSUPPORTED",
+                    "resolved transitive manifest was not captured before Cargo",
+                ));
+            }
+            seeds.insert(package.manifest_path.clone());
+        }
+        // Cargo's resolved edges choose the seeds; lexical candidates still
+        // supply the preflight authority for every path/workspace it can read.
+        for (path, bytes) in manifest_closure(seeds, tree, limits, controls)? {
+            if self.observed.get(&path) != Some(&bytes) {
+                return Err(refusal(
+                    "EXTERNAL_SOURCE_CHANGED",
+                    "resolved manifest closure differs from preflight inputs",
+                ));
             }
         }
         Ok(())

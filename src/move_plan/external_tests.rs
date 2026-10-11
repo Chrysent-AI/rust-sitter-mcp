@@ -298,7 +298,7 @@ fn transitive_manifest_failures_and_shared_budgets_refuse_before_scratch() {
 }
 
 #[test]
-fn benign_transitive_candidates_are_captured_but_never_admitted_as_evidence() {
+fn benign_transitive_candidates_join_the_resolved_source_closure() {
     let (repo, dep, state, config) = fixture();
     let leaf = Fixture::empty();
     leaf.write(
@@ -343,7 +343,7 @@ fn benign_transitive_candidates_are_captured_but_never_admitted_as_evidence() {
     let before = observe(&repo.0);
     let dependency = observe(&dep.0);
     let nested = observe(&leaf.0);
-    let error = discover_at(
+    let corpus = discover_at(
         &repo.0.canonicalize().unwrap(),
         "src/lib.rs",
         &config,
@@ -351,9 +351,11 @@ fn benign_transitive_candidates_are_captured_but_never_admitted_as_evidence() {
         controls,
         &tree,
     )
-    .err()
     .unwrap();
-    assert_eq!(error.code, "EXTERNAL_DEPENDENCY_UNSUPPORTED");
+    assert_eq!(corpus.coverage.consulted_roots.len(), 2);
+    assert_eq!(corpus.coverage.consulted_roots[1].package, "leaf");
+    assert!(corpus.texts.values().any(|s| s == "pub struct Leaf;\n"));
+    corpus.recheck(controls).unwrap();
     assert_eq!(observe(&repo.0), before);
     assert_eq!(observe(&dep.0), dependency);
     assert_eq!(observe(&leaf.0), nested);

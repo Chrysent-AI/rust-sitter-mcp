@@ -58,6 +58,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Extend external library evidence to the complete bounded normal-dependency
+  transitive source closure, including mixed path, cached registry and vendor
+  origins. Preserve package-ID edges and distinct namespaces across both overlays;
+  disclose shared capture/comparison charges and per-overlay source totals in
+  `coverage.external_dependencies.capture_usage`. Missing roots, cycles, stale
+  inputs, cancellation and exhausted budgets fail closed without source writes.
+
 * Extend `external_path_dependencies` to exact already-present registry and
   Cargo directory/vendor libraries without downloads or caller-cache writes.
   Resolve with bounded independent copies in ephemeral server state, preserve
@@ -77,6 +84,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Withhold already-computed resolution proofs and clear their counts when the
+  external corpus fails its final freshness or cancellation check, alongside
+  withholding every move artifact.
+
 * Validate raw SHA-256 registry lock/index/archive and vendor file checksums
   before external evidence admission. Require fresh private archive unpacking to
   match the captured checkout's complete file membership and bytes; mismatched,
@@ -87,7 +98,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   members, including unconfigured siblings. Refuse overlapping roots, path cycles,
   unsafe/incomplete manifests, exhausted budgets, member globs/ambiguous lists and
   explicit workspace pointers before Cargo. Disclose conservative over-refusal;
-  semantic source admission remains direct-library-only.
+  source admission separately follows supported resolved normal-library edges.
 
 * Make spilled split-advice observation and decision anchors searchable for
   captured source spellings even when inline `text_bytes` is zero, without

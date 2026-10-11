@@ -54,8 +54,9 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 - **Sysroot member calls still block.** Method calls on `std` types
   (`.iter()`, `.push()`, `format!`-adjacent chains) cannot be proven without sysroot
   coverage. Concrete written inherent calls in explicitly configured local crates
-  or opt-in captured direct path, locally cached registry or source-replaced
-  libraries can discharge under `resolve_semantic`. Git/transitive dependencies,
+  or opt-in captured path, locally cached registry or source-replaced
+  libraries and their bounded transitive normal-dependency closure can discharge
+  under `resolve_semantic`. Git dependencies,
   trait/generic methods and external fields/direct ADT constructors remain
   outside the external-library method tier.
 - **Trait methods and generic functions block.** `fact_attached` refuses trait-associated
@@ -66,10 +67,14 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   provider-uncertain helper attributes and a labeled caller-assumption flag
   (`assume_declared_helpers`). Location-observable macros are a known residual risk class
   and must be reviewed by callers.
-- **External source tracing is opt-in and direct-library-only.**
+- **External source tracing is opt-in and bounded.**
   `external_path_dependencies:true` admits direct out-of-tree path libraries,
   locked locally checked-out registry packages and Cargo directory/source-replaced
-  packages through offline locked Cargo metadata. Only checksum-validated registry
+  packages plus their full supported normal-edge transitive source closure through
+  offline locked Cargo metadata. The graph is capped at 32 crates including
+  explicit caller roots and 32 dependency edges per crate; cycles, missing roots,
+  target-conditional edges and exhausted shared budgets refuse. Dev/build-only
+  edges are not semantic library evidence. Only checksum-validated registry
   archives and existing sparse-index entries are staged in ephemeral server state;
   Cargo unpacks them afresh there and every regular-file byte/membership must match
   the captured real checkout. The lock/index/archive checksum binds the selected
@@ -88,12 +93,18 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   renamed graph edges are preserved, including distinct versions of one package;
   ambiguous directory-source duplicates refuse. An immutable bounded corpus and
   `coverage.external_dependencies` disclose selected roots, source/provenance and
-  digest; external anchors never authorize edits. Build scripts, proc macros, path
+  digest and `capture_usage` (captured input/comparison charges and source
+  files/bytes per overlay, not heap or unpacker-disk measurements); external
+  anchors never authorize edits. A failed external freshness/cancellation check
+  withholds already-computed resolution proof records and clears their counts.
+  Build scripts, proc macros, path
   overrides, filesystem includes and incomplete/stale captures still refuse.
   Before server-state creation or Cargo execution, the same bounded lexical
   manifest closure checks registry/vendor candidate roots, transitive path
   candidates, enclosing workspaces and literal workspace members, including
-  unconfigured siblings. This is safety preflight, not transitive source admission.
+  unconfigured siblings. Metadata-resolved transitive manifest closures must
+  match those preflight inputs; only reachable supported normal-library nodes
+  enter the semantic corpus, not unrelated candidates.
   It over-refuses unrelated/inactive paths, excluded members and non-package
   directory `path` assignments; existing literal custom library source-file
   targets are now checked as files rather than package directories. Member globs,

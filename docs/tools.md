@@ -647,18 +647,33 @@ entries, malformed/ambiguous member lists and explicit workspace pointers use
 `EXTERNAL_CORPUS_INCOMPLETE`. The lexical selector is not a Cargo/TOML resolver.
 The authoritative post-metadata workspace and resolved-root identity/overlap
 checks remain in place. Publication rediscovery repeats the complete pre-check,
-with all closure manifests and locks bound by byte reobservation. Visiting a
-transitive path or sibling member checks discovery safety only: it does **not**
-admit that package's Rust sources or broaden direct-library semantic evidence.
+with all closure manifests and locks bound by byte reobservation. Visiting an
+unrelated path candidate or sibling member checks discovery safety only. After
+Cargo resolves the graph, the normal-dependency closure starts at the selected
+caller and follows `resolve.nodes[].deps` by package ID, including transitive
+path, cached registry and directory-source packages. Each resolved manifest seeds
+another bounded candidate walk and must match inputs captured **before** Cargo;
+no newly discovered unchecked root is admitted after state creation. A missing
+resolved manifest or changed candidate closure refuses rather than loading it.
 
 Declared direct out-of-tree **path libraries**, exact already-cached **registry
-libraries**, and **directory/source-replaced libraries** are admitted. Package
+libraries**, **directory/source-replaced libraries**, and their complete supported
+normal-edge transitive closure are admitted. Package
 identity is name + version + source (or path identity), not bare crate name.
 Renamed dependency edges bind to the resolved package ID; two versions of one
 package get distinct library graph nodes/namespaces. Duplicate directory-source
 name/version candidates refuse rather than accepting Cargo's arbitrary selection.
-Git dependencies (cached or not), transitive closures, target-conditional edges,
-build scripts and proc-macro packages remain unsupported. Missing/stale locks and
+Git dependencies (cached or not), target-conditional edges,
+build scripts and proc-macro packages remain unsupported. Dev/build-only edges
+are omitted from the method-evidence graph, not relabeled as normal dependencies;
+conservative offline discovery/preflight can still require their local inputs.
+The closure deduplicates package IDs at joins while preserving each owner's
+renamed aliases and distinct versions/sources. The combined graph has at most
+32 crates (including explicit caller roots) and 32 dependencies per crate.
+Resolved-library cycles refuse with `EXTERNAL_ROOT_UNSUPPORTED`; graph caps use
+`EXTERNAL_CORPUS_INCOMPLETE`. All required roots must fit in one shared capture
+budget; exhaustion halfway through a closure never publishes a partial corpus.
+Missing/stale locks and
 uncached dependencies fail closed at preflight or offline discovery. Dependency
 `#[path]`, filesystem `include!` variants, symlinks, syntax recovery and missing
 or competing ordinary module layouts also refuse. Capturing package Rust files
@@ -677,14 +692,38 @@ No compilation, build script or proc-macro execution is performed by the server.
 Inspect additive `coverage.external_dependencies`: `complete`,
 `consulted_roots` (package ID/name/version, original source identity, provenance
 `path`/`registry_cache`/`source_replacement`, absolute root, namespace,
-edition/features and file/byte counts), `corpus_digest`, and `omissions`.
-Disclosure remains present when discovery succeeds but no decision discharges.
+edition/features and file/byte counts), `corpus_digest`, `omissions`, and
+`capture_usage`. The latter reports `max_files`, `max_file_bytes`,
+`max_source_bytes`, pre-source `input_files`/`input_bytes`, deduplicated final
+`observed_files`/`observed_bytes`, `archive_comparison_entries`/
+`archive_comparison_bytes`, `source_files_per_overlay`/`source_bytes_per_overlay`,
+and `graph_edges` (normal resolved edges). Observed inputs plus archive comparison
+charges share the request caps; source totals count each namespaced corpus entry,
+even when distinct package/source identities read the same physical directory.
+The original and final RA databases each receive those same source files/bytes:
+raw external text materialization across the two overlays is twice the per-overlay
+total, not a heap/RSS estimate or Cargo-unpacker disk quota. Advice supplies the
+same capture disclosure but constructs neither overlay. A mid-source-capture
+budget refusal includes partial root/file/byte charges and the active limits in
+`error.message`; earlier preflight/comparison refusals identify their exhausted
+cap. Disclosure remains present when discovery succeeds but no decision discharges.
 `@external/N/...` declaration anchors are read-only evidence, never selection
 anchors, destinations or ordinary consumer-scan files. Semantic input/final
 coverage digests bind the corpus and discovered graph. Captured bytes, source
 membership, package-root identity and discovery configuration are reobserved
 before publishing an applicable plan; stale evidence withholds artifacts.
+If that external freshness/cancellation gate fails after resolution, all
+already-computed RA proof records and resolution coverage are withheld, their
+real/assumed counters are cleared, and external coverage reports `complete:false`.
+`integrity.semantic` may still say `resolution_performed` on that failed response:
+queries did run, but no resulting proof is published.
 No persistent dependency cache is created.
+
+For example, a caller can use `dep::Thing::new().configure()` when its direct
+library contains `pub use leaf::Thing;` and the resolved transitive library
+contains the concrete written `Thing` implementation. Both libraries appear in
+`consulted_roots`, while inherent declaration anchors identify the leaf's own
+namespace/package ID. Re-export discovery itself is not a resolved proof.
 
 `suggest_split` accepts the same flag and explicit caller configuration for
 source consultation/disclosure. It stays advisory: no final overlay, no method
