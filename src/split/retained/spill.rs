@@ -178,6 +178,16 @@ pub(super) fn persist_at(
         return Err(invalid("caller repository root unavailable"));
     }
     controls.check().map_err(|_| invalid("spill cancelled"))?;
+    if let Some(external) = &full.coverage.external_dependencies {
+        crate::move_plan::external::disjoint(
+            &tree,
+            external
+                .consulted_roots
+                .iter()
+                .map(|root| PathBuf::from(&root.root)),
+        )
+        .map_err(|_| invalid("spill directory overlaps consulted dependency root"))?;
+    }
     fs::create_dir_all(&tree)?;
     let id = format!(
         "analysis-{}-{}-{}",
@@ -430,6 +440,39 @@ mod tests {
         assert!(flush_at(&tree).unwrap().starts_with("Removed 1"));
         assert!(flush_at(&tree).unwrap().starts_with("No spilled"));
         assert!(root.path().read_dir().unwrap().next().is_none());
+    }
+    #[test]
+    fn spill_refuses_consulted_dependency_state_overlap_before_writing() {
+        let root = Scratch::new();
+        let dependency = Scratch::new();
+        let tree = dependency.path().join("analyses");
+        let mut full = SuggestSplitEnvelope::empty(Limits::default());
+        full.root = Some(root.path().to_string_lossy().into_owned());
+        full.coverage.external_dependencies = Some(crate::move_plan::external::Coverage {
+            complete: true,
+            corpus_digest: "captured".into(),
+            omissions: Vec::new(),
+            consulted_roots: vec![crate::move_plan::external::ConsultedRoot {
+                package_id: "path-library@0.1.0".into(),
+                package: "path-library".into(),
+                version: "0.1.0".into(),
+                source: "path".into(),
+                root: dependency.path().to_string_lossy().into_owned(),
+                namespace: "@external/0/".into(),
+                features: Vec::new(),
+                edition: "2024".into(),
+                files: 1,
+                bytes: 10,
+            }],
+        });
+        let flag = AtomicBool::new(false);
+        let controls = Controls {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: &flag,
+        };
+        assert!(persist_at(&tree, &full, None, &request(), controls).is_err());
+        assert!(!tree.exists());
+        assert!(dependency.path().read_dir().unwrap().next().is_none());
     }
     #[test]
     fn captured_text_requires_exact_available_utf8_anchor() {

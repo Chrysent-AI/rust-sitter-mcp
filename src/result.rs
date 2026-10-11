@@ -255,6 +255,8 @@ pub struct Coverage {
     pub scan_exhausted: bool,
     pub eligible_scan_complete: bool,
     pub scope_exhaustive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_dependencies: Option<crate::move_plan::external::Coverage>,
 }
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]

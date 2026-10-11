@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add default-off `external_path_dependencies` source consultation for direct
+  out-of-tree path libraries, with offline locked Cargo discovery in an ephemeral
+  server-owned Cargo home, immutable bounded capture, consulted-root/digest
+  disclosure and real both-overlay inherent-method proofs in `move_item`.
+  Advice remains non-semantic; unsupported or stale inputs withhold plans.
+
 * Persist explicitly retained split advice as server-owned, greppable per-topic
   JSON with an index and additive `retention.spill` pointers; add opt-in
   `response_mode:"references"` to avoid duplicate summaries and `rust-sitter-mcp flush`
@@ -63,6 +69,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   bindings and shadowing without relaxing independent move blockers.
 
 ### Fixed
+
+* Preflight the bounded manifest-input closure before path-dependency discovery
+  creates server state: check transitive path declarations and literal workspace
+  members, including unconfigured siblings. Refuse overlapping roots, path cycles,
+  unsafe/incomplete manifests, exhausted budgets, member globs/ambiguous lists and
+  explicit workspace pointers before Cargo. Disclose conservative over-refusal;
+  semantic source admission remains direct-path-only.
 
 * Make spilled split-advice observation and decision anchors searchable for
   captured source spellings even when inline `text_bytes` is zero, without

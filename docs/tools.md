@@ -1,6 +1,6 @@
 # Structural Rust search, move plans and split advice
 
-`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises `read_skill_guide` for embedded usage guidance, primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, `get_split_detail` for explicitly retained historical evidence/release, and `export_move_request` for inactive exact-anchor requests from an explicit retained selection. It does not launch rust-analyzer, Cargo, a formatter, a network listener, or an external parser. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
+`rust-sitter-mcp` runs a read-only stdio MCP service with no startup repository argument. It advertises `read_skill_guide` for embedded usage guidance, primary `search`, the raw `search_query` escape hatch, dry-run `replace`, explicitly selected `move_item` plans, advisory-only `suggest_split` inventories/partitions, `get_split_detail` for explicitly retained historical evidence/release, and `export_move_request` for inactive exact-anchor requests from an explicit retained selection. It does not launch rust-analyzer, a formatter, a network listener, or an external parser. Opt-in path-dependency discovery runs only offline locked Cargo metadata in an ephemeral server-owned Cargo home; it never builds caller code. Runtime requires local Git 2.39+; build/install prerequisites and gates are in [CONTRIBUTING.md](../CONTRIBUTING.md). Platform acceptance remains pending Ubuntu execution and the large-repository benchmark; local verification is on Darwin arm64.
 
 A stdio launch configuration is:
 
@@ -532,6 +532,118 @@ original anchors and state in their consequence that the declared configuration
 was consulted; expand `diagnostic_count` to see full decision prose. Independent
 macro, access, collision, API, chain and repair blockers remain.
 
+### Opt-in external path-library method evidence
+
+Set `external_path_dependencies:true` on `move_item` together with
+`resolve_semantic:true` and an explicit `semantic_configuration` for the admitted
+caller root. Omission/false preserves existing behavior. The caller crate name,
+edition and `features` must match its Cargo target and resolved feature set,
+including `default` when Cargo activates that named feature. Do not add external
+roots or automatic dependency edges to the explicit caller configuration: the
+server discovers and appends them in a separate semantic-only namespace.
+
+Discovery runs exactly `cargo metadata --format-version 1 --offline --locked`
+from the caller manifest directory. An existing lockfile is mandatory. The
+subprocess receives a scrubbed environment, a server-selected installed Rust
+toolchain (no auto-install), and a new private `CARGO_HOME` under the server's
+state tree; the scratch home is removed when discovery ends, including on failure.
+Both output streams are capped at 8 MiB and cancellation kills/reaps discovery.
+Caller repositories and the user's normal Cargo home are not written. Ancestor
+`.cargo/config`/`config.toml` files refuse instead of admitting wrappers, source
+replacements or injected environment. State must be disjoint from the repository
+and every admitted dependency root, including retained-advice spill locations.
+Before any scratch directory creation or Cargo execution, a bounded lexical
+manifest-input closure starts with the caller manifest and all ancestor
+`Cargo.toml` files from its manifest directory and already-admitted crate-root
+directories, **including enclosing workspace manifests outside the selected
+repository**. Every captured manifest's literal `path = "…"` (or literal-string
+equivalent) declarations become candidate package roots, resolved relative to
+that manifest's directory. Their manifests, enclosing ancestor manifests and
+own path declarations join the same walk. Literal `members = [...]` entries
+also become candidates relative to the declaring workspace root, including
+unconfigured sibling members and their dependencies. A visited set deduplicates
+ordinary workspace/ancestor revisits; path-declaration cycles refuse with
+`EXTERNAL_ROOT_UNSUPPORTED` before Cargo.
+
+Each upward ancestor search includes at most 32 directories (starting directory
+through filesystem root); candidate walks and path-declaration chains are also
+bounded at 32 manifests. Bound exhaustion returns `EXTERNAL_CORPUS_INCOMPLETE`,
+never an unchecked metadata invocation. All captured candidate manifests and
+adjacent existing lockfiles share the request's file-count and aggregate-byte
+pre-check budget, with identity-checked regular-file reads under per-file and
+deadline limits. The closure bytes are reobserved before scratch creation and
+retained for publication freshness. Unreadable, non-regular, linked or undecodable
+inputs fail closed before Cargo. An external enclosing workspace is supported
+only when its manifest and existing lockfile were captured at this pre-check.
+Explicit `package.workspace` string pointers (including non-ancestor workspace
+routes) refuse before Cargo; `dep.workspace = true` inheritance remains supported.
+
+Every candidate manifest directory and declared root must be disjoint from server
+state; overlap returns `EXTERNAL_STATE_OVERLAP`. This lexical pre-check does not
+interpret Cargo tables, excludes, features or dependency activation, and
+intentionally over-refuses: unrelated ancestor manifests, optional/inactive
+paths, excluded/unconfigured members and unrelated `path`/`members` assignments
+can all trigger refusal. For `workspace = true` inheritance, cycle/hop checking
+conservatively treats every captured ancestor path declaration as a possible
+edge, without resolving dependency names or tables; this can reject otherwise
+valid inherited layouts. Every path candidate must be a readable directory with
+a safe manifest, so non-package paths such as custom `[lib] path = 'src/lib.rs'`
+also refuse. Workspace-member globs (`*`, `?`, bracket/brace patterns), non-string
+entries, malformed/ambiguous member lists and explicit workspace pointers use
+`EXTERNAL_ROOT_UNSUPPORTED`; missing candidate manifests use
+`EXTERNAL_DEPENDENCY_UNREADABLE`, unsafe files or exhausted budgets use
+`EXTERNAL_CORPUS_INCOMPLETE`. No TOML resolver or new refusal reason is added.
+The authoritative post-metadata workspace and resolved-root identity/overlap
+checks remain in place. Publication rediscovery repeats the complete pre-check,
+with all closure manifests and locks bound by byte reobservation. Visiting a
+transitive path or sibling member checks discovery safety only: it does **not**
+admit that package's Rust sources or broaden direct-path semantic evidence.
+
+Only declared direct out-of-tree **path libraries** are admitted. Registry/git,
+vendor/source replacement, transitive dependencies, target-conditional edges,
+build scripts and proc-macro packages are unsupported. Missing/stale locks and
+uncached registry dependencies can fail earlier at offline discovery. Dependency
+`#[path]`, filesystem `include!` variants, symlinks, syntax recovery and missing
+or competing ordinary module layouts also refuse. Capturing package Rust files
+is bounded by the request's file, entry and source-byte limits and deadline;
+exhaustion never produces a partial-success corpus. Captured dependency features
+come from Cargo; arbitrary caller cfg atoms are not copied into libraries.
+
+The same immutable corpus enters distinct library source roots in both pure RA
+resolution overlays. This opt-in proves only eligible concrete written inherent
+methods/functions on dependency types, with existing receiver identity,
+trait/generic exclusion, macro/provider and both-overlay access gates intact.
+External fields, nominal type/direct ADT constructor/variant facts are not discharged by this tier.
+Only actual successful both-overlay proofs count in `coverage.ra_resolved`.
+No compilation, build script or proc-macro execution is performed by the server.
+
+Inspect additive `coverage.external_dependencies`: `complete`,
+`consulted_roots` (package ID/name/version, source, absolute root, namespace,
+edition/features and file/byte counts), `corpus_digest`, and `omissions`.
+Disclosure remains present when discovery succeeds but no decision discharges.
+`@external/N/...` declaration anchors are read-only evidence, never selection
+anchors, destinations or ordinary consumer-scan files. Semantic input/final
+coverage digests bind the corpus and discovered graph. Captured bytes, source
+membership, package-root identity and discovery configuration are reobserved
+before publishing an applicable plan; stale evidence withholds artifacts.
+No persistent dependency cache is created.
+
+`suggest_split` accepts the same flag and explicit caller configuration for
+source consultation/disclosure. It stays advisory: no final overlay, no method
+proof, no applicability or compilation claim, and `semantic:"not_performed"`.
+This configuration does not enable written cfg-chain admission in advice.
+Re-enable the opt-in explicitly on any subsequent ordinary move request.
+
+Typed refusals include `EXTERNAL_DISCOVERY_FAILED`,
+`EXTERNAL_DEPENDENCY_UNSUPPORTED`, `EXTERNAL_CONFIGURATION_MISMATCH`,
+`EXTERNAL_CONFIGURATION_UNSUPPORTED`, `EXTERNAL_ROOT_UNSUPPORTED`,
+`EXTERNAL_DEPENDENCY_UNREADABLE`, `EXTERNAL_CORPUS_INCOMPLETE`,
+`EXTERNAL_SOURCE_CHANGED`, `EXTERNAL_STATE_UNAVAILABLE`,
+`EXTERNAL_STATE_OVERLAP` and `EXTERNAL_NAMESPACE_CONFLICT`; normal cancellation
+and deadline refusals remain unchanged. An otherwise resolved non-method external
+fact retains its original decision with `external_fact_unsupported` refusal basis.
+Correct the input/scope and re-plan; no override admits an incomplete corpus.
+
 ### Opt-in bounded resolution
 
 `resolve_semantic` defaults to **false**. Omission or false leaves
@@ -559,10 +671,11 @@ This fragment augments the ordinary anchored move request; it is not a separate
 tool or stored plan. Each root must be an existing admitted Rust file; one root
 must equal `crate_root`. All admitted texts and the assembler's exact final
 virtual texts are ingested into request-owned pure rust-analyzer databases.
-No Cargo.toml/lockfile, sysroot, filesystem watcher, dependency cache, build
-script, executable override or proc-macro expander is loaded. Admit required
-dependency sources in `paths`/`globs` and add their roots explicitly, or their
-names stay unresolved. A dependency edge is
+By default no Cargo.toml/lockfile, sysroot, filesystem watcher, dependency cache,
+build script, executable override or proc-macro expander is loaded. Configure
+repository-local dependency sources explicitly in admitted `paths`/`globs`, or
+use the separate direct path-library opt-in below. Never put out-of-tree roots
+in repository `paths`/`globs`. A dependency edge is
 `{"name":"external","crate_name":"dependency_root_name"}`; `name` is its extern
 prelude spelling and `crate_name` names another entry in `crates`. Crate names
 and roots must be unique; graphs are acyclic and capped at 32 crates with 32
@@ -915,7 +1028,7 @@ with an empty context array.
 
 The ordinary chain audit uses the same identity-inert lint/doc classifier as configured written-context checks (including prelude cfg payload checks) and admits bare built-in `allow`/`warn`/`deny`/`forbid` and `doc` metadata. This applies equally to crate-root and non-root module-file inner attributes and ordinary module-declaration outer attributes, including plain `doc = "..."` and `doc = include_str!(...)`, without executing expressions or reading documentation files. Nested `cfg_attr` with only those payloads or the exact documentation feature `feature(doc_cfg)` is harmless to module identity even with an unknown condition. Only that exact documentation feature is exempt: `no_std`, `no_core`, `macro_use`, `recursion_limit`, other feature gates and unknown/qualified attribute providers retain anchored chain refusals (unless a declared cfg wrapper proves its payload inactive). This exemption is **chain evidence only**: semantic fact, prelude, selected-item and binding audits remain independent; the stricter direct item/lexical attribute predicate is unchanged.
 
-For `move_item`, one uniquely configured `semantic_configuration` entry matching `crate_root` can also admit active `cfg`/`cfg_attr` chain attributes, without requiring semantic resolution, under its explicitly listed ON features/cfg atoms. All operands must be known; unlisted atoms remain unknown, not OFF, even in a Boolean expression with a determining operand. Known-OFF declarations do not supply edges. Invalid matching edition/cfg data or duplicate matching roots, unknown/unsupported payloads, path remapping, prelude controls, parser recovery and competing declarations/layouts retain their vetoes. The root's `ModuleEvidence.assumptions` discloses positive cfg use; this is not Cargo discovery or compilation. `suggest_split` has no configuration opt-in and still refuses condition-dependent edges.
+For `move_item`, one uniquely configured `semantic_configuration` entry matching `crate_root` can also admit active `cfg`/`cfg_attr` chain attributes, without requiring semantic resolution, under its explicitly listed ON features/cfg atoms. All operands must be known; unlisted atoms remain unknown, not OFF, even in a Boolean expression with a determining operand. Known-OFF declarations do not supply edges. Invalid matching edition/cfg data or duplicate matching roots, unknown/unsupported payloads, path remapping, prelude controls, parser recovery and competing declarations/layouts retain their vetoes. The root's `ModuleEvidence.assumptions` discloses positive cfg use; this is not Cargo discovery or compilation. `suggest_split` has no written cfg-chain admission opt-in and still refuses condition-dependent edges; its external-library configuration is consultation-only.
 
 A `new_sibling` destination must be an absent literal `.rs` sibling of every assigned source, in an existing directory. Its basename is an ASCII identifier, not `_`, `mod`, a raw identifier, or any Rust strict/reserved/contextual keyword (including `gen`, `raw`, `safe`, `union` and `macro_rules`). The server never creates directories or reorders items within one file; only `new_child` can disclose the bounded external directory prerequisite below. Symlinks, hard exclusions, nested repositories, ignores, caller filters, existing entries, case-folded aliases, competing `name/mod.rs` layouts and declaration conflicts fail closed. Use an admitted existing directory in `paths`, not an absent path.
 

@@ -184,9 +184,10 @@ struct Inputs {
     // Per-fact dependency on conditional namespace admission, not a resolver cache.
     assumed_declared_helpers: Cell<bool>,
     context: RefCell<BTreeMap<ContextKey, ContextEvaluation>>,
+    external_origins: BTreeMap<String, String>,
 }
 /// Reject unusable caller configuration without querying or constructing a database.
-pub(super) fn validate(
+pub(crate) fn validate(
     config: &Configuration,
     paths: &BTreeSet<&str>,
     crate_root: Option<&str>,
@@ -355,11 +356,40 @@ pub(super) fn validate(
 }
 
 impl Inputs {
+    #[cfg(test)]
     fn new(
         texts: BTreeMap<String, String>,
         config: &Configuration,
         controls: (Instant, &AtomicBool),
     ) -> Result<Self, DomainError> {
+        Self::with_external(texts, config, None, controls)
+    }
+    fn with_external(
+        mut texts: BTreeMap<String, String>,
+        config: &Configuration,
+        external: Option<&super::external::Corpus>,
+        controls: (Instant, &AtomicBool),
+    ) -> Result<Self, DomainError> {
+        let mut external_origins = BTreeMap::new();
+        if let Some(corpus) = external {
+            if texts
+                .keys()
+                .any(|path| path.starts_with(super::external::PREFIX))
+            {
+                return Err(DomainError::new(
+                    "EXTERNAL_NAMESPACE_CONFLICT",
+                    "repository path collides with read-only external namespace",
+                ));
+            }
+            texts.extend(corpus.texts.clone());
+            for (index, root) in corpus.coverage.consulted_roots.iter().enumerate() {
+                external_origins.insert(
+                    format!("external_path_{index}"),
+                    format!("{}:{}", root.package_id, corpus.coverage.corpus_digest),
+                );
+            }
+        }
+        let config = external.map_or(config, |corpus| &corpus.configuration);
         validate(config, &texts.keys().map(String::as_str).collect(), None)?;
         if texts.len() > 100_000 {
             return Err(DomainError::new(
@@ -368,6 +398,7 @@ impl Inputs {
             ));
         }
         let mut set = FileSet::default();
+        let mut libraries: BTreeMap<String, FileSet> = BTreeMap::new();
         let mut change = FileChange::default();
         let mut ids = BTreeMap::new();
         let mut paths = BTreeMap::new();
@@ -380,7 +411,21 @@ impl Inputs {
                 ));
             }
             let id = FileId::from_raw(index as u32);
-            set.insert(id, VfsPath::new_virtual_path(format!("/{path}")));
+            let vpath = VfsPath::new_virtual_path(format!("/{path}"));
+            if let Some(root) = external.and_then(|corpus| {
+                corpus
+                    .coverage
+                    .consulted_roots
+                    .iter()
+                    .find(|root| path.starts_with(&root.namespace))
+            }) {
+                libraries
+                    .entry(root.namespace.clone())
+                    .or_default()
+                    .insert(id, vpath);
+            } else {
+                set.insert(id, vpath);
+            }
             ids.insert(path.clone(), id);
             paths.insert(id, path.clone());
             change.change_file(id, Some(text.clone()));
@@ -410,9 +455,16 @@ impl Inputs {
                 cfg,
                 None,
                 Default::default(),
-                CrateOrigin::Local {
-                    repo: None,
-                    name: Some(Symbol::intern(&input.name)),
+                if external_origins.contains_key(&input.name) {
+                    CrateOrigin::Library {
+                        repo: None,
+                        name: Symbol::intern(&input.name),
+                    }
+                } else {
+                    CrateOrigin::Local {
+                        repo: None,
+                        name: Some(Symbol::intern(&input.name)),
+                    }
                 },
                 Vec::new(),
                 false,
@@ -437,7 +489,9 @@ impl Inputs {
                     .expect("validated acyclic dependency graph");
             }
         }
-        change.set_roots(vec![SourceRoot::new_local(set)]);
+        let mut source_roots = vec![SourceRoot::new_local(set)];
+        source_roots.extend(libraries.into_values().map(SourceRoot::new_library));
+        change.set_roots(source_roots);
         change.set_crate_graph(graph);
         let mut db = RootDatabase::default();
         change.apply(&mut db);
@@ -451,6 +505,7 @@ impl Inputs {
             assume_declared_helpers: false,
             assumed_declared_helpers: Cell::new(false),
             context: RefCell::new(BTreeMap::new()),
+            external_origins,
         })
     }
     fn declaration(
@@ -465,10 +520,12 @@ impl Inputs {
         let end = usize::from(node.text_range().end());
         Some(Declaration {
             declarative_macro: None,
-            crate_origin: self
-                .roots
-                .get(&module.krate(&self.db).root_file(&self.db))?
-                .clone(),
+            crate_origin: {
+                let name = self
+                    .roots
+                    .get(&module.krate(&self.db).root_file(&self.db))?;
+                self.external_origins.get(name).unwrap_or(name).clone()
+            },
             anchor: SourceAnchor {
                 path: path.clone(),
                 range: range(start, end),
@@ -485,6 +542,7 @@ pub fn discharge(
     files: &BTreeMap<String, FileSnapshot>,
     overlay: BTreeMap<String, String>,
     needs: &mut Vec<Need>,
+    external: Option<&super::external::Corpus>,
     controls: (Instant, &AtomicBool),
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
@@ -500,15 +558,26 @@ pub fn discharge(
         .collect();
     let snapshot = result.snapshot_id.clone().unwrap_or_default();
     let root = std::path::Path::new(result.root.as_deref().expect("admitted root"));
-    let digest = crate::scope::hash_serialized(root, &(&snapshot, config, ANALYZER), controls)?;
+    let mut digest = crate::scope::hash_serialized(root, &(&snapshot, config, ANALYZER), controls)?;
+    if let Some(corpus) = external {
+        digest = crate::scope::hash_serialized(
+            root,
+            &(
+                &digest,
+                &corpus.coverage.corpus_digest,
+                &corpus.configuration,
+            ),
+            controls,
+        )?;
+    }
     let final_digest = crate::scope::hash_serialized(root, &(&digest, &overlay), controls)?;
     validate(
         config,
         &original.keys().map(String::as_str).collect(),
         Some(&request.crate_root),
     )?;
-    let mut old = Inputs::new(original, config, controls)?;
-    let mut new = Inputs::new(overlay, config, controls)?;
+    let mut old = Inputs::with_external(original, config, external, controls)?;
+    let mut new = Inputs::with_external(overlay, config, external, controls)?;
     old.assume_declared_helpers = request.assume_declared_helpers;
     new.assume_declared_helpers = request.assume_declared_helpers;
     let coverage = ResolutionCoverage {
@@ -524,6 +593,12 @@ pub fn discharge(
         evaluate(&old, &new, needs, &result.plan.origins, &coverage, controls)
     })?;
     let mut coverage = coverage;
+    if external.is_some() {
+        coverage.omissions[1] = coverage.omissions[1].replace(
+            "sysroot/dependency sources",
+            "sysroot, registry/git/vendor or transitive dependency sources",
+        );
+    }
     for (revision, inputs) in [("original", &old), ("final", &new)] {
         coverage
             .context_evaluations
@@ -739,6 +814,15 @@ fn evaluate(
             let final_anchor = mapped(&anchor, origins, new)?;
             refusal_class = "semantic_source_fact_unproved";
             let before = fact(old, &anchor, need.attribute_range.is_some())?;
+            if old
+                .external_origins
+                .values()
+                .any(|origin| origin == &before.declaration.crate_origin)
+                && before.classification != "inherent_function"
+            {
+                refusal_class = "external_fact_unsupported";
+                return None;
+            }
             let before_assumed = old.assumed_declared_helpers.get();
             refusal_class = "semantic_final_fact_unproved";
             let after = fact(new, &final_anchor, need.attribute_range.is_some())?;

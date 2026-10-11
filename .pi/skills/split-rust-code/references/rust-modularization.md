@@ -111,7 +111,7 @@ unsuccessful results withhold all four. Directory records disclose root-relative
 paths, observed and required states, ordinary-layout basis, and dependent
 created-file IDs, with matching `created_files[].directory_precondition_ids`;
 they do not specify a directory mode or empty-directory Git artifact. Directory
-permissions are caller policy. The server creates nothing. Before external JSON
+permissions are caller policy. The server creates nothing in caller repositories (its own scratch/spill state under its XDG data directory is separate). Before external JSON
 reconstruction, callers recheck source/parent bytes and modes, file absence, the
 disclosed directory state and layout, ignores and competing layouts, then create
 only disclosed absent directories with caller-chosen permissions. Directory

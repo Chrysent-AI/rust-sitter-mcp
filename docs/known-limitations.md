@@ -51,10 +51,12 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   guards, unsupported/recovered patterns, macro/conditional context, unresolved
   glob constant competition and constructor identity remain independent refusals.
 
-- **Sysroot and external-crate member calls block.** Method calls on `std`/external types
-  (`.iter()`, `.push()`, `format!`-adjacent chains) cannot be proven: the admitted graph
-  contains only explicitly configured crates, and no sysroot is loaded. Crate-local
-  inherent calls with concrete receivers discharge under `resolve_semantic`.
+- **Sysroot member calls still block.** Method calls on `std` types
+  (`.iter()`, `.push()`, `format!`-adjacent chains) cannot be proven without sysroot
+  coverage. Concrete written inherent calls in explicitly configured local crates
+  or opt-in captured direct path libraries can discharge under `resolve_semantic`.
+  Registry/git/vendor, transitive dependencies, trait/generic methods and external
+  fields/direct ADT constructors remain outside the path-library method tier.
 - **Trait methods and generic functions block.** `fact_attached` refuses trait-associated
   and generic declarations; only bounded concrete inherent facts are provable.
 - **Macro expansion is not modeled.** Any macro invocation in a moved body vetoes
@@ -63,10 +65,27 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   provider-uncertain helper attributes and a labeled caller-assumption flag
   (`assume_declared_helpers`). Location-observable macros are a known residual risk class
   and must be reviewed by callers.
-- **External dependency sources are not admitted.** `semantic_configuration.dependencies`
-  exists, but the oss-benchmark ran with `dependencies: []`; external-crate bindings block
-  (measured: the dominant refusal class on external repos after workspace/feature fixes).
-  Admitting dependency sources is a designed-but-unbuilt provenance expansion.
+- **External source tracing is opt-in and path-only.**
+  `external_path_dependencies:true` discovers direct out-of-tree path libraries
+  with offline locked Cargo metadata and captures an immutable bounded corpus.
+  `coverage.external_dependencies` discloses consulted roots and digest; external
+  declaration anchors never authorize edits. Cargo configuration, build scripts,
+  proc macros, path overrides, filesystem includes and incomplete/stale captures
+  refuse. Before server-state creation or Cargo execution, a bounded lexical
+  manifest closure checks transitive path candidates, enclosing workspaces and
+  literal workspace members, including unconfigured siblings. This is safety
+  preflight, not transitive source admission. It over-refuses unrelated/inactive
+  paths, excluded members and non-package `path` assignments (including custom
+  library source paths). Member globs, ambiguous/non-string lists, explicit
+  `package.workspace` pointers and path-candidate cycles refuse with
+  `EXTERNAL_ROOT_UNSUPPORTED`; unreadable/unsafe manifests and exhausted shared
+  file/byte or 32-hop budgets also refuse before Cargo. Inheritance cycle/hop
+  checks conservatively include all captured ancestor path declarations, which
+  can over-refuse valid inherited layouts. Ordinary member/ancestor revisits
+  are deduplicated; disjoint enclosing-workspace inheritance still works.
+  Advice discloses consultation but never claims overlay resolution.
+  Historical benchmark measurements used `dependencies: []` without this opt-in;
+  they are not measurements of current path-library coverage.
 - **Pub-API moves refuse by design.** `public_path_change` blocks moves that would alter a
   public path; no automatic re-export shims are synthesized.
 

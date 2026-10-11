@@ -70,6 +70,11 @@ pub struct SuggestSplitRequest {
     /// Bounds displayed membership, not an execution selection. Default 500; 1–5000.
     #[serde(default = "default_max_items")]
     pub max_items: usize,
+    /// Capture direct path-library sources for disclosure only; advice is not an overlay proof.
+    #[serde(default, skip_serializing_if = "crate::move_plan::external::disabled")]
+    pub external_path_dependencies: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_configuration: Option<crate::move_plan::semantic::Configuration>,
 }
 /// Shared scan/display limits; an explicit diagnostic count expands advice detail.
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
@@ -1314,6 +1319,40 @@ fn build(
     result.counts.eligible_files = scan.counts.eligible_files;
     result.snapshot_id = snapshot.clone();
     let files: BTreeMap<_, _> = files.into_iter().map(|f| (f.path.clone(), f)).collect();
+    let external = if request.external_path_dependencies {
+        if files
+            .keys()
+            .any(|path| path.starts_with(crate::move_plan::external::PREFIX))
+        {
+            return Err(DomainError::new(
+                "EXTERNAL_NAMESPACE_CONFLICT",
+                "repository path collides with read-only external namespace",
+            ));
+        }
+        let config = request.semantic_configuration.as_ref().ok_or_else(|| {
+            field_error(
+                "INVALID_PARAMS",
+                "external_path_dependencies requires explicit semantic_configuration",
+                "semantic_configuration",
+            )
+        })?;
+        crate::move_plan::semantic::validate(
+            config,
+            &files.keys().map(String::as_str).collect(),
+            Some(&request.crate_root),
+        )?;
+        let corpus = crate::move_plan::external::discover(
+            &scope.root,
+            &request.crate_root,
+            config,
+            &request.limits.clone().into(),
+            (controls.deadline, controls.cancelled),
+        )?;
+        result.coverage.external_dependencies = Some(corpus.coverage.clone());
+        Some(corpus)
+    } else {
+        None
+    };
     let Some(source) = files.get(&request.source_path) else {
         if !result.coverage.scope_exhaustive {
             result.incomplete("scan_incomplete");
@@ -1571,6 +1610,9 @@ fn build(
     // Verify observed bytes/modes and prospective admission again, including no-draft calls.
     controls.check()?;
     before_recheck();
+    if let Some(corpus) = &external {
+        corpus.recheck((controls.deadline, controls.cancelled))?;
+    }
     let mut final_scan = SearchEnvelope::empty(scan_request.limits.clone());
     let mut final_inputs = scope::ScopeInputManifest::default();
     let (_, latest) = scope::discover_observed(

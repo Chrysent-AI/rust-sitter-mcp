@@ -4,9 +4,10 @@ mod blocked_summary;
 mod dead_imports;
 mod derive_relocation;
 pub(crate) mod ergonomics;
+pub(crate) mod external;
 mod glob_patterns;
 mod prelude;
-mod semantic;
+pub(crate) mod semantic;
 use crate::{
     edit::{self, Edit},
     items::{self, DecisionReason, Item, ModuleEvidence, ParsedFile},
@@ -214,6 +215,9 @@ pub struct MoveRequest {
     /// Exact derive/helper relocation assertions with explicit written provider routes.
     pub derived_attribute_relocations: Option<Vec<derive_relocation::Assertion>>,
     pub semantic_configuration: Option<semantic::Configuration>,
+    /// Capture direct out-of-tree path libraries as read-only method evidence (default off).
+    #[serde(default, skip_serializing_if = "external::disabled")]
+    pub external_path_dependencies: bool,
 }
 impl MoveRequest {
     pub(crate) fn artifact_schema_version(&self) -> u8 {
@@ -1537,6 +1541,39 @@ fn build(
             Some(&request.crate_root),
         )?;
     }
+    let external = if request.external_path_dependencies {
+        if files.keys().any(|path| path.starts_with(external::PREFIX)) {
+            return Err(DomainError::new(
+                "EXTERNAL_NAMESPACE_CONFLICT",
+                "repository path collides with read-only external namespace",
+            ));
+        }
+        if !request.resolve_semantic {
+            return Err(error(
+                "INVALID_PARAMS",
+                "external_path_dependencies requires resolve_semantic",
+                "external_path_dependencies",
+            ));
+        }
+        let config = request.semantic_configuration.as_ref().ok_or_else(|| {
+            error(
+                "INVALID_PARAMS",
+                "external_path_dependencies requires explicit semantic_configuration",
+                "semantic_configuration",
+            )
+        })?;
+        let corpus = external::discover(
+            &scope.root,
+            &request.crate_root,
+            config,
+            &request.limits.clone().into(),
+            (deadline, cancelled),
+        )?;
+        result.coverage.scan.external_dependencies = Some(corpus.coverage.clone());
+        Some(corpus)
+    } else {
+        None
+    };
     if !files.contains_key(&request.crate_root) {
         let mut diagnostic = items::ChainDiagnostic::boundary(
             &request.crate_root,
@@ -2548,12 +2585,13 @@ fn build(
         result,
     )?;
     if request.resolve_semantic {
-        if !semantic_needs.is_empty() && !overlay.is_empty() {
+        if (!semantic_needs.is_empty() || external.is_some()) && !overlay.is_empty() {
             semantic::discharge(
                 request,
                 &files,
                 overlay,
                 &mut semantic_needs,
+                external.as_ref(),
                 (deadline, cancelled),
                 result,
             )?;
@@ -2596,6 +2634,9 @@ fn build(
         return Ok(());
     }
     before_recheck();
+    if let Some(corpus) = &external {
+        corpus.recheck((deadline, cancelled))?;
+    }
     // Check absence first so a newly discovered .rs file is explicitly a creation race.
     for (path, creation) in &creations {
         let admission = if let Some(observation) = &creation.directory {
