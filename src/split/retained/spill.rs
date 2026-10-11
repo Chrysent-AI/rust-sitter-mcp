@@ -90,6 +90,72 @@ fn write_json<T: Serialize>(path: &Path, value: &T, controls: Controls<'_>) -> i
     writer.inner.get_ref().sync_all()
 }
 
+// Disk-only enrichment: preserve canonical text/omission fields and add captured
+// spellings to anchors. Convert one record at a time, never a whole topic.
+struct SearchableTopic<'a, T> {
+    records: &'a [T],
+    evidence: Option<&'a Evidence>,
+}
+impl<T: Serialize> Serialize for SearchableTopic<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeSeq};
+        let mut sequence = serializer.serialize_seq(Some(self.records.len()))?;
+        for record in self.records {
+            let mut value = serde_json::to_value(record).map_err(S::Error::custom)?;
+            if let Some(evidence) = self.evidence {
+                add_captured_text(&mut value, evidence);
+            }
+            sequence.serialize_element(&value)?;
+        }
+        sequence.end()
+    }
+}
+
+#[derive(Serialize)]
+struct SearchableTests<'a> {
+    // The full captured buffers also cover symbols outside observation anchors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    captured_sources: Option<&'a BTreeMap<String, String>>,
+    coverage: &'a test_observations::TestCoverage,
+    routes: SearchableTopic<'a, test_observations::TestRoute>,
+    records: SearchableTopic<'a, test_observations::TestObservation>,
+    limitations: SearchableTopic<'a, test_observations::TestLimitation>,
+}
+
+fn add_captured_text(value: &mut Value, evidence: &Evidence) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                add_captured_text(value, evidence);
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                add_captured_text(value, evidence);
+            }
+            let text = (|| {
+                let path = object.get("path")?.as_str()?;
+                let span = object.get("span")?;
+                if !span.get("text_omitted")?.as_bool()? {
+                    return None;
+                }
+                let range = span.get("range")?;
+                let start = usize::try_from(range.get("start_byte")?.as_u64()?).ok()?;
+                let end = usize::try_from(range.get("end_byte")?.as_u64()?).ok()?;
+                evidence
+                    .buffers
+                    .get(path)?
+                    .get(start..end)
+                    .map(str::to_owned)
+            })();
+            if let Some(text) = text {
+                object.insert("captured_text".into(), Value::String(text));
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn persist_at(
     tree: &Path,
     full: &SuggestSplitEnvelope,
@@ -166,20 +232,54 @@ pub(super) fn persist_at(
             item_contexts,
             impl_contexts,
             signals,
-            decisions,
-            advice_decisions,
             decision_groups,
             drafts,
             inspection_partitions,
-            ownership_candidates,
             boundary_observations,
-            test_observations,
             partition_outcome,
             extraction_payoff,
             draft_summaries,
             draft_eligibility,
             retention,
             integrity
+        );
+        macro_rules! searchable_topics {
+            ($($field:ident),* $(,)?) => { $(
+                let name = concat!(stringify!($field), ".json");
+                write_json(&temporary.join(name), &SearchableTopic {
+                    records: &full.$field, evidence,
+                }, controls)?;
+                files.insert(stringify!($field).to_owned(), destination.join(name).to_string_lossy().into_owned());
+            )* };
+        }
+        searchable_topics!(decisions, advice_decisions, ownership_candidates);
+        let tests = &full.test_observations;
+        write_json(
+            &temporary.join("test_observations.json"),
+            &SearchableTests {
+                captured_sources: evidence.map(|e| &e.buffers),
+                coverage: &tests.coverage,
+                routes: SearchableTopic {
+                    records: &tests.routes,
+                    evidence,
+                },
+                records: SearchableTopic {
+                    records: &tests.records,
+                    evidence,
+                },
+                limitations: SearchableTopic {
+                    records: &tests.limitations,
+                    evidence,
+                },
+            },
+            controls,
+        )?;
+        files.insert(
+            "test_observations".into(),
+            destination
+                .join("test_observations.json")
+                .to_string_lossy()
+                .into_owned(),
         );
         write_json(&temporary.join("request.json"), request, controls)?;
         files.insert(
@@ -331,6 +431,76 @@ mod tests {
         assert!(flush_at(&tree).unwrap().starts_with("No spilled"));
         assert!(root.path().read_dir().unwrap().next().is_none());
     }
+    #[test]
+    fn captured_text_requires_exact_available_utf8_anchor() {
+        let evidence = Evidence {
+            buffers: BTreeMap::from([("src/lib.rs".into(), "éSymbol".into())]),
+            ..Evidence::default()
+        };
+        for (path, start, end, omitted, expected) in [
+            ("src/lib.rs", 2, 8, true, Some("Symbol")),
+            ("src/lib.rs", 1, 8, true, None),
+            ("src/lib.rs", 2, 99, true, None),
+            ("src/lib.rs", 8, 2, true, None),
+            ("missing.rs", 2, 8, true, None),
+            ("src/lib.rs", 2, 8, false, None),
+        ] {
+            let mut anchor = json!({"path":path,"span":{"range":{"start_byte":start,"end_byte":end},"text":null,"text_omitted":omitted}});
+            let original = anchor.clone();
+            add_captured_text(&mut anchor, &evidence);
+            assert_eq!(
+                anchor.get("captured_text").and_then(Value::as_str),
+                expected
+            );
+            anchor.as_object_mut().unwrap().remove("captured_text");
+            assert_eq!(anchor, original);
+        }
+    }
+
+    #[test]
+    #[ignore = "read-only real repository spill regression; run explicitly"]
+    fn real_repository_topics_are_searchable_without_inline_text() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let scratch = Scratch::new();
+        for (source, topic, spellings) in [
+            (
+                "src/split/retained.rs",
+                "test_observations",
+                ["GroupMembership", "preparation_allocation"],
+            ),
+            (
+                "src/move_plan.rs",
+                "decisions",
+                ["lexical_context_unproved", "public_path_change"],
+            ),
+        ] {
+            let request: SuggestSplitRequest = serde_json::from_value(json!({
+                "repo_path":root,"crate_root":"src/lib.rs","source_path":source,
+                "paths":["src"],"retain_snapshot":true,"response_mode":"compact",
+                "limits":{"text_bytes":0,"diagnostic_count":0}
+            }))
+            .unwrap();
+            let flag = AtomicBool::new(false);
+            let (full, evidence) = analyze_with_recheck(root, &request, &flag, || {});
+            assert!(full.error.is_none());
+            let spill = persist_at(
+                &scratch.path().join("analyses"),
+                &full,
+                evidence.as_ref(),
+                &request,
+                Controls {
+                    deadline: Instant::now() + Duration::from_secs(120),
+                    cancelled: &flag,
+                },
+            )
+            .unwrap();
+            let bytes = fs::read_to_string(&spill.files[topic]).unwrap();
+            for spelling in spellings {
+                assert!(bytes.contains(spelling), "{topic}: {spelling}");
+            }
+        }
+    }
+
     #[test]
     fn cancellation_and_caller_owned_paths_never_publish() {
         let root = Scratch::new();

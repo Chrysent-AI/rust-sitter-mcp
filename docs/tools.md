@@ -1807,7 +1807,11 @@ This does not eliminate existing analysis/output buffers or bound total process 
 Reducing compact JSON does not reduce the canonical retention reservation: full
 uncapped decisions and test observations remain owned even when absent from the
 manifest. Raising `response_bytes` can resolve `ADVICE_MANIFEST_TOO_LARGE`, but
-cannot resolve `record_too_large`. Do not narrow away required consumer evidence
+cannot resolve `record_too_large`. Live retention may report `response_budget`
+when the mandatory compact manifest exceeds `response_bytes`, even if the cache
+also cannot admit the canonical record. Increasing `response_bytes` addresses
+wire fitting only, not live-cache capacity or `record_too_large`; persisted spill
+files remain independently available. Do not narrow away required consumer evidence
 or assume historical inventory/drafts are retrievable merely because a manifest fits.
 
 For read-only allocation measurement against a caller repository, run the ignored
@@ -1851,7 +1855,20 @@ records options, `source_buffers.json` preserves captured source bytes as JSON
 strings, and `scope_evidence.json` preserves captured scope/input metadata. The
 index discloses canonical omissions and whether evidence was captured. These are
 full **captured** records, not a promise that stopped analysis scanned everything.
-No new observation cap is introduced. For example, on the server host:
+No new observation cap is introduced. In `test_observations.json`,
+`decisions.json`, `advice_decisions.json` and `ownership_candidates.json`, anchors
+whose canonical `span.text` was omitted receive a disk-only `captured_text` field
+alongside `path` and `span`, sliced from the immutable captured source buffer.
+This makes anchored symbol spellings searchable even with `limits.text_bytes:0`.
+`test_observations.json` also includes a disk-only `captured_sources` path-to-text
+map of all captured buffers, so symbols outside observation anchors are searchable
+in that topic too. This map duplicates `source_buffers.json` on disk, not on the wire.
+Canonical `span.text`, `text_omitted` and omission counts remain unchanged, as do
+all wire presentations. No text is read from the current caller filesystem;
+unavailable buffers or invalid byte/UTF-8 ranges are never guessed. Other topics
+remain canonical; `source_buffers.json` provides the captured originals. Grep
+decision reason values (for example `lexical_context_unproved`), not Rust type
+names. For example, on the server host:
 
 ```sh
 grep -n 'observation spelling' /absolute/analysis-directory/test_observations.json

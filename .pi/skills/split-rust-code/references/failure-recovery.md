@@ -89,7 +89,7 @@ JSON plus `index.json` in server-owned XDG data (`$XDG_DATA_HOME/rust-sitter-mcp
 persistence is independent of `retention.state` and its bounded live handle;
 files survive handle expiry, release and restart until `rust-sitter-mcp flush`;
 paths refer to the server host and persisted evidence is historical, not fresh
-execution anchors. Since v0.5.0, retained
+execution anchors. `response_budget` means the mandatory wire manifest could not fit and no usable live handle was published; it may be reported even if the live cache also cannot admit the canonical record. Increasing `response_bytes` addresses wire fitting only, not `capacity` or `record_too_large`. Check `retention.spill` independently: persisted topic files remain usable without a live detail/export handle. Spilled anchors include disk-only `captured_text` and the observation topic a `captured_sources` map taken from captured original buffers, so symbol greps work even with inline `limits.text_bytes:0`; grep reason values such as `lexical_context_unproved`, not Rust type names. Since v0.5.0, retained
 `normalized_request.include_balanced` records the effective value (false for
 omission/false, true only for explicit opt-in) alongside server-version provenance.
 Historical pages preserve those memberships and never regroup the record.

@@ -366,6 +366,12 @@ fn durable_references_survive_in_memory_capacity_refusal() {
     request.response_mode = ResponseMode::References;
     let (full, evidence) = repo.analyze(&request);
     let flag = AtomicBool::new(false);
+    // Mutating the caller after capture must never change spilled spellings.
+    fs::write(
+        repo.0.join("src/worker.rs"),
+        "fn replaced_after_capture() {}\n",
+    )
+    .unwrap();
     let spilled = spill::persist_at(
         &storage.0.join("analyses"),
         &full,
@@ -376,8 +382,22 @@ fn durable_references_survive_in_memory_capacity_refusal() {
     .unwrap();
     let expected = serde_json::to_value(&full).unwrap();
     for (topic, value) in expected.as_object().unwrap() {
-        let stored: Value =
+        let mut stored: Value =
             serde_json::from_slice(&fs::read(&spilled.files[topic]).unwrap()).unwrap();
+        fn strip_search_text(value: &mut Value) {
+            match value {
+                Value::Object(object) => {
+                    object.remove("captured_text");
+                    object.remove("captured_sources");
+                    for value in object.values_mut() {
+                        strip_search_text(value);
+                    }
+                }
+                Value::Array(values) => values.iter_mut().for_each(strip_search_text),
+                _ => {}
+            }
+        }
+        strip_search_text(&mut stored);
         assert_eq!(&stored, value, "canonical topic {topic}");
     }
     assert!(
@@ -385,6 +405,28 @@ fn durable_references_survive_in_memory_capacity_refusal() {
             .unwrap()
             .contains("fn alpha()")
     );
+    let observations = fs::read_to_string(&spilled.files["test_observations"]).unwrap();
+    assert!(observations.contains("alpha"));
+    assert!(observations.contains("\"captured_text\""));
+    assert!(observations.contains("\"text_omitted\": true"));
+    assert!(!observations.contains("replaced_after_capture"));
+    let manifest = Manifest::from_full(
+        &full,
+        Retention::unavailable(RetentionLimits::default(), "capacity"),
+    );
+    let expected_omissions = [
+        ("candidate_summaries", manifest.candidate_summaries.len()),
+        (
+            "consequence_summaries",
+            manifest.consequence_summaries.len(),
+        ),
+        ("decision_groups", manifest.decision_groups.len()),
+        (
+            "inspection_partitions",
+            manifest.inspection_partitions.len(),
+        ),
+        ("draft_memberships", manifest.draft_memberships.len()),
+    ];
     let store = Store::new(RetentionLimits {
         aggregate_bytes: 1,
         ..RetentionLimits::default()
@@ -405,7 +447,11 @@ fn durable_references_survive_in_memory_capacity_refusal() {
     for path in wire["references"].as_object().unwrap().values() {
         assert!(std::path::Path::new(path.as_str().unwrap()).is_file());
     }
-    assert!(wire["candidate_summaries"].as_array().unwrap().is_empty());
+    for (field, count) in expected_omissions {
+        assert!(wire[field].as_array().unwrap().is_empty(), "{field}");
+        assert_eq!(wire["omissions"][field], count, "{field}");
+        assert!(PathBuf::from(wire["references"][field].as_str().unwrap()).is_file());
+    }
     assert!(serde_json::to_vec(&wire).unwrap().len() <= request.limits.response_bytes);
 }
 

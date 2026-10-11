@@ -64,6 +64,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Make spilled split-advice observation and decision anchors searchable for
+  captured source spellings even when inline `text_bytes` is zero, without
+  changing canonical omission flags or wire budgets.
+
 * Distinguish `suggest_split` destination scope rejection, actual naming collisions
   and absent supported concept names. Preserve the ordinary prefix/file-fallback
   ladder, label file-based names as placeholders, and never interpret naming
