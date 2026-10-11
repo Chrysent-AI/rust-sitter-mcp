@@ -711,6 +711,9 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
         })
         .unwrap();
     assert_eq!(alpha["destination"]["path"], "src/alpha_5.rs");
+    let warnings = alpha["warnings"].to_string();
+    assert!(warnings.contains("destination_name_collision: 3"));
+    assert!(warnings.contains("destination_scope_rejected: 1"));
     // A parent's ordinary child formula, not the source's basename, determines the sibling parent.
     repo.write("src/lib.rs", "mod legacy;\n");
     repo.write(
@@ -744,12 +747,15 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     let exhausted = run(&repo, args(&repo, "src/legacy/source.rs"));
     advice_flow::complete(&exhausted);
     assert!(exhausted["drafts"].as_array().unwrap().is_empty());
-    assert!(
-        exhausted["draft_eligibility"]["reasons"][0]
-            .as_str()
-            .unwrap()
-            .contains("suffix_2_through_99")
-    );
+    let reasons = exhausted["draft_eligibility"]["reasons"]
+        .as_array()
+        .unwrap();
+    assert!(reasons.contains(&json!(
+        "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+    )));
+    assert!(reasons.contains(&json!("destination_name_collision")));
+    assert!(reasons.contains(&json!("no_credible_concept_name")));
+    assert!(!reasons.contains(&json!("destination_scope_rejected")));
 }
 #[test]
 fn incomplete_membership_and_wire_caps_never_leave_drafts_or_dangling_links() {

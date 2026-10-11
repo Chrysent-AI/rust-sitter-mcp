@@ -451,9 +451,123 @@ fn exact_file_scope_still_honestly_reports_unadmitted_sibling_destinations() {
     assert_eq!(result["draft_eligibility"]["state"], "no_draft");
     assert_eq!(
         result["draft_eligibility"]["reasons"],
-        json!(["no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"])
+        json!([
+            "destination_scope_rejected",
+            "no_credible_concept_name",
+            "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+        ])
     );
     assert_eq!(result["error"], Value::Null);
     // Do not mislabel a scope restriction as an insufficient response budget.
     assert_eq!(result["truncation_reasons"], json!([]));
+    assert_naming_is_not_no_work(&result);
+}
+
+fn assert_naming_is_not_no_work(result: &Value) {
+    let text = result.to_string().to_lowercase();
+    assert!(!text.contains("already modularized"));
+    assert!(!text.contains("nothing to do"));
+    assert_eq!(result["partition_outcome"], "credible_written_candidates");
+    assert!(
+        !result["ownership_candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+const NAMED_CORE: &str = "fn retained() {}\nfn packet_read() { packet_write(); }\nfn packet_write() { packet_read(); }\n";
+
+#[test]
+fn naming_prefix_and_collision_suffix_keep_success_and_disclose_real_collision() {
+    let repo = fixture(NAMED_CORE);
+    let mut client = Client::new();
+    let plain = client.call("suggest_split", request(&repo));
+    assert_eq!(
+        plain["drafts"][0]["groups"][1]["destination"]["path"],
+        "cases/advice/packet.rs"
+    );
+    assert_eq!(plain["drafts"][0]["groups"][1]["warnings"], json!([]));
+    assert_naming_is_not_no_work(&plain);
+    repo.write("cases/advice/packet.rs", "// occupied\n");
+    let collision = client.call("suggest_split", request(&repo));
+    assert_eq!(
+        collision["drafts"][0]["groups"][1]["destination"]["path"],
+        "cases/advice/packet_2.rs"
+    );
+    let warnings = collision["drafts"][0]["groups"][1]["warnings"].to_string();
+    assert!(warnings.contains("destination_name_collision: 1"));
+    assert!(!warnings.contains("destination_scope_rejected"));
+    assert!(!warnings.contains("no_credible_concept_name"));
+    assert_naming_is_not_no_work(&collision);
+}
+
+#[test]
+fn naming_exhaustion_distinguishes_collision_scope_and_mixed_causes() {
+    let repo = fixture(NAMED_CORE);
+    let mut client = Client::new();
+    let mut args = request(&repo);
+    args["paths"] = json!(["cases/advice/lib.rs"]);
+    let rejected = client.call("suggest_split", args.clone());
+    assert_eq!(
+        rejected["draft_eligibility"]["reasons"],
+        json!([
+            "destination_scope_rejected",
+            "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+        ])
+    );
+    assert_naming_is_not_no_work(&rejected);
+    repo.write("cases/advice/packet.rs", "// occupied\n");
+    // Only this candidate is in scope, and it really exists; the rest are excluded.
+    args["paths"] = json!(["cases/advice/lib.rs", "cases/advice/packet.rs"]);
+    let mixed = client.call("suggest_split", args);
+    assert_eq!(
+        mixed["draft_eligibility"]["reasons"],
+        json!([
+            "destination_scope_rejected",
+            "destination_name_collision",
+            "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+        ])
+    );
+    assert_naming_is_not_no_work(&mixed);
+    for suffix in 2..=99 {
+        repo.write(&format!("cases/advice/packet_{suffix}.rs"), "// occupied\n");
+    }
+    let exhausted = client.call("suggest_split", request(&repo));
+    assert_eq!(
+        exhausted["draft_eligibility"]["reasons"],
+        json!([
+            "destination_name_collision",
+            "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+        ])
+    );
+    assert_naming_is_not_no_work(&exhausted);
+}
+
+#[test]
+fn naming_without_supported_concept_labels_file_fallback_as_placeholder() {
+    let repo = fixture("fn retained() {}\nfn first() { second(); }\nfn second() { first(); }\n");
+    let mut client = Client::new();
+    let plain = client.call("suggest_split", request(&repo));
+    assert_eq!(
+        plain["drafts"][0]["groups"][1]["destination"]["path"],
+        "cases/advice/lib_part.rs"
+    );
+    let warnings = plain["drafts"][0]["groups"][1]["warnings"].to_string();
+    assert!(warnings.contains("no_credible_concept_name:"));
+    assert!(warnings.contains("placeholder, not a concept name"));
+    assert!(warnings.contains("caller-chosen destination"));
+    assert!(!warnings.contains("destination_name_collision"));
+    assert!(!warnings.contains("destination_scope_rejected"));
+    assert_naming_is_not_no_work(&plain);
+    repo.write("cases/advice/lib_part.rs", "// occupied\n");
+    let suffixed = client.call("suggest_split", request(&repo));
+    assert_eq!(
+        suffixed["drafts"][0]["groups"][1]["destination"]["path"],
+        "cases/advice/lib_part_2.rs"
+    );
+    let warnings = suffixed["drafts"][0]["groups"][1]["warnings"].to_string();
+    assert!(warnings.contains("no_credible_concept_name:"));
+    assert!(warnings.contains("destination_name_collision: 1"));
+    assert_naming_is_not_no_work(&suffixed);
 }

@@ -1383,6 +1383,37 @@ completion false; incomplete work cannot establish absence of obligations or
 useful extraction. No compilation, semantic verification or execution change is
 introduced.
 
+### Naming advice and destination availability
+
+Naming is separate from structural partition credibility. Additive vocabulary in
+`draft_eligibility.reasons` distinguishes observed `destination_scope_rejected`
+(path/glob/ignore or other destination-admission restriction),
+`destination_name_collision` (occupied path/case alias, competing module layout,
+reserved sibling, declaration or import binding), and
+`unsupported_destination_name_or_layout` (invalid module spelling or unsupported
+child spelling). Multiple causes can coexist; no arbitrary dominant cause is
+chosen. The legacy `no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99`
+remains as the bounded-search exhaustion marker, accompanied by these causes.
+It is never evidence that the source is already modularized or has nothing to do.
+Structural `partition_outcome`, candidates and extraction payoff remain unchanged.
+
+Full draft/inspection group `warnings` separately report
+`no_credible_concept_name` when the selection lacks a supported shared name prefix.
+This is a bounded naming observation, not proof that no human concept exists:
+no domain lexicon or architectural name inference is used. Names come from the
+existing written-name prefix signals; type/signature relationships continue to
+support cores without inventing names. The ordinary prefix → file-based `_part`
+fallback → `_2` through `_99` ladder is unchanged. A fallback is explicitly a
+**placeholder, not a concept name**; suffixes avoid collisions, not discover
+concepts. Supply a caller-chosen explicit destination in `move_item` after review;
+`suggest_split` has no caller-name request field. When search fails without a
+supported prefix, `draft_eligibility.reasons` also includes
+`no_credible_concept_name`. Successful groups disclose skipped scope/collision/
+unsupported candidate counts in `warnings`; naming exhaustion preserves every
+observed cause in eligibility reasons. Destination withholding for incomplete
+selections or dominant indivisible items remains unchanged. None of these naming
+outcomes means no useful extraction or establishes move applicability.
+
 ### Reading and editing partitions
 
 Each draft has a nonempty retain group and up to two sibling groups. Every inventoried ID appears **exactly once** in each complete draft. A sibling destination supplies a proposed absent path, an evidenced ordinary declaration parent/module chain, and an existing matching declaration descriptor when reused. The server probes the base name then `_2` through `_99`, checking scope admission, ignores, filesystem/case/layout occupancy and declaration/import collisions. It never guesses a parent from the source basename.

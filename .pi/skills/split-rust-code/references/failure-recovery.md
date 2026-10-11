@@ -288,7 +288,11 @@ recovery described above.
 | `draft_eligibility.state` / reason | Meaning | Recovery |
 |---|---|---|
 | `incomplete` + `response_bytes` | Drafts/decisions withheld at the response cap | Retry with `limits: {"response_bytes": 8388608}` (≤16 MiB). Membership may still be complete — the inventory is usable. |
-| `no_draft` + `no_admitted_nonconflicting_name…` | Already modularized / too few movable units | Legitimate "nothing to do"; report the design, don't force a split. |
+| `no_draft` + `no_admitted_nonconflicting_name…` | Bounded naming search exhausted; inspect additive causes | Not "nothing to do". Keep credible cores visible; inspect scope restrictions, real conflicts and supported naming evidence, then review a caller-chosen destination. |
+| `destination_scope_rejected` | Observed path/glob/ignore or other admission restriction | Review request scope and destination policy; do not infer collision or absence of useful extraction. |
+| `destination_name_collision` | Occupied path/case alias, competing layout or binding | Review a different explicit destination; mixed scope restrictions may also exist. |
+| `no_credible_concept_name` | No supported shared-prefix name | File-based/numbered fallbacks are placeholders, not concepts; ask for a caller-chosen destination without inventing architecture. |
+| `unsupported_destination_name_or_layout` | Invalid module spelling or unsupported child spelling | Review a supported ordinary layout and explicit destination; do not infer no useful extraction. |
 | `no_draft` + chain reasons | Root/scope problem | Fix `crate_root`/`paths` per chain diagnostics. |
 | `no_draft` + `inspection_only_selection_or_payoff` | Completed inspection-only advice: the selection is incomplete/undetermined or the file is dominance-limited | Inspect `inspection_partitions`, group `selection_completeness`, reviewed bundle alternatives and `extraction_payoff`. Not response truncation, not proof the file is already modular, and not a reason to force balancing. Check `inspection_partitions`/`extraction_payoff` omission counts and `completed` before relying on disclosures; genuine budget omissions still need ordinary recovery. Inspection partitions are returned directly, not a new `get_split_detail` selector collection. |
 

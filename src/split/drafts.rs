@@ -269,12 +269,55 @@ fn filename(request: &SuggestSplitRequest, prefix: Option<&str>) -> String {
         Err(_) => "split_part".into(),
     }
 }
+#[derive(Default)]
+struct NamingSearch {
+    destination: Option<ProposedDestination>,
+    scope_rejections: usize,
+    collisions: usize,
+    unsupported_names: usize,
+}
+impl NamingSearch {
+    fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (reason, count) in [
+            ("destination_scope_rejected", self.scope_rejections),
+            ("destination_name_collision", self.collisions),
+            (
+                "unsupported_destination_name_or_layout",
+                self.unsupported_names,
+            ),
+        ] {
+            if count != 0 {
+                warnings.push(format!("{reason}: {count} candidate names skipped in base or suffix _2 through _99; naming advice only, not absence of useful extraction"));
+            }
+        }
+        warnings
+    }
+    fn record_failure(&self, result: &mut SuggestSplitEnvelope) {
+        // Mixed failures retain every observed cause, not an arbitrary winner.
+        for (reason, count) in [
+            ("destination_scope_rejected", self.scope_rejections),
+            ("destination_name_collision", self.collisions),
+            (
+                "unsupported_destination_name_or_layout",
+                self.unsupported_names,
+            ),
+        ] {
+            if count != 0 && !result.draft_eligibility.reasons.iter().any(|r| r == reason) {
+                result.draft_eligibility.reasons.push(reason.into());
+            }
+        }
+    }
+}
+const NO_CONCEPT_NAME: &str = "no_credible_concept_name: no supported shared name prefix for this selection; file-based fallback is a placeholder, not a concept name; supply an explicit caller-chosen destination to move_item; not absence of useful extraction";
+
 fn choose_destination(
     layout: &Layout<'_>,
     parent: &str,
     base: &str,
     reserved: &mut BTreeSet<String>,
-) -> Result<Option<ProposedDestination>, DomainError> {
+) -> Result<NamingSearch, DomainError> {
+    let mut outcome = NamingSearch::default();
     let Layout {
         scope,
         request,
@@ -327,11 +370,16 @@ fn choose_destination(
             .expect("UTF-8 path")
             .to_owned();
         if items::module_name(&path).is_err()
-            || path == request.source_path
-            || reserved.contains(&path.to_lowercase())
             || items::child_path(parent, &request.crate_root, &name) != path
+        {
+            outcome.unsupported_names += 1;
+            continue;
+        }
+        if path == request.source_path
+            || reserved.contains(&path.to_lowercase())
             || imports.contains(&name)
         {
+            outcome.collisions += 1;
             continue;
         }
         let mut declaration = None;
@@ -351,6 +399,7 @@ fn choose_destination(
                 || node.child_by_field_name("body").is_some()
                 || item.visibility_key == "restricted"
             {
+                outcome.collisions += 1;
                 continue;
             }
             declaration = Some(AdviceAnchor {
@@ -363,30 +412,32 @@ fn choose_destination(
             });
         }
         if items::present(scope, &format!("{}/mod.rs", path.trim_end_matches(".rs")))? {
+            outcome.collisions += 1;
             continue;
         }
         match scope.admit_new_path(&path, controls.deadline, controls.cancelled) {
             Ok(()) => {}
-            Err(e)
-                if matches!(
-                    e.code.as_str(),
-                    "INVALID_DESTINATION" | "DESTINATION_ALREADY_EXISTS"
-                ) =>
-            {
+            Err(e) if e.code == "INVALID_DESTINATION" => {
+                outcome.scope_rejections += 1;
+                continue;
+            }
+            Err(e) if e.code == "DESTINATION_ALREADY_EXISTS" => {
+                outcome.collisions += 1;
                 continue;
             }
             Err(e) => return Err(e),
         }
         reserved.insert(path.to_lowercase());
-        return Ok(Some(ProposedDestination {
+        outcome.destination = Some(ProposedDestination {
             kind: "new_sibling".into(),
             path,
             parent_path: parent.into(),
             parent_module: module_description(&contexts[parent], files, request.limits.text_bytes),
             existing_declaration: declaration,
-        }));
+        });
+        return Ok(outcome);
     }
-    Ok(None)
+    Ok(outcome)
 }
 fn make_draft(
     membership: Vec<Vec<usize>>,
@@ -428,16 +479,34 @@ fn make_draft(
             selection_completeness.state != "no_observed_missing_obligations";
         let dominated_fallback =
             !result.extraction_payoff.dominant_item_ids.is_empty() && prefix.is_none();
+        let mut warnings = Vec::new();
+        if index != 0 && prefix.is_none() {
+            warnings.push(NO_CONCEPT_NAME.into());
+        }
         let destination = if index == 0 || incomplete_selection || dominated_fallback {
             None
         } else {
             let base = filename(request, prefix.as_deref());
-            let Some(value) = choose_destination(layout, parent, &base, &mut reserved)? else {
+            let outcome = choose_destination(layout, parent, &base, &mut reserved)?;
+            warnings.extend(outcome.warnings());
+            if outcome.destination.is_none() {
+                outcome.record_failure(result);
+                if prefix.is_none()
+                    && !result
+                        .draft_eligibility
+                        .reasons
+                        .iter()
+                        .any(|r| r == "no_credible_concept_name")
+                {
+                    result
+                        .draft_eligibility
+                        .reasons
+                        .push("no_credible_concept_name".into());
+                }
                 return Ok(None);
-            };
-            Some(value)
+            }
+            outcome.destination
         };
-        let mut warnings = Vec::new();
         if index != 0 && incomplete_selection {
             warnings.push("selection_incomplete_or_undetermined: review missing/uncertain impl obligations and explicit bundle alternatives; destination proposal withheld, not execution-ready".into());
         }

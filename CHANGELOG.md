@@ -50,6 +50,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Distinguish `suggest_split` destination scope rejection, actual naming collisions
+  and absent supported concept names. Preserve the ordinary prefix/file-fallback
+  ladder, label file-based names as placeholders, and never interpret naming
+  exhaustion as evidence that a file needs no reorganization.
+
 * Verify version bumps with workspace tests and require active tracked hooks;
   reject direct current-package-version literals in test comparisons before
   they can drift. Leave failed bump diffs visible without committing or tagging.
