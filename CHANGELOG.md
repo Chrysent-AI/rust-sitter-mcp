@@ -91,6 +91,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Retain structured external root identities, active capture limits and partial
+  usage on discovery/capture refusals from `move_item` and `suggest_split`, even
+  under response-byte pressure. Mark failed capture incomplete without a corpus
+  digest; never publish prefix-corpus proofs or artifacts.
+
 * Withhold already-computed resolution proofs and clear their counts when the
   external corpus fails its final freshness or cancellation check, alongside
   withholding every move artifact.

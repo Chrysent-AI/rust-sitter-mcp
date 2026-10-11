@@ -300,6 +300,10 @@ fn real_stdio_query() {
         "actual final virtual batch",
         "never writes caller sources, formats, compiles or applies changes",
         "external_path_dependencies defaults to false",
+        "written inherent methods/functions, named-field accesses",
+        "direct struct/tuple-struct constructions discharge",
+        "ordinary external type paths, patterns, uncalled constructor values",
+        "enum variants and trait/generic/generated members never do",
         "No download or caller-cache mutation",
         "source/provenance/path/version/namespace",
         "EXTERNAL_PACKAGE_UNAVAILABLE",
@@ -310,6 +314,7 @@ fn real_stdio_query() {
             "missing {phrase}: {description}"
         );
     }
+    assert!(!description.contains("never external fields/type/direct ADT constructors"));
     assert!(!description.contains("dependency-free"));
     assert!(!description.contains("repair needs are blockers"));
     let invalid_move = exchange(

@@ -76,7 +76,47 @@ fn out_of_tree_inherent_method_has_real_both_overlay_proof_and_compilable_patch(
         dep.0.canonicalize().unwrap().to_str().unwrap()
     );
     assert_eq!(roots[0]["package"], "dependency-library");
-    assert_eq!(value["coverage"]["external_dependencies"]["complete"], true);
+    assert_eq!(roots[0]["edition"], "2024");
+    assert_eq!(roots[0]["features"], json!([]));
+    assert_eq!(roots[0]["files"], 1);
+    let source_bytes = fs::read(dep.0.join("src/lib.rs")).unwrap().len();
+    assert_eq!(roots[0]["bytes"], source_bytes);
+    let coverage = &value["coverage"]["external_dependencies"];
+    assert_eq!(coverage["complete"], true);
+    let omissions = coverage["omissions"].as_array().unwrap();
+    assert_eq!(omissions.len(), 1);
+    for boundary in [
+        "no dev/build-only edges",
+        "sysroot or compilation",
+        "not heap",
+    ] {
+        assert!(omissions[0].as_str().unwrap().contains(boundary));
+    }
+    let input_bytes: usize = [
+        repo.0.join("Cargo.toml"),
+        repo.0.join("Cargo.lock"),
+        dep.0.join("Cargo.toml"),
+    ]
+    .iter()
+    .map(|path| fs::read(path).unwrap().len())
+    .sum();
+    assert_eq!(
+        coverage["capture_usage"],
+        json!({
+            "max_files": 20_000,
+            "max_file_bytes": 2 * 1024 * 1024,
+            "max_source_bytes": 256 * 1024 * 1024,
+            "input_files": 3,
+            "input_bytes": input_bytes,
+            "observed_files": 4,
+            "observed_bytes": input_bytes + source_bytes,
+            "archive_comparison_entries": 0,
+            "archive_comparison_bytes": 0,
+            "source_files_per_overlay": 1,
+            "source_bytes_per_overlay": source_bytes,
+            "graph_edges": 1,
+        })
+    );
     assert!(
         value["coverage"]["external_dependencies"]["corpus_digest"]
             .as_str()
@@ -120,6 +160,185 @@ fn out_of_tree_inherent_method_has_real_both_overlay_proof_and_compilable_patch(
     assert_eq!(observe(&repo.0), before);
     assert_eq!(observe(&dep.0), dependency);
 }
+#[test]
+fn capture_refusals_disclose_only_staged_roots_and_partial_usage_on_both_tools() {
+    for case in ["files", "bytes", "syntax", "partial_library", "early"] {
+        let (repo, bridge) = fixture();
+        let leaf = Fixture::empty();
+        leaf.write(
+            "Cargo.toml",
+            "[package]\nname='leaf-library'\nversion='1.0.0'\nedition='2024'\n",
+        );
+        leaf.write("src/lib.rs", "pub struct Leaf;\n");
+        let manifest = fs::read_to_string(bridge.0.join("Cargo.toml")).unwrap();
+        bridge.write(
+            "Cargo.toml",
+            &format!(
+                "{manifest}\n[dependencies]\nleaf={{package='leaf-library',path={:?}}}\n",
+                leaf.0.canonicalize().unwrap().to_str().unwrap()
+            ),
+        );
+        let output = Command::new("cargo")
+            .args(["generate-lockfile", "--offline"])
+            .current_dir(&repo.0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let success = run(&repo, &bridge, request(&repo));
+        assert_eq!(success["plan"]["applicable"], true, "{success}");
+        let successful = &success["coverage"]["external_dependencies"];
+        let input_bytes = successful["capture_usage"]["input_bytes"].as_u64().unwrap();
+        let bridge_bytes = fs::read(bridge.0.join("src/lib.rs")).unwrap().len();
+        let mut args = request(&repo);
+        args["paths"] = json!(["src/lib.rs", "src/source.rs"]);
+        args["limits"]["response_bytes"] = json!(64 * 1024);
+        let staged_extra = "pub struct Staged;\n";
+        match case {
+            "files" => args["limits"]["max_files"] = json!(5),
+            "bytes" => {
+                args["limits"]["max_source_bytes"] = json!(input_bytes + bridge_bytes as u64)
+            }
+            "syntax" => leaf.write("src/lib.rs", "pub struct {\n"),
+            "partial_library" => {
+                leaf.write("src/a.rs", staged_extra);
+                leaf.write("src/lib.rs", "pub struct {\n");
+            }
+            "early" => fs::rename(repo.0.join("Cargo.lock"), repo.0.join("absent.lock")).unwrap(),
+            _ => unreachable!(),
+        }
+        let before = (observe(&repo.0), observe(&bridge.0), observe(&leaf.0));
+        let moved = run(&repo, &bridge, args.clone());
+        let advice = Engine::new(repo.0.clone()).unwrap().suggest_split(
+            serde_json::from_value::<SuggestSplitRequest>(json!({
+                "repo_path": repo.0, "crate_root": "src/lib.rs", "source_path": "src/source.rs",
+                "paths": args["paths"], "external_path_dependencies": true,
+                "semantic_configuration": configuration(), "limits": args["limits"],
+            }))
+            .unwrap(),
+            &AtomicBool::new(false),
+        );
+        let advice = serde_json::to_value(advice).unwrap();
+        for result in [&moved, &advice] {
+            let expected_code = match case {
+                "files" | "bytes" => "EXTERNAL_CORPUS_INCOMPLETE",
+                "early" => "EXTERNAL_DISCOVERY_FAILED",
+                _ => "EXTERNAL_ROOT_UNSUPPORTED",
+            };
+            assert_eq!(result["error"]["code"], expected_code, "{case}: {result}");
+            let disclosure = &result["coverage"]["external_dependencies"];
+            assert_eq!(disclosure["complete"], false, "{case}: {result}");
+            assert!(disclosure.get("corpus_digest").is_none());
+            let roots = disclosure["consulted_roots"].as_array().unwrap();
+            assert_eq!(
+                roots.len(),
+                match case {
+                    "early" => 0,
+                    "partial_library" => 2,
+                    _ => 1,
+                }
+            );
+            if case != "early" {
+                assert_eq!(roots[0], successful["consulted_roots"][0]);
+                if case == "partial_library" {
+                    let mut partial = successful["consulted_roots"][1].clone();
+                    partial["bytes"] = json!(staged_extra.len());
+                    assert_eq!(roots[1], partial);
+                }
+                let files = if case == "partial_library" { 2 } else { 1 };
+                let bytes = bridge_bytes
+                    + if case == "partial_library" {
+                        staged_extra.len()
+                    } else {
+                        0
+                    };
+                let mut usage = successful["capture_usage"].clone();
+                usage["max_files"] = json!(if case == "files" { 5 } else { 20_000 });
+                usage["max_source_bytes"] = json!(if case == "bytes" {
+                    input_bytes + bridge_bytes as u64
+                } else {
+                    256 * 1024 * 1024
+                });
+                usage["observed_files"] = json!(4 + files);
+                usage["observed_bytes"] = json!(input_bytes + bytes as u64);
+                usage["source_files_per_overlay"] = json!(files);
+                usage["source_bytes_per_overlay"] = json!(bytes);
+                usage["graph_edges"] = json!(0);
+                assert_eq!(disclosure["capture_usage"], usage, "{case}");
+            } else {
+                let bytes: usize = [
+                    repo.0.join("Cargo.toml"),
+                    bridge.0.join("Cargo.toml"),
+                    leaf.0.join("Cargo.toml"),
+                ]
+                .iter()
+                .map(|path| fs::read(path).unwrap().len())
+                .sum();
+                let mut usage = successful["capture_usage"].clone();
+                for field in ["input_files", "observed_files"] {
+                    usage[field] = json!(3);
+                }
+                for field in ["input_bytes", "observed_bytes"] {
+                    usage[field] = json!(bytes);
+                }
+                for field in [
+                    "source_files_per_overlay",
+                    "source_bytes_per_overlay",
+                    "graph_edges",
+                ] {
+                    usage[field] = json!(0);
+                }
+                assert_eq!(disclosure["capture_usage"], usage);
+            }
+            assert!(
+                disclosure["omissions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|omission| omission
+                        .as_str()
+                        .unwrap()
+                        .contains("external discovery/capture failed"))
+            );
+            if matches!(case, "files" | "bytes") {
+                let message = result["error"]["message"].as_str().unwrap();
+                assert!(message.contains("closure captured 1 roots"));
+                assert!(message.contains("limits"));
+            }
+        }
+        assert_eq!(moved["plan"]["applicable"], false);
+        assert!(
+            moved["coverage"]
+                .get("ra_resolved")
+                .is_none_or(|count| count == 0)
+        );
+        assert!(
+            moved["plan"]
+                .get("binding_proofs")
+                .is_none_or(|p| p.as_array().unwrap().is_empty())
+        );
+        assert!(moved["plan"]["resolution_coverage"].is_null());
+        for field in ["edits", "created_files", "patch"] {
+            assert!(moved["plan"][field].is_null());
+        }
+        assert!(
+            moved["plan"]["blocked_summary"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(advice["drafts"].as_array().unwrap().is_empty());
+        assert_eq!(advice["integrity"]["semantic"], "not_performed");
+        assert_eq!(
+            (observe(&repo.0), observe(&bridge.0), observe(&leaf.0)),
+            before
+        );
+    }
+}
+
 #[test]
 fn disjoint_enclosing_workspace_inherited_path_method_has_an_applicable_plan() {
     let workspace = Fixture::empty();

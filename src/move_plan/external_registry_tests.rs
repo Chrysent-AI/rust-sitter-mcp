@@ -743,7 +743,7 @@ fn scratch_package_mutation_cannot_substitute_discovery_inputs() {
     )
     .unwrap();
     sources.bind_workspace(&directory).unwrap();
-    let root = sources.registry_roots.iter().next().unwrap();
+    let root = sources.registry_roots.iter().next().unwrap().clone();
     let fake = Package {
         id: "untrusted".into(),
         name: "cached-library".into(),
@@ -754,7 +754,7 @@ fn scratch_package_mutation_cannot_substitute_discovery_inputs() {
         dependencies: vec![],
     };
     assert_eq!(
-        sources.provenance(&fake, root, controls).unwrap_err().code,
+        sources.provenance(&fake, &root, controls).unwrap_err().code,
         "EXTERNAL_CONFIGURATION_MISMATCH"
     );
     for case in ["bytes", "membership"] {
@@ -763,7 +763,11 @@ fn scratch_package_mutation_cannot_substitute_discovery_inputs() {
         assert!(!scratch.0.join("registry/src").exists());
         // Deliberately materialize a copy only for this self-consistency test;
         // production stage never writes registry/src before Cargo unpacks it.
-        for (path, bytes) in sources.observed.iter().filter(|(p, _)| p.starts_with(root)) {
+        for (path, bytes) in sources
+            .observed
+            .iter()
+            .filter(|(p, _)| p.starts_with(&root))
+        {
             let target = scratch.0.join(path.strip_prefix(&sources.home).unwrap());
             fs::create_dir_all(target.parent().unwrap()).unwrap();
             fs::write(target, bytes).unwrap();
@@ -842,6 +846,12 @@ fn registry_archive_comparison_shares_capture_budgets() {
                 .err()
                 .unwrap();
         assert_eq!(error.code, "EXTERNAL_CORPUS_INCOMPLETE");
+        if files {
+            assert_eq!(sources.comparison, (1, 0));
+        } else {
+            assert!(sources.comparison.0 > 0);
+            assert!(sources.comparison.1 > 0);
+        }
         assert_eq!(observe(&repo.0), repo_before);
         assert_eq!(observe(&home.0), home_before);
         assert!(fs::read_dir(&state.0).unwrap().next().is_none());

@@ -1347,8 +1347,8 @@ fn build(
             config,
             &request.limits.clone().into(),
             (controls.deadline, controls.cancelled),
+            &mut result.coverage.external_dependencies,
         )?;
-        result.coverage.external_dependencies = Some(corpus.coverage.clone());
         Some(corpus)
     } else {
         None

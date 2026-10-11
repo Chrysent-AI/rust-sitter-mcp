@@ -263,6 +263,7 @@ fn transitive_worker() {
     let home = sources::cargo_home().unwrap();
     let before = observe(&repo);
     let cache = observe(&home);
+    let mut disclosure = None;
     let corpus = discover(
         &repo.canonicalize().unwrap(),
         "src/lib.rs",
@@ -272,8 +273,13 @@ fn transitive_worker() {
             Instant::now() + Duration::from_secs(30),
             &AtomicBool::new(false),
         ),
+        &mut disclosure,
     )
     .unwrap();
+    assert_eq!(
+        serde_json::to_value(disclosure.unwrap()).unwrap(),
+        serde_json::to_value(&corpus.coverage).unwrap()
+    );
     let captured: Vec<_> = corpus
         .coverage
         .consulted_roots
@@ -300,7 +306,12 @@ fn transitive_worker() {
         serde_json::to_vec(&run(off)).unwrap(),
         "default-off bytes"
     );
-    let value = run(args.clone());
+    let mut result = super::super::run(
+        &repo,
+        serde_json::from_value(args.clone()).unwrap(),
+        &AtomicBool::new(false),
+    );
+    let value = serde_json::to_value(&result).unwrap();
     assert_eq!(value["plan"]["applicable"], true, "{value}");
     let coverage = &value["coverage"]["external_dependencies"];
     let roots = coverage["consulted_roots"].as_array().unwrap();
@@ -403,6 +414,21 @@ fn transitive_worker() {
             .len(),
         2
     );
+    result.limits.response_bytes = 1;
+    result.fit();
+    assert!(
+        result
+            .truncation_reasons
+            .iter()
+            .any(|reason| reason == "response_bytes")
+    );
+    assert_eq!(
+        serde_json::to_value(&result.coverage.scan.external_dependencies).unwrap(),
+        *coverage,
+        "successful capture disclosure survives the final fitting tier"
+    );
+    assert!(!result.plan.applicable);
+    assert!(result.plan.patch.is_none());
     assert_eq!(observe(&repo), before);
     assert_eq!(observe(&home), cache);
     for (root, captured) in &captured {
@@ -517,6 +543,8 @@ fn required_transitive_inputs_and_mid_closure_budgets_refuse_without_writes() {
                     "--nocapture",
                 ])
                 .env("TRANSITIVE_REFUSAL_FIXTURE", &repo.0)
+                .env("TRANSITIVE_REFUSAL_ORIGIN", origin)
+                .env("TRANSITIVE_REFUSAL_CASE", case)
                 .env("TRANSITIVE_MAX_FILES", limits.max_files.to_string())
                 .env("TRANSITIVE_MAX_BYTES", limits.max_source_bytes.to_string())
                 .env("CARGO_HOME", &home.0)
@@ -988,12 +1016,12 @@ fn transitive_refusal_worker() {
             .parse::<usize>()
             .unwrap()
     );
-    let result = super::super::run(
+    let mut result = super::super::run(
         &repo,
         serde_json::from_value(args).unwrap(),
         &AtomicBool::new(false),
     );
-    let error = result.error.unwrap();
+    let error = result.error.as_ref().unwrap();
     assert!(error.code.starts_with("EXTERNAL_"), "{error}");
     assert!(!result.plan.applicable);
     assert!(result.plan.binding_proofs.is_empty());
@@ -1007,4 +1035,29 @@ fn transitive_refusal_worker() {
     println!(
         "production refusal: {error}; zero proofs; all artifacts withheld; caller/cache unchanged"
     );
+    let disclosure = serde_json::to_value(&result.coverage.scan.external_dependencies).unwrap();
+    assert_eq!(disclosure["complete"], false);
+    assert!(disclosure.get("corpus_digest").is_none());
+    let usage = &disclosure["capture_usage"];
+    assert!(usage["input_files"].as_u64().unwrap() > 0);
+    assert!(usage["input_bytes"].as_u64().unwrap() > 0);
+    let origin = std::env::var("TRANSITIVE_REFUSAL_ORIGIN").unwrap();
+    let case = std::env::var("TRANSITIVE_REFUSAL_CASE").unwrap();
+    if origin == "registry" && matches!(case.as_str(), "files" | "bytes") {
+        assert!(usage["archive_comparison_entries"].as_u64().unwrap() > 0);
+        if case == "bytes" {
+            assert!(usage["archive_comparison_bytes"].as_u64().unwrap() > 0);
+        }
+    }
+    result.limits.response_bytes = 1;
+    result.fit();
+    assert_eq!(
+        serde_json::to_value(&result.coverage.scan.external_dependencies).unwrap(),
+        disclosure,
+        "refused capture disclosure survives mandatory-metadata overflow"
+    );
+    assert!(result.plan.blocked_summary.is_empty());
+    assert!(result.plan.binding_proofs.is_empty());
+    assert!(!result.plan.applicable);
+    assert!(result.plan.patch.is_none());
 }

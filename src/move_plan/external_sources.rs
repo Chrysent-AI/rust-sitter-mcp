@@ -366,6 +366,7 @@ impl Sources {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn prepare(
         directory: &Path,
         home: &Path,
@@ -373,6 +374,25 @@ impl Sources {
         observed: BTreeMap<PathBuf, Vec<u8>>,
         limits: &Limits,
         controls: Controls<'_>,
+    ) -> Result<Self, DomainError> {
+        Self::prepare_with_usage(
+            directory,
+            home,
+            tree,
+            observed,
+            limits,
+            controls,
+            &mut CaptureUsage::default(),
+        )
+    }
+    pub(super) fn prepare_with_usage(
+        directory: &Path,
+        home: &Path,
+        tree: &Path,
+        observed: BTreeMap<PathBuf, Vec<u8>>,
+        limits: &Limits,
+        controls: Controls<'_>,
+        usage: &mut CaptureUsage,
     ) -> Result<Self, DomainError> {
         let home = resolved(home)?;
         let state = resolved(tree)?;
@@ -392,182 +412,191 @@ impl Sources {
             home_config: String::new(),
             locked: BTreeSet::new(),
         };
-        // Ancestor locks select a conservative finite copy, not the authoritative
-        // workspace. Cargo identifies the actual workspace; bind_workspace then
-        // requires its exact captured lock identity for evidence admission.
-        let mut found_lock = false;
-        for lock in directory.ancestors().map(|p| p.join("Cargo.lock")) {
-            if let Some(bytes) = result.observed.get(&lock) {
-                found_lock = true;
-                result.locked.extend(lock_packages(bytes)?);
+        let outcome = (|| {
+            // Ancestor locks select a conservative finite copy, not the authoritative
+            // workspace. Cargo identifies the actual workspace; bind_workspace then
+            // requires its exact captured lock identity for evidence admission.
+            let mut found_lock = false;
+            for lock in directory.ancestors().map(|p| p.join("Cargo.lock")) {
+                if let Some(bytes) = result.observed.get(&lock) {
+                    found_lock = true;
+                    result.locked.extend(lock_packages(bytes)?);
+                }
             }
-        }
-        if !found_lock {
-            return Err(refusal(
-                "EXTERNAL_DISCOVERY_FAILED",
-                "an existing locked caller workspace is required",
+            if !found_lock {
+                return Err(refusal(
+                    "EXTERNAL_DISCOVERY_FAILED",
+                    "an existing locked caller workspace is required",
+                ));
+            }
+            let mut configs: Vec<_> = directory
+                .ancestors()
+                .map(|p| (p.join(".cargo"), p.to_path_buf(), false))
+                .collect();
+            configs.push((
+                result.home.clone(),
+                result.home.parent().ok_or_else(unsupported)?.to_path_buf(),
+                true,
             ));
-        }
-        let mut configs: Vec<_> = directory
-            .ancestors()
-            .map(|p| (p.join(".cargo"), p.to_path_buf(), false))
-            .collect();
-        configs.push((
-            result.home.clone(),
-            result.home.parent().ok_or_else(unsupported)?.to_path_buf(),
-            true,
-        ));
-        let mut vendor_bases = BTreeSet::new();
-        let mut home_selected = false;
-        for (config_dir, base, is_home) in configs {
-            for name in ["config", "config.toml"] {
-                let path = config_dir.join(name);
-                match fs::symlink_metadata(&path) {
-                    Ok(_) => {
-                        no_links(&config_dir)?;
-                        disjoint(tree, [config_dir.clone()])?;
-                        result.remember(&path, limits, controls)?;
-                        let text = std::str::from_utf8(&result.observed[&path])
-                            .map_err(|_| unsupported())?;
-                        let (normalized, directories) = source_config(text, &base)?;
-                        // Cargo prefers the extensionless file; checking both
-                        // conservatively refuses unsafe shadowed configuration.
-                        if is_home && !home_selected {
-                            home_selected = true;
-                            result.home_config = normalized;
+            let mut vendor_bases = BTreeSet::new();
+            let mut home_selected = false;
+            for (config_dir, base, is_home) in configs {
+                for name in ["config", "config.toml"] {
+                    let path = config_dir.join(name);
+                    match fs::symlink_metadata(&path) {
+                        Ok(_) => {
+                            no_links(&config_dir)?;
+                            disjoint(tree, [config_dir.clone()])?;
+                            result.remember(&path, limits, controls)?;
+                            let text = std::str::from_utf8(&result.observed[&path])
+                                .map_err(|_| unsupported())?;
+                            let (normalized, directories) = source_config(text, &base)?;
+                            // Cargo prefers the extensionless file; checking both
+                            // conservatively refuses unsafe shadowed configuration.
+                            if is_home && !home_selected {
+                                home_selected = true;
+                                result.home_config = normalized;
+                            }
+                            for root in directories {
+                                disjoint(tree, [root.clone()])?;
+                                vendor_bases.insert(root);
+                            }
                         }
-                        for root in directories {
-                            disjoint(tree, [root.clone()])?;
-                            vendor_bases.insert(root);
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(io_error(e)),
+                    }
+                }
+            }
+            let mut seeds = BTreeSet::new();
+            for base in vendor_bases {
+                let mut identities = BTreeSet::new();
+                for root in entries(&base, limits, controls)? {
+                    if !root.is_dir() {
+                        continue;
+                    }
+                    disjoint(tree, [root.clone()])?;
+                    let manifest = root.join("Cargo.toml");
+                    result.remember(&manifest, limits, controls)?;
+                    result.remember(&root.join(".cargo-checksum.json"), limits, controls)?;
+                    let (name, version) = package_identity(&result.observed[&manifest])?;
+                    if !identities.insert((name, version)) {
+                        return Err(refusal(
+                            "EXTERNAL_PACKAGE_AMBIGUOUS",
+                            "directory source contains duplicate package name/version identities",
+                        ));
+                    }
+                    seeds.insert(manifest);
+                    result.vendor_roots.insert(root);
+                }
+            }
+            if !result.locked.is_empty() {
+                // Registry layout is preserved, including Cargo's opaque registry
+                // hashes. We never derive a hash from a URL or select a source here.
+                let registry = result.home.join("registry");
+                if registry.exists() {
+                    no_links(&registry)?;
+                    disjoint(tree, [result.home.clone()])?;
+                    let index = registry.join("index");
+                    if index.exists() {
+                        result.mirror_index(&index, limits, controls)?;
+                    }
+                    let sources = registry.join("src");
+                    if sources.exists() {
+                        let mut probes = 0;
+                        for registry in entries(&sources, limits, controls)? {
+                            if !registry.is_dir() {
+                                return Err(unsupported());
+                            }
+                            for package in &result.locked.clone() {
+                                items::check(controls.0, controls.1)?;
+                                probes += 1;
+                                if probes > limits.max_files {
+                                    return Err(refusal(
+                                        "EXTERNAL_CORPUS_INCOMPLETE",
+                                        "registry checkout lookup cap exhausted",
+                                    ));
+                                }
+                                let root =
+                                    registry.join(format!("{}-{}", package.name, package.version));
+                                match fs::symlink_metadata(&root) {
+                                    Ok(_) => {
+                                        disjoint(tree, [root.clone()])?;
+                                        no_links(&root)?;
+                                        seeds.insert(root.join("Cargo.toml"));
+                                        result.registry_roots.insert(root);
+                                    }
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                    Err(e) => return Err(io_error(e)),
+                                }
+                            }
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(io_error(e)),
                 }
-            }
-        }
-        let mut seeds = BTreeSet::new();
-        for base in vendor_bases {
-            let mut identities = BTreeSet::new();
-            for root in entries(&base, limits, controls)? {
-                if !root.is_dir() {
-                    continue;
-                }
-                disjoint(tree, [root.clone()])?;
-                let manifest = root.join("Cargo.toml");
-                result.remember(&manifest, limits, controls)?;
-                result.remember(&root.join(".cargo-checksum.json"), limits, controls)?;
-                let (name, version) = package_identity(&result.observed[&manifest])?;
-                if !identities.insert((name, version)) {
+                if result.registry_roots.is_empty() && result.vendor_roots.is_empty() {
                     return Err(refusal(
-                        "EXTERNAL_PACKAGE_AMBIGUOUS",
-                        "directory source contains duplicate package name/version identities",
+                        "EXTERNAL_PACKAGE_UNAVAILABLE",
+                        "locked registry packages are not already checked out locally; downloads or reconstructing absent caller checkouts are not permitted",
                     ));
                 }
-                seeds.insert(manifest);
-                result.vendor_roots.insert(root);
             }
-        }
-        if !result.locked.is_empty() {
-            // Registry layout is preserved, including Cargo's opaque registry
-            // hashes. We never derive a hash from a URL or select a source here.
-            let registry = result.home.join("registry");
-            if registry.exists() {
-                no_links(&registry)?;
-                disjoint(tree, [result.home.clone()])?;
-                let index = registry.join("index");
-                if index.exists() {
-                    result.mirror_index(&index, limits, controls)?;
-                }
-                let sources = registry.join("src");
-                if sources.exists() {
-                    let mut probes = 0;
-                    for registry in entries(&sources, limits, controls)? {
-                        if !registry.is_dir() {
-                            return Err(unsupported());
-                        }
-                        for package in &result.locked.clone() {
-                            items::check(controls.0, controls.1)?;
-                            probes += 1;
-                            if probes > limits.max_files {
-                                return Err(refusal(
-                                    "EXTERNAL_CORPUS_INCOMPLETE",
-                                    "registry checkout lookup cap exhausted",
-                                ));
-                            }
-                            let root =
-                                registry.join(format!("{}-{}", package.name, package.version));
-                            match fs::symlink_metadata(&root) {
-                                Ok(_) => {
-                                    disjoint(tree, [root.clone()])?;
-                                    no_links(&root)?;
-                                    seeds.insert(root.join("Cargo.toml"));
-                                    result.registry_roots.insert(root);
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                Err(e) => return Err(io_error(e)),
-                            }
-                        }
-                    }
+            // Extend the existing path/workspace closure to every candidate, including
+            // possible path edges inside registry/vendor manifests, BEFORE state writes.
+            let mut closure = BTreeMap::new();
+            let preflight = manifest_closure_into(seeds, tree, limits, controls, &mut closure);
+            for (path, bytes) in closure {
+                if let Some(prior) = result.observed.insert(path, bytes.clone())
+                    && prior != bytes
+                {
+                    return Err(refusal(
+                        "EXTERNAL_SOURCE_CHANGED",
+                        "Cargo inputs changed during preflight",
+                    ));
                 }
             }
-            if result.registry_roots.is_empty() && result.vendor_roots.is_empty() {
-                return Err(refusal(
-                    "EXTERNAL_PACKAGE_UNAVAILABLE",
-                    "locked registry packages are not already checked out locally; downloads or reconstructing absent caller checkouts are not permitted",
+            preflight?;
+            for root in result.vendor_roots.clone() {
+                result.mirror_tree(&root, false, limits, controls)?;
+            }
+            for root in result.registry_roots.clone() {
+                result.mirror_tree(&root, true, limits, controls)?;
+                let hash = root
+                    .parent()
+                    .and_then(Path::file_name)
+                    .ok_or_else(unsupported)?;
+                let archive = result.home.join("registry/cache").join(hash).join(format!(
+                    "{}.crate",
+                    root.file_name().ok_or_else(unsupported)?.to_string_lossy()
                 ));
+                if !archive.exists() {
+                    return Err(integrity());
+                }
+                no_links(&archive)?;
+                result.remember(&archive, limits, controls)?;
+                let actual = checksum(&result.observed[&archive], controls)?;
+                if !result.locked.iter().any(|p| {
+                    root.file_name()
+                        .is_some_and(|n| n == format!("{}-{}", p.name, p.version).as_str())
+                        && p.checksum == actual
+                }) {
+                    return Err(integrity());
+                }
+                result.mirrored.insert(archive);
             }
-        }
-        // Extend the existing path/workspace closure to every candidate, including
-        // possible path edges inside registry/vendor manifests, BEFORE state writes.
-        let closure = manifest_closure(seeds, tree, limits, controls)?;
-        for (path, bytes) in closure {
-            if let Some(prior) = result.observed.insert(path, bytes.clone())
-                && prior != bytes
+            if result.observed.len() > limits.max_files
+                || result.observed.values().map(Vec::len).sum::<usize>() > limits.max_source_bytes
             {
                 return Err(refusal(
-                    "EXTERNAL_SOURCE_CHANGED",
-                    "Cargo inputs changed during preflight",
+                    "EXTERNAL_CORPUS_INCOMPLETE",
+                    "combined discovery input cap exhausted",
                 ));
             }
-        }
-        for root in result.vendor_roots.clone() {
-            result.mirror_tree(&root, false, limits, controls)?;
-        }
-        for root in result.registry_roots.clone() {
-            result.mirror_tree(&root, true, limits, controls)?;
-            let hash = root
-                .parent()
-                .and_then(Path::file_name)
-                .ok_or_else(unsupported)?;
-            let archive = result.home.join("registry/cache").join(hash).join(format!(
-                "{}.crate",
-                root.file_name().ok_or_else(unsupported)?.to_string_lossy()
-            ));
-            if !archive.exists() {
-                return Err(integrity());
-            }
-            no_links(&archive)?;
-            result.remember(&archive, limits, controls)?;
-            let actual = checksum(&result.observed[&archive], controls)?;
-            if !result.locked.iter().any(|p| {
-                root.file_name()
-                    .is_some_and(|n| n == format!("{}-{}", p.name, p.version).as_str())
-                    && p.checksum == actual
-            }) {
-                return Err(integrity());
-            }
-            result.mirrored.insert(archive);
-        }
-        if result.observed.len() > limits.max_files
-            || result.observed.values().map(Vec::len).sum::<usize>() > limits.max_source_bytes
-        {
-            return Err(refusal(
-                "EXTERNAL_CORPUS_INCOMPLETE",
-                "combined discovery input cap exhausted",
-            ));
-        }
-        result.recheck(limits, controls)?;
+            result.recheck(limits, controls)?;
+            Ok(())
+        })();
+        usage.input_files = result.observed.len();
+        usage.input_bytes = result.observed.values().map(Vec::len).sum();
+        usage.observe(&result.observed);
+        outcome?;
         Ok(result)
     }
 
@@ -609,15 +638,17 @@ impl Sources {
     }
 
     pub(super) fn verify_staged(
-        &self,
+        &mut self,
         scratch: &Path,
         limits: &Limits,
         controls: Controls<'_>,
     ) -> Result<(usize, usize), DomainError> {
         // Freshly unpacked selected packages must match every captured regular
         // file, including Cargo's marker; checksum binding is checked separately.
+        self.comparison = (0, 0);
         let mut count = self.observed.len();
-        let mut total = self.observed.values().map(Vec::len).sum::<usize>();
+        let input_bytes = self.observed.values().map(Vec::len).sum::<usize>();
+        let mut total = input_bytes;
         for root in &self.registry_roots {
             let staged_root =
                 scratch.join(root.strip_prefix(&self.home).map_err(|_| unsupported())?);
@@ -640,6 +671,7 @@ impl Sources {
             while let Some(directory) = pending.pop() {
                 for path in entries(&directory, limits, controls)? {
                     count += 1;
+                    self.comparison.0 = count - self.observed.len();
                     if count > limits.max_files {
                         return Err(refusal(
                             "EXTERNAL_CORPUS_INCOMPLETE",
@@ -656,6 +688,7 @@ impl Sources {
                         let original = self.home.join(&relative);
                         let data = read(&path, limits.max_file_bytes, controls)?;
                         total += data.len();
+                        self.comparison.1 = total - input_bytes;
                         if total > limits.max_source_bytes {
                             return Err(refusal(
                                 "EXTERNAL_CORPUS_INCOMPLETE",
@@ -673,10 +706,7 @@ impl Sources {
                 return Err(integrity());
             }
         }
-        Ok((
-            count - self.observed.len(),
-            total - self.observed.values().map(Vec::len).sum::<usize>(),
-        ))
+        Ok(self.comparison)
     }
 
     pub(super) fn restore_paths(

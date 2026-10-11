@@ -140,6 +140,102 @@ fn injected_small_candidate_cap_stops_at_its_first_excess() {
     assert!(result.drafts.is_empty());
 }
 #[test]
+fn external_disclosure_survives_full_and_compact_response_pressure() {
+    use crate::move_plan::external::{CaptureUsage, ConsultedRoot, Coverage as ExternalCoverage};
+    use serde_json::json;
+    for complete in [true, false] {
+        for mode in [
+            retained::ResponseMode::Full,
+            retained::ResponseMode::Compact,
+        ] {
+            let repo = Fixture::new();
+            let mut request = repo.request();
+            request.response_mode = mode;
+            request.limits.response_bytes = 65536;
+            let mut result = SuggestSplitEnvelope::empty(request.limits.clone().into());
+            result.root = Some(repo.0.to_str().unwrap().into());
+            result.snapshot_id = Some("original-snapshot".into());
+            result.coverage.external_dependencies = Some(ExternalCoverage {
+                complete,
+                corpus_digest: if complete {
+                    "sha1:captured".into()
+                } else {
+                    String::new()
+                },
+                consulted_roots: vec![ConsultedRoot {
+                    package_id: "path-library@1.0.0".into(),
+                    package: "path-library".into(),
+                    version: "1.0.0".into(),
+                    source: "path".into(),
+                    provenance: "path".into(),
+                    root: "/external/path-library".into(),
+                    namespace: "@external/0/".into(),
+                    edition: "2024".into(),
+                    features: vec![],
+                    files: 1,
+                    bytes: 21,
+                }],
+                capture_usage: CaptureUsage {
+                    max_files: 5,
+                    max_file_bytes: 2097152,
+                    max_source_bytes: 268435456,
+                    input_files: 4,
+                    input_bytes: 634,
+                    observed_files: 5,
+                    observed_bytes: 655,
+                    source_files_per_overlay: 1,
+                    source_bytes_per_overlay: 21,
+                    ..CaptureUsage::default()
+                },
+                // Mandatory metadata itself cannot fit: the final tier must not
+                // quietly drop identity, usage or omission disclosure.
+                omissions: vec!["bounded source consultation; ".repeat(3000)],
+            });
+            if !complete {
+                result.status = "failed".into();
+                result.error = Some(DomainError::new(
+                    "EXTERNAL_CORPUS_INCOMPLETE",
+                    "capture cap exhausted",
+                ));
+            }
+            let expected = serde_json::to_value(&result.coverage.external_dependencies).unwrap();
+            let response = retained::present(
+                result,
+                None,
+                &request,
+                &retained::Store::default(),
+                Controls {
+                    deadline: Instant::now() + Duration::from_secs(30),
+                    cancelled: &AtomicBool::new(false),
+                },
+            );
+            let value = serde_json::to_value(response).unwrap();
+            let scope = if mode == retained::ResponseMode::Full {
+                &value["coverage"]
+            } else {
+                &value["coverage"]["scope"]
+            };
+            assert_eq!(scope["external_dependencies"], expected);
+            assert_eq!(value["root"], repo.0.to_str().unwrap());
+            assert_eq!(value["snapshot_id"], "original-snapshot");
+            assert_eq!(value["integrity"]["semantic"], "not_performed");
+            if mode == retained::ResponseMode::Full {
+                assert!(
+                    value["truncation_reasons"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("response_bytes"))
+                );
+                assert!(value["drafts"].as_array().unwrap().is_empty());
+            } else {
+                assert_eq!(value["manifest_complete"], false);
+                assert_eq!(value["error"]["code"], "ADVICE_MANIFEST_TOO_LARGE");
+            }
+        }
+    }
+}
+
+#[test]
 fn final_fit_tier_accounts_membership_without_losing_root_or_snapshot() {
     let repo = Fixture::new();
     let source = (0..1500)

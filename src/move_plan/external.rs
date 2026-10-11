@@ -61,6 +61,7 @@ pub struct ConsultedRoot {
 pub struct Coverage {
     pub complete: bool,
     pub consulted_roots: Vec<ConsultedRoot>,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub corpus_digest: String,
     pub omissions: Vec<String>,
     pub capture_usage: CaptureUsage,
@@ -81,6 +82,28 @@ pub struct CaptureUsage {
     pub source_files_per_overlay: usize,
     pub source_bytes_per_overlay: usize,
     pub graph_edges: usize,
+}
+impl Coverage {
+    fn pending(limits: &Limits) -> Self {
+        Self {
+            complete: false,
+            consulted_roots: Vec::new(),
+            corpus_digest: String::new(),
+            omissions: vec!["bounded normal-edge path/locally cached registry/source-replaced library closure only; no dev/build-only edges, git, build-script/proc-macro execution, sysroot or compilation; source totals are per overlay, not heap or unpacker disk measurements".into()],
+            capture_usage: CaptureUsage {
+                max_files: limits.max_files,
+                max_file_bytes: limits.max_file_bytes,
+                max_source_bytes: limits.max_source_bytes,
+                ..CaptureUsage::default()
+            },
+        }
+    }
+}
+impl CaptureUsage {
+    fn observe(&mut self, observed: &BTreeMap<PathBuf, Vec<u8>>) {
+        self.observed_files = observed.len();
+        self.observed_bytes = observed.values().map(Vec::len).sum();
+    }
 }
 pub(crate) struct Corpus {
     pub texts: BTreeMap<String, String>,
@@ -656,8 +679,18 @@ fn manifest_closure(
     limits: &Limits,
     controls: Controls<'_>,
 ) -> Result<BTreeMap<PathBuf, Vec<u8>>, DomainError> {
-    let mut pending: BTreeMap<_, _> = seeds.into_iter().map(|p| (p, 0)).collect();
     let mut observed = BTreeMap::new();
+    manifest_closure_into(seeds, tree, limits, controls, &mut observed)?;
+    Ok(observed)
+}
+fn manifest_closure_into(
+    seeds: BTreeSet<PathBuf>,
+    tree: &Path,
+    limits: &Limits,
+    controls: Controls<'_>,
+    observed: &mut BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), DomainError> {
+    let mut pending: BTreeMap<_, _> = seeds.into_iter().map(|p| (p, 0)).collect();
     let mut edges = BTreeMap::new();
     let mut inherited = BTreeSet::new();
     let mut total = 0;
@@ -758,7 +791,7 @@ fn manifest_closure(
     }
     // Reobserve all closure inputs before the first server-state write, as well
     // as retaining them for the existing final-publication freshness gate.
-    for (path, bytes) in &observed {
+    for (path, bytes) in observed.iter() {
         if read(path, limits.max_file_bytes, controls)? != *bytes {
             return Err(refusal(
                 "EXTERNAL_SOURCE_CHANGED",
@@ -766,7 +799,7 @@ fn manifest_closure(
             ));
         }
     }
-    Ok(observed)
+    Ok(())
 }
 
 fn ancestor_manifests(
@@ -1076,16 +1109,31 @@ pub(crate) fn discover(
     config: &Configuration,
     limits: &Limits,
     controls: Controls<'_>,
+    disclosure: &mut Option<Coverage>,
 ) -> Result<Corpus, DomainError> {
-    discover_at(
-        repository,
-        crate_root,
-        config,
-        limits,
-        controls,
-        &state_tree()?,
-    )
+    let coverage = disclosure.insert(Coverage::pending(limits));
+    let outcome = (|| {
+        let tree = state_tree()?;
+        let home = sources::cargo_home()?;
+        discover_captured(
+            repository,
+            crate_root,
+            config,
+            limits,
+            controls,
+            (&tree, &home),
+            coverage,
+        )
+    })();
+    if outcome.is_err() {
+        coverage.omissions.push(
+            "external discovery/capture failed; no complete corpus or resolution proofs published"
+                .into(),
+        );
+    }
+    outcome
 }
+#[cfg(test)]
 fn discover_at(
     repository: &Path,
     crate_root: &str,
@@ -1113,6 +1161,26 @@ fn discover_at_home(
     tree: &Path,
     cargo_home: &Path,
 ) -> Result<Corpus, DomainError> {
+    discover_captured(
+        repository,
+        crate_root,
+        config,
+        limits,
+        controls,
+        (tree, cargo_home),
+        &mut Coverage::pending(limits),
+    )
+}
+fn discover_captured(
+    repository: &Path,
+    crate_root: &str,
+    config: &Configuration,
+    limits: &Limits,
+    controls: Controls<'_>,
+    state: (&Path, &Path),
+    coverage: &mut Coverage,
+) -> Result<Corpus, DomainError> {
+    let (tree, cargo_home) = state;
     items::check(controls.0, controls.1)?;
     disjoint(tree, [repository.to_path_buf()])?;
     let mut directory = repository
@@ -1139,7 +1207,12 @@ fn discover_at_home(
             manifests.extend(ancestor_manifests(parent, controls)?);
         }
     }
-    let observed = manifest_closure(manifests, tree, limits, controls)?;
+    let mut observed = BTreeMap::new();
+    let preflight = manifest_closure_into(manifests, tree, limits, controls, &mut observed);
+    coverage.capture_usage.input_files = observed.len();
+    coverage.capture_usage.input_bytes = observed.values().map(Vec::len).sum();
+    coverage.capture_usage.observe(&observed);
+    preflight?;
     // Require a captured lock before invocation. Cargo must not synthesize one.
     if !directory
         .ancestors()
@@ -1150,9 +1223,22 @@ fn discover_at_home(
             "an existing locked caller workspace is required",
         ));
     }
-    let mut sources =
-        sources::Sources::prepare(&directory, cargo_home, tree, observed, limits, controls)?;
-    let metadata = metadata_with_sources(&directory, tree, Some(&mut sources), limits, controls)?;
+    let mut sources = sources::Sources::prepare_with_usage(
+        &directory,
+        cargo_home,
+        tree,
+        observed,
+        limits,
+        controls,
+        &mut coverage.capture_usage,
+    )?;
+    let metadata = metadata_with_sources(&directory, tree, Some(&mut sources), limits, controls);
+    coverage.capture_usage.input_files = sources.observed.len();
+    coverage.capture_usage.input_bytes = sources.observed.values().map(Vec::len).sum();
+    coverage.capture_usage.observe(&sources.observed);
+    coverage.capture_usage.archive_comparison_entries = sources.comparison.0;
+    coverage.capture_usage.archive_comparison_bytes = sources.comparison.1;
+    let metadata = metadata?;
     // Archive comparison shares the budget with later path-library capture,
     // not just the registry inputs already observed before Cargo runs.
     let mut capture_limits = limits.clone();
@@ -1235,7 +1321,6 @@ fn discover_at_home(
     let mut texts = BTreeMap::new();
     let mut roots = Vec::new();
     let mut identities = BTreeMap::new();
-    let mut consulted = Vec::new();
     let libraries = graph.closure(
         &caller.id,
         graph::CRATE_CAP.saturating_sub(configuration.crates.len()),
@@ -1246,16 +1331,6 @@ fn discover_at_home(
     // unchecked root after scratch writes. Repeat the candidate walk using those
     // exact manifests to bind transitive path/workspace inputs to the graph.
     sources.bind_graph_inputs(&libraries, tree, limits, controls)?;
-    let mut usage = CaptureUsage {
-        max_files: limits.max_files,
-        max_file_bytes: limits.max_file_bytes,
-        max_source_bytes: limits.max_source_bytes,
-        input_files: observed.len(),
-        input_bytes: observed.values().map(Vec::len).sum(),
-        archive_comparison_entries: sources.comparison.0,
-        archive_comparison_bytes: sources.comparison.1,
-        ..CaptureUsage::default()
-    };
     let mut graph_nodes = BTreeMap::from([(caller.id.clone(), root_index)]);
     for package in &libraries {
         items::check(controls.0, controls.1)?;
@@ -1331,7 +1406,10 @@ fn discover_at_home(
                 "resolved package manifest was not captured before Cargo",
             ));
         }
-        let (files, bytes) = capture(
+        let root_path = root
+            .to_str()
+            .ok_or_else(|| refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid package root"))?;
+        let captured = capture(
             &root,
             &src,
             &namespace,
@@ -1339,8 +1417,34 @@ fn discover_at_home(
             controls,
             &mut texts,
             &mut observed,
-        )
-        .map_err(|mut error| {
+        );
+        coverage.capture_usage.observe(&observed);
+        coverage.capture_usage.source_files_per_overlay = texts.len();
+        coverage.capture_usage.source_bytes_per_overlay = texts.values().map(String::len).sum();
+        // A failed library can have staged sources, but a preflight-only root
+        // never belongs in the semantic-capture disclosure.
+        let (files, bytes) = texts
+            .range(namespace.clone()..)
+            .take_while(|(path, _)| path.starts_with(&namespace))
+            .fold((0, 0), |(files, bytes), (_, source)| {
+                (files + 1, bytes + source.len())
+            });
+        if files > 0 {
+            coverage.consulted_roots.push(ConsultedRoot {
+                package_id: package.id.clone(),
+                package: package.name.clone(),
+                version: package.version.clone(),
+                source: package.source.clone().unwrap_or_else(|| "path".into()),
+                provenance: provenance.into(),
+                root: root_path.into(),
+                namespace: namespace.clone(),
+                features: node.features.clone(),
+                edition: target.edition.clone(),
+                files,
+                bytes,
+            });
+        }
+        captured.map_err(|mut error| {
             if error.code == "EXTERNAL_CORPUS_INCOMPLETE" {
                 error.message = format!(
                     "{}; closure captured {} roots, {} source files/{} bytes; observed inputs {} files/{} bytes plus archive comparison {} entries/{} bytes; limits {} files, {} bytes per file, {} aggregate bytes",
@@ -1366,22 +1470,6 @@ fn discover_at_home(
             features: node.features.clone(),
             cfg: Vec::new(),
             dependencies: Vec::new(),
-        });
-        consulted.push(ConsultedRoot {
-            package_id: package.id.clone(),
-            package: package.name.clone(),
-            version: package.version.clone(),
-            source: package.source.clone().unwrap_or_else(|| "path".into()),
-            provenance: provenance.into(),
-            root: root
-                .to_str()
-                .ok_or_else(|| refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid package root"))?
-                .into(),
-            namespace,
-            features: node.features.clone(),
-            edition: target.edition.clone(),
-            files,
-            bytes,
         });
         use std::os::unix::fs::MetadataExt;
         let meta = fs::metadata(&root).map_err(io_error)?;
@@ -1412,19 +1500,30 @@ fn discover_at_home(
                 name: edge.name.clone(),
                 crate_name: name,
             });
-            usage.graph_edges += 1;
+            coverage.capture_usage.graph_edges += 1;
         }
     }
-    usage.observed_files = observed.len();
-    usage.observed_bytes = observed.values().map(Vec::len).sum();
-    usage.source_files_per_overlay = texts.len();
-    usage.source_bytes_per_overlay = texts.values().map(String::len).sum();
     let digest = scope::hash_serialized(
         repository,
-        &(&consulted, &observed, &configuration),
+        &(&coverage.consulted_roots, &observed, &configuration),
         controls,
     )?;
-    Ok(Corpus { texts, configuration, coverage: Coverage { complete: true, consulted_roots: consulted, corpus_digest: digest, omissions: vec!["bounded normal-edge path/locally cached registry/source-replaced library closure only; no dev/build-only edges, git, build-script/proc-macro execution, sysroot or compilation; source totals are per overlay, not heap or unpacker disk measurements".into()], capture_usage: usage }, observed, roots, identities, limits: limits.clone(), repository: repository.into(), crate_root: crate_root.into(), caller_configuration: config.clone(), cargo_home: cargo_home.into(), discovery_tree: tree.into() })
+    coverage.complete = true;
+    coverage.corpus_digest = digest;
+    Ok(Corpus {
+        texts,
+        configuration,
+        coverage: coverage.clone(),
+        observed,
+        roots,
+        identities,
+        limits: limits.clone(),
+        repository: repository.into(),
+        crate_root: crate_root.into(),
+        caller_configuration: config.clone(),
+        cargo_home: cargo_home.into(),
+        discovery_tree: tree.into(),
+    })
 }
 impl Corpus {
     pub(crate) fn recheck(&self, controls: Controls<'_>) -> Result<(), DomainError> {

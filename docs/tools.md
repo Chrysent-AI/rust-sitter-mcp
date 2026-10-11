@@ -710,10 +710,21 @@ even when distinct package/source identities read the same physical directory.
 The original and final RA databases each receive those same source files/bytes:
 raw external text materialization across the two overlays is twice the per-overlay
 total, not a heap/RSS estimate or Cargo-unpacker disk quota. Advice supplies the
-same capture disclosure but constructs neither overlay. A mid-source-capture
-budget refusal includes partial root/file/byte charges and the active limits in
-`error.message`; earlier preflight/comparison refusals identify their exhausted
-cap. Disclosure remains present when discovery succeeds but no decision discharges.
+same capture disclosure but constructs neither overlay. Discovery/capture refusals
+on both tools retain this sibling `coverage.external_dependencies` with
+`complete:false`, the active caps and partial usage charges, and only roots whose
+sources were actually staged into the corpus before refusal. Each disclosed root
+keeps the successful per-root schema; its file/byte counts cover staged source
+entries, including a partially captured library. Preflight-only candidates are
+not consulted roots, and an early refusal may legitimately disclose no roots.
+`corpus_digest` is absent on failed capture: no prefix-corpus digest is published.
+`omissions` explicitly records failed capture; this is not a usable corpus or
+permission to publish proofs, move artifacts or drafts. The disclosure survives
+response-byte fitting, like other mandatory coverage, even if that metadata alone
+exceeds the response budget. A mid-source-capture budget refusal also keeps
+partial root/file/byte charges and the active limits in `error.message`; earlier
+preflight/comparison refusals identify their exhausted cap. Disclosure remains
+present when discovery succeeds but no decision discharges.
 `@external/N/...` declaration anchors are read-only evidence, never selection
 anchors, destinations or ordinary consumer-scan files. Semantic input/final
 coverage digests bind the corpus and discovered graph. Captured bytes, source
@@ -1452,7 +1463,7 @@ races use `CREATION_RACE` with `directory_creation_race`; file appearance uses
 admission uses existing typed errors with `directory_context_unproved` diagnostics;
 missing higher ancestors disclose `directory_creation_unsupported_layout`.
 
-Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. For schema 3, first recheck source/parent bytes and modes, directory captured states and identities, effective in-root ignore inputs, and competing layouts; then externally create only the disclosed `absent_then_directory` paths with caller-chosen permissions. Any appearance of a previously absent directory invalidates the plan, even if now safe. A Git patch instead creates the nested file (and necessary directory) without a separate directory artifact; `git apply --check` alone does not prove these freshness inputs. The server observationally repeats these checks before publication, never executes Cargo, formatters, builds or caller scripts, and creates nothing. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
+Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. For schema 3, first recheck source/parent bytes and modes, directory captured states and identities, effective in-root ignore inputs, and competing layouts; then externally create only the disclosed `absent_then_directory` paths with caller-chosen permissions. Any appearance of a previously absent directory invalidates the plan, even if now safe. A Git patch instead creates the nested file (and necessary directory) without a separate directory artifact; `git apply --check` alone does not prove these freshness inputs. The server observationally repeats these checks before publication, never executes formatters, builds or caller scripts, and creates nothing in caller repositories. Only the separate external-source opt-in runs the fixed offline locked `cargo metadata` command in isolated server state; it never builds or runs scripts. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
 
 ### Blocking summary
 
