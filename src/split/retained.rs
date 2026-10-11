@@ -16,7 +16,9 @@ use std::{
 
 mod accounting;
 mod export;
-use accounting::{evidence_allocation, preparation_allocation, retention_allocation};
+#[cfg(test)]
+use accounting::evidence_allocation;
+use accounting::{preparation_allocation, record_allocation, retention_allocation};
 pub use export::{ExportEnvelope, ExportRequest};
 
 /// Active records, including preparations and in-flight readers.
@@ -306,12 +308,7 @@ impl Store {
         strip_source_text(&mut record.canonical);
         // Conservative owned-allocation accounting: capacities, not serialized JSON length.
         // BTree nodes/Arc/control blocks use a deliberately generous per-entry reserve.
-        let bytes = size_of::<Record>()
-            + allocation(&record.canonical)
-            + retention_allocation(&record.retention)
-            + evidence_allocation(&record.evidence)
-            + handle.capacity()
-            + 1024;
+        let bytes = record_allocation(&record, handle.capacity()).total();
         if bytes > record.charge.as_ref().expect("reserved charge").bytes {
             return Err("record_too_large");
         }

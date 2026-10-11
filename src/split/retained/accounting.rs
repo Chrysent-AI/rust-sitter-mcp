@@ -1,6 +1,29 @@
 //! Borrowed preallocation bounds and owned charges for historical advice.
 use super::*;
 
+/// Components of the stored charge, separate from the larger preparation reservation.
+/// These are conservative owned capacities, not wire bytes or process RSS.
+#[derive(Debug, Serialize)]
+pub(super) struct RecordAllocation {
+    pub canonical: usize,
+    pub evidence: usize,
+    pub metadata: usize,
+    pub overhead: usize,
+}
+impl RecordAllocation {
+    pub fn total(&self) -> usize {
+        self.canonical + self.evidence + self.metadata + self.overhead
+    }
+}
+pub(super) fn record_allocation(record: &Record, handle_capacity: usize) -> RecordAllocation {
+    RecordAllocation {
+        canonical: allocation(&record.canonical),
+        evidence: evidence_allocation(&record.evidence),
+        metadata: retention_allocation(&record.retention),
+        overhead: size_of::<Record>() + handle_capacity + 1024,
+    }
+}
+
 pub(super) fn evidence_allocation(evidence: &Evidence) -> usize {
     allocation(&evidence.normalized_scope)
         + allocation(&evidence.source_manifest)

@@ -47,6 +47,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Clarify that compact response-byte budgets and canonical retained-allocation
+  budgets are independent; raising `response_bytes` does not recover
+  `record_too_large` historical evidence. Document the read-only measurement probe.
+
 * Prove spelling-specific pattern binders through fully admitted noncompeting
   direct globs. Unknown routes, competing names and existing independent
   blockers still refuse.

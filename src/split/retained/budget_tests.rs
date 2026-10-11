@@ -226,6 +226,36 @@ fn duplicate_display_fitting_preserves_canonical_records_and_historical_pages() 
 }
 
 #[test]
+fn stored_allocation_breakdown_preserves_the_charge_formula() {
+    let repo = Fixture::new(SOURCE);
+    let request = repo.request();
+    let (full, evidence) = repo.analyze(&request);
+    let record = Store::default()
+        .prepare(
+            &full,
+            evidence,
+            &request,
+            Instant::now(),
+            controls(&AtomicBool::new(false)),
+        )
+        .unwrap();
+    let handle_capacity = 123;
+    let parts = record_allocation(&record, handle_capacity);
+    assert_eq!(parts.canonical, allocation(&record.canonical));
+    assert_eq!(parts.evidence, evidence_allocation(&record.evidence));
+    assert_eq!(parts.metadata, retention_allocation(&record.retention));
+    assert_eq!(
+        parts.total(),
+        size_of::<Record>()
+            + allocation(&record.canonical)
+            + retention_allocation(&record.retention)
+            + evidence_allocation(&record.evidence)
+            + handle_capacity
+            + 1024
+    );
+}
+
+#[test]
 fn aggregate_allocation_capacity_is_independent_of_record_count() {
     let repo = Fixture::new(SOURCE);
     let (full, evidence) = repo.analyze(&repo.request());

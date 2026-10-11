@@ -1804,6 +1804,24 @@ non-materializing bound; pending preparations occupy the record slot and byte
 capacity, refunding or transferring their charges on failure or publication.
 The bound may refuse retention even when final stored charges alone would fit.
 This does not eliminate existing analysis/output buffers or bound total process memory.
+Reducing compact JSON does not reduce the canonical retention reservation: full
+uncapped decisions and test observations remain owned even when absent from the
+manifest. Raising `response_bytes` can resolve `ADVICE_MANIFEST_TOO_LARGE`, but
+cannot resolve `record_too_large`. Do not narrow away required consumer evidence
+or assume historical inventory/drafts are retrievable merely because a manifest fits.
+
+For read-only allocation measurement against a caller repository, run the ignored
+unit probe (from the server checkout):
+
+```sh
+SPLIT_MEASURE_REPO=/absolute/project cargo test measure_coupled_manifest_and_retention --lib -- --ignored --nocapture
+```
+
+The probe reports JSON bytes by manifest field, duplicated MCP wire bytes, the
+preparation reservation, final stored charge, canonical allocation by field, and
+captured-evidence allocation. Its reference-table sizes are **counterfactual only**,
+not a supported response format or a retention optimization. It uses the twelve
+large source paths listed in the probe; other repositories must adjust those paths.
 Test-only injectable limits and a cap-neutral allocation probe remain available
 for lifecycle and measurement checks; they add no runtime knobs or MCP flags.
 Registry removal does not subtract records or bytes still owned by an in-flight

@@ -7,6 +7,8 @@ mod admission_tests;
 mod budget_tests;
 #[path = "export_tests.rs"]
 mod export_tests;
+#[path = "measurement_tests.rs"]
+mod measurement_tests;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Fixture(PathBuf);
