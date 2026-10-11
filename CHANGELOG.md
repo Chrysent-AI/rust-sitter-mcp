@@ -58,6 +58,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Extend `external_path_dependencies` to exact already-present registry and
+  Cargo directory/vendor libraries without downloads or caller-cache writes.
+  Resolve with bounded independent copies in ephemeral server state, preserve
+  renamed edges and distinct package versions, disclose original source identity
+  and `provenance`, and refuse missing or ambiguous local packages. External
+  evidence remains read-only and inherent-method-only across both overlays.
+
 * Clarify that compact response-byte budgets and canonical retained-allocation
   budgets are independent; raising `response_bytes` does not recover
   `record_too_large` historical evidence. Document the read-only measurement probe.
@@ -70,12 +77,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Validate raw SHA-256 registry lock/index/archive and vendor file checksums
+  before external evidence admission. Require fresh private archive unpacking to
+  match the captured checkout's complete file membership and bytes; mismatched,
+  missing or unsupported integrity inputs withhold all proofs and move artifacts.
+
 * Preflight the bounded manifest-input closure before path-dependency discovery
   creates server state: check transitive path declarations and literal workspace
   members, including unconfigured siblings. Refuse overlapping roots, path cycles,
   unsafe/incomplete manifests, exhausted budgets, member globs/ambiguous lists and
   explicit workspace pointers before Cargo. Disclose conservative over-refusal;
-  semantic source admission remains direct-path-only.
+  semantic source admission remains direct-library-only.
 
 * Make spilled split-advice observation and decision anchors searchable for
   captured source spellings even when inline `text_bytes` is zero, without

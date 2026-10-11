@@ -298,7 +298,12 @@ fn real_stdio_query() {
         "compilation/equivalence not performed",
         "No Cargo/project discovery",
         "actual final virtual batch",
-        "never writes, formats, compiles or applies changes",
+        "never writes caller sources, formats, compiles or applies changes",
+        "external_path_dependencies defaults to false",
+        "No download or caller-cache mutation",
+        "source/provenance/path/version/namespace",
+        "EXTERNAL_PACKAGE_UNAVAILABLE",
+        "EXTERNAL_PACKAGE_AMBIGUOUS",
     ] {
         assert!(
             description.contains(phrase),

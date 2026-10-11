@@ -1,5 +1,37 @@
 # Dependency decisions
 
+## 2026-10-11 — sha2 0.11.0
+
+Raw-byte SHA-256 for locked registry archives and vendored file checksums:
+`sha2 = { version = "=0.11.0", default-features = false }`. Exact 0.x pin
+follows the deliberate-upgrade policy; review API/source, registry maintenance
+and integrity/refusal tests before each upgrade. `cargo info sha2` verified MIT
+OR Apache-2.0 and Rust 1.85, fitting the tested 1.98.1 toolchain. The same-day
+[crates.io API](https://crates.io/api/v1/crates/sha2) returned HTTP 200: latest
+0.11.0 released March 25, 2026, not yanked; release candidates in September and
+November 2025 and January/February 2026 show active maintenance. Approximately
+1.045 billion total / 297 million recent downloads. Older yanked releases are
+not selected.
+
+Candidates: [RustCrypto sha2](https://crates.io/crates/sha2) wins for a maintained,
+pure-Rust fixed digest with no external crypto prerequisite.
+[ring](https://crates.io/crates/ring) adds a broader native/assembly crypto build;
+[openssl](https://crates.io/crates/openssl) adds a system-library or vendored
+native-build prerequisite. Hand-written cryptography is not an alternative.
+Defaults (`alloc`, `oid`) and optional `zeroize` are disabled; neither OIDs nor
+allocated digest APIs are needed. Incremental `Sha256::new/update/finalize` was
+verified in installed 0.11.0 source and
+[versioned docs](https://docs.rs/sha2/0.11.0/sha2/).
+
+A separate pre-adoption `cargo tree -e no-dev` probe shows nine nodes including
+sha2: cfg-if, cpufeatures, libc, digest, block-buffer, crypto-common, hybrid-array
+and typenum. cfg-if/libc already belong to the application; the remaining seven
+nodes are the incremental shipped cost. There is no native crypto build or
+runtime executable prerequisite. The introducing change's cargo-deny gate
+checks their licenses, advisories and sources. Archive decoding continues to use
+Cargo's existing offline unpacking into private ephemeral state, not a new
+archive library or extraction into the caller's cache.
+
 ## 2026-10-06 — ra_ap_hir 0.0.357
 
 HIR is the chosen structured method/type/visibility boundary; the shared comparison and exact coordinated pin rationale follow below.

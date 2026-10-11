@@ -532,7 +532,7 @@ original anchors and state in their consequence that the declared configuration
 was consulted; expand `diagnostic_count` to see full decision prose. Independent
 macro, access, collision, API, chain and repair blockers remain.
 
-### Opt-in external path-library method evidence
+### Opt-in external library method evidence
 
 Set `external_path_dependencies:true` on `move_item` together with
 `resolve_semantic:true` and an explicit `semantic_configuration` for the admitted
@@ -548,10 +548,61 @@ subprocess receives a scrubbed environment, a server-selected installed Rust
 toolchain (no auto-install), and a new private `CARGO_HOME` under the server's
 state tree; the scratch home is removed when discovery ends, including on failure.
 Both output streams are capped at 8 MiB and cancellation kills/reaps discovery.
-Caller repositories and the user's normal Cargo home are not written. Ancestor
-`.cargo/config`/`config.toml` files refuse instead of admitting wrappers, source
-replacements or injected environment. State must be disjoint from the repository
-and every admitted dependency root, including retained-advice spill locations.
+Caller repositories and the user's normal Cargo home are not written. Source-only
+Cargo configuration is captured from the actual caller ancestors and Cargo home:
+ordinary `[source.<name>]` string entries (`directory`, `registry`, `replace-with`)
+and `[registries.<name>] index` are admitted. Cargo performs source replacement
+and configuration precedence; the server does not resolve Cargo versions, features
+or edges itself. Directory paths use Cargo's config-relative base; global source
+configuration is copied into scratch with absolute directory paths. Inline/dotted
+configuration tables, git/local registries, wrappers, credentials, build/target
+settings and injected environment refuse before Cargo. The admitted form has
+one header or string assignment per line; multiline values also refuse. Both
+config filenames are checked conservatively, even when one shadows the other.
+
+For locked registry sources, the server captures only already-present lock-selected
+sparse-index entries, matching checked-out package directories and their cached
+archives. Registry lock entries require a 64-character lowercase SHA-256 checksum.
+The compressed `.crate` bytes are hashed before staging and must match a captured
+lock entry. Only independent index/archive copies enter the ephemeral Cargo home:
+no checked-out sources or `.cargo-ok` marker are seeded there. Offline Cargo must
+unpack the selected archive afresh in private state. Every resulting regular file
+and its package-relative membership must match the captured checkout, including
+Cargo's marker; extra, missing or altered checkout files refuse. The selected
+package name/version/original source is then bound to Cargo's authoritative
+workspace lock, and its selected sparse-index row and archive must match that
+exact checksum. A staged-copy equality check alone is not integrity evidence.
+
+The server never links to caller storage, downloads, fills the real cache, unpacks
+into the real home or admits a package available only as an archive. A missing
+checkout/index/archive or insufficient comparison budget refuses; obtain the
+needed inputs outside the server before retrying. Only existing version-3 sparse
+cache encodings are supported, not Git-protocol registry indices. Cargo selects
+source replacement, registry and package graph; the engine only checks the
+selected identity/checksum row, not version resolution. Directory/vendor sources
+are read in place, including a `vendor/` inside the caller repository. Their
+captured manifest name/version and `.cargo-checksum.json` package checksum must
+match the selected locked identity. Every regular file other than that checksum
+metadata must have exactly one valid SHA-256 map entry matching its raw bytes;
+missing, malformed, duplicate, extra or mismatched entries refuse. This follows
+Cargo's directory-source checksum contract, not authentication against malicious
+rewrites of both files and their checksum map. Consultation grants no edit
+authority. All candidate registry/vendor roots and their possible manifest
+closures are checked before scratch creation.
+
+Captured manifests, locks, configuration, index, compressed archives and complete
+package-file trees share `max_files`, `max_file_bytes` and `max_source_bytes`.
+Fresh archive correspondence additionally charges unpacked directory entries and
+regular-file bytes against the same capture budgets (defaults: 20,000 files/
+entries, 2 MiB per file or archive, 256 MiB aggregate). These are comparison and
+capture caps, not a scratch-disk quota on Cargo's unpacker. Cargo remains bounded
+by the request deadline/cancellation and output caps; unreadable or non-regular
+files, symlinks, failed unpacking and exhausted comparison budgets fail closed.
+All captured inputs are reobserved before scratch creation and at publication;
+publication rediscovery repeats the archive/checksum and membership checks.
+
+State must be disjoint from the repository, the real Cargo home and every
+admitted dependency root, including retained-advice spill locations.
 Before any scratch directory creation or Cargo execution, a bounded lexical
 manifest-input closure starts with the caller manifest and all ancestor
 `Cargo.toml` files from its manifest directory and already-admitted crate-root
@@ -586,23 +637,29 @@ paths, excluded/unconfigured members and unrelated `path`/`members` assignments
 can all trigger refusal. For `workspace = true` inheritance, cycle/hop checking
 conservatively treats every captured ancestor path declaration as a possible
 edge, without resolving dependency names or tables; this can reject otherwise
-valid inherited layouts. Every path candidate must be a readable directory with
-a safe manifest, so non-package paths such as custom `[lib] path = 'src/lib.rs'`
-also refuse. Workspace-member globs (`*`, `?`, bracket/brace patterns), non-string
+valid inherited layouts. Directory candidates must have safe readable manifests.
+Literal source-file targets such as `[lib] path = 'src/lib.rs'` are checked as
+regular-file candidates, not mistaken for package directories; missing or unsafe
+source-file candidates still refuse. Workspace-member globs (`*`, `?`, bracket/brace patterns), non-string
 entries, malformed/ambiguous member lists and explicit workspace pointers use
 `EXTERNAL_ROOT_UNSUPPORTED`; missing candidate manifests use
 `EXTERNAL_DEPENDENCY_UNREADABLE`, unsafe files or exhausted budgets use
-`EXTERNAL_CORPUS_INCOMPLETE`. No TOML resolver or new refusal reason is added.
+`EXTERNAL_CORPUS_INCOMPLETE`. The lexical selector is not a Cargo/TOML resolver.
 The authoritative post-metadata workspace and resolved-root identity/overlap
 checks remain in place. Publication rediscovery repeats the complete pre-check,
 with all closure manifests and locks bound by byte reobservation. Visiting a
 transitive path or sibling member checks discovery safety only: it does **not**
-admit that package's Rust sources or broaden direct-path semantic evidence.
+admit that package's Rust sources or broaden direct-library semantic evidence.
 
-Only declared direct out-of-tree **path libraries** are admitted. Registry/git,
-vendor/source replacement, transitive dependencies, target-conditional edges,
-build scripts and proc-macro packages are unsupported. Missing/stale locks and
-uncached registry dependencies can fail earlier at offline discovery. Dependency
+Declared direct out-of-tree **path libraries**, exact already-cached **registry
+libraries**, and **directory/source-replaced libraries** are admitted. Package
+identity is name + version + source (or path identity), not bare crate name.
+Renamed dependency edges bind to the resolved package ID; two versions of one
+package get distinct library graph nodes/namespaces. Duplicate directory-source
+name/version candidates refuse rather than accepting Cargo's arbitrary selection.
+Git dependencies (cached or not), transitive closures, target-conditional edges,
+build scripts and proc-macro packages remain unsupported. Missing/stale locks and
+uncached dependencies fail closed at preflight or offline discovery. Dependency
 `#[path]`, filesystem `include!` variants, symlinks, syntax recovery and missing
 or competing ordinary module layouts also refuse. Capturing package Rust files
 is bounded by the request's file, entry and source-byte limits and deadline;
@@ -618,7 +675,8 @@ Only actual successful both-overlay proofs count in `coverage.ra_resolved`.
 No compilation, build script or proc-macro execution is performed by the server.
 
 Inspect additive `coverage.external_dependencies`: `complete`,
-`consulted_roots` (package ID/name/version, source, absolute root, namespace,
+`consulted_roots` (package ID/name/version, original source identity, provenance
+`path`/`registry_cache`/`source_replacement`, absolute root, namespace,
 edition/features and file/byte counts), `corpus_digest`, and `omissions`.
 Disclosure remains present when discovery succeeds but no decision discharges.
 `@external/N/...` declaration anchors are read-only evidence, never selection
@@ -639,9 +697,15 @@ Typed refusals include `EXTERNAL_DISCOVERY_FAILED`,
 `EXTERNAL_CONFIGURATION_UNSUPPORTED`, `EXTERNAL_ROOT_UNSUPPORTED`,
 `EXTERNAL_DEPENDENCY_UNREADABLE`, `EXTERNAL_CORPUS_INCOMPLETE`,
 `EXTERNAL_SOURCE_CHANGED`, `EXTERNAL_STATE_UNAVAILABLE`,
-`EXTERNAL_STATE_OVERLAP` and `EXTERNAL_NAMESPACE_CONFLICT`; normal cancellation
+`EXTERNAL_STATE_OVERLAP`, `EXTERNAL_NAMESPACE_CONFLICT`,
+`EXTERNAL_PACKAGE_UNAVAILABLE` and `EXTERNAL_PACKAGE_AMBIGUOUS`; normal cancellation
 and deadline refusals remain unchanged. An otherwise resolved non-method external
 fact retains its original decision with `external_fact_unsupported` refusal basis.
+`EXTERNAL_PACKAGE_UNAVAILABLE` includes missing/malformed/mismatched package
+checksums or archive/checkout correspondence; Cargo may instead return
+`EXTERNAL_DISCOVERY_FAILED` while rejecting inconsistent locked/index/vendor
+inputs. Neither case publishes proofs or move artifacts. Missing unreadable files
+and unsafe forms retain their existing unreadable/root/corpus refusal codes.
 Correct the input/scope and re-plan; no override admits an incomplete corpus.
 
 ### Opt-in bounded resolution

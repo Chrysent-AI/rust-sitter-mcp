@@ -457,6 +457,7 @@ mod tests {
                 package: "path-library".into(),
                 version: "0.1.0".into(),
                 source: "path".into(),
+                provenance: "path".into(),
                 root: dependency.path().to_string_lossy().into_owned(),
                 namespace: "@external/0/".into(),
                 features: Vec::new(),

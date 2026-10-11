@@ -54,9 +54,10 @@ everything the engine cannot prove is refused with anchored, classified disclosu
 - **Sysroot member calls still block.** Method calls on `std` types
   (`.iter()`, `.push()`, `format!`-adjacent chains) cannot be proven without sysroot
   coverage. Concrete written inherent calls in explicitly configured local crates
-  or opt-in captured direct path libraries can discharge under `resolve_semantic`.
-  Registry/git/vendor, transitive dependencies, trait/generic methods and external
-  fields/direct ADT constructors remain outside the path-library method tier.
+  or opt-in captured direct path, locally cached registry or source-replaced
+  libraries can discharge under `resolve_semantic`. Git/transitive dependencies,
+  trait/generic methods and external fields/direct ADT constructors remain
+  outside the external-library method tier.
 - **Trait methods and generic functions block.** `fact_attached` refuses trait-associated
   and generic declarations; only bounded concrete inherent facts are provable.
 - **Macro expansion is not modeled.** Any macro invocation in a moved body vetoes
@@ -65,18 +66,38 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   provider-uncertain helper attributes and a labeled caller-assumption flag
   (`assume_declared_helpers`). Location-observable macros are a known residual risk class
   and must be reviewed by callers.
-- **External source tracing is opt-in and path-only.**
-  `external_path_dependencies:true` discovers direct out-of-tree path libraries
-  with offline locked Cargo metadata and captures an immutable bounded corpus.
-  `coverage.external_dependencies` discloses consulted roots and digest; external
-  declaration anchors never authorize edits. Cargo configuration, build scripts,
-  proc macros, path overrides, filesystem includes and incomplete/stale captures
-  refuse. Before server-state creation or Cargo execution, a bounded lexical
-  manifest closure checks transitive path candidates, enclosing workspaces and
-  literal workspace members, including unconfigured siblings. This is safety
-  preflight, not transitive source admission. It over-refuses unrelated/inactive
-  paths, excluded members and non-package `path` assignments (including custom
-  library source paths). Member globs, ambiguous/non-string lists, explicit
+- **External source tracing is opt-in and direct-library-only.**
+  `external_path_dependencies:true` admits direct out-of-tree path libraries,
+  locked locally checked-out registry packages and Cargo directory/source-replaced
+  packages through offline locked Cargo metadata. Only checksum-validated registry
+  archives and existing sparse-index entries are staged in ephemeral server state;
+  Cargo unpacks them afresh there and every regular-file byte/membership must match
+  the captured real checkout. The lock/index/archive checksum binds the selected
+  package identity. The real Cargo home is never handed to Cargo or filled.
+  Vendor package identity/checksum and every captured file's raw SHA-256 map entry
+  must match; the map is not authentication against malicious coordinated rewrites.
+  Missing/malformed/mismatched checksum or checkout/index/archive data refuses
+  rather than downloading. Complete package capture and archive correspondence
+  share the request's file/per-file/aggregate-byte caps; the comparison cap is not
+  a disk quota on Cargo's unpacker. Source-only
+  Cargo configuration is admitted with Cargo's actual precedence/replacement;
+  wrappers, injected environment, unsupported table forms, multiline values,
+  Git-protocol indices and git/local-registry sources refuse. Server discovery
+  state must also be disjoint from the real Cargo home. Vendor roots may be inside the repository
+  but remain read-only semantic evidence. Name/version/source identities and
+  renamed graph edges are preserved, including distinct versions of one package;
+  ambiguous directory-source duplicates refuse. An immutable bounded corpus and
+  `coverage.external_dependencies` disclose selected roots, source/provenance and
+  digest; external anchors never authorize edits. Build scripts, proc macros, path
+  overrides, filesystem includes and incomplete/stale captures still refuse.
+  Before server-state creation or Cargo execution, the same bounded lexical
+  manifest closure checks registry/vendor candidate roots, transitive path
+  candidates, enclosing workspaces and literal workspace members, including
+  unconfigured siblings. This is safety preflight, not transitive source admission.
+  It over-refuses unrelated/inactive paths, excluded members and non-package
+  directory `path` assignments; existing literal custom library source-file
+  targets are now checked as files rather than package directories. Member globs,
+  ambiguous/non-string lists, explicit
   `package.workspace` pointers and path-candidate cycles refuse with
   `EXTERNAL_ROOT_UNSUPPORTED`; unreadable/unsafe manifests and exhausted shared
   file/byte or 32-hop budgets also refuse before Cargo. Inheritance cycle/hop
@@ -85,7 +106,7 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   are deduplicated; disjoint enclosing-workspace inheritance still works.
   Advice discloses consultation but never claims overlay resolution.
   Historical benchmark measurements used `dependencies: []` without this opt-in;
-  they are not measurements of current path-library coverage.
+  they are not measurements of current external-library coverage.
 - **Pub-API moves refuse by design.** `public_path_change` blocks moves that would alter a
   public path; no automatic re-export shims are synthesized.
 

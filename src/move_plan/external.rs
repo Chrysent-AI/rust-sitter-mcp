@@ -1,4 +1,9 @@
-//! Request-local, read-only path-library evidence. Never part of repository edit admission.
+//! Request-local, read-only library evidence. Never part of repository edit admission.
+#[cfg(test)]
+#[path = "external_registry_tests.rs"]
+mod registry_tests;
+#[path = "external_sources.rs"]
+mod sources;
 #[cfg(test)]
 #[path = "external_tests.rs"]
 mod tests;
@@ -38,6 +43,7 @@ pub struct ConsultedRoot {
     pub package: String,
     pub version: String,
     pub source: String,
+    pub provenance: String,
     pub root: String,
     pub namespace: String,
     pub features: Vec<String>,
@@ -64,6 +70,8 @@ pub(crate) struct Corpus {
     repository: PathBuf,
     crate_root: String,
     caller_configuration: Configuration,
+    cargo_home: PathBuf,
+    discovery_tree: PathBuf,
 }
 fn refusal(code: &str, message: &str) -> DomainError {
     DomainError::new(code, message)
@@ -201,6 +209,7 @@ struct DeclaredDependency {
     rename: Option<String>,
     path: Option<PathBuf>,
     kind: Option<String>,
+    source: Option<String>,
 }
 #[derive(Deserialize)]
 struct Resolve {
@@ -258,14 +267,29 @@ fn bounded_output(mut reader: impl Read, exceeded: &AtomicBool) -> Result<Vec<u8
         bytes.extend_from_slice(&chunk[..n]);
     }
 }
+#[cfg(test)]
 fn metadata(
     directory: &Path,
     tree: &Path,
     controls: Controls<'_>,
 ) -> Result<Metadata, DomainError> {
+    metadata_with_sources(directory, tree, None, &Limits::default(), controls)
+}
+fn metadata_with_sources(
+    directory: &Path,
+    tree: &Path,
+    sources: Option<&mut sources::Sources>,
+    limits: &Limits,
+    controls: Controls<'_>,
+) -> Result<Metadata, DomainError> {
     items::check(controls.0, controls.1)?;
-    config_guard(directory)?;
+    if sources.is_none() {
+        config_guard(directory)?;
+    }
     let scratch = Scratch::new(tree)?;
+    if let Some(sources) = sources.as_deref() {
+        sources.stage(&scratch.0, controls)?;
+    }
     // Keep only server tool lookup and rustup selection, not caller Cargo/wrapper env.
     // Force a server-selected installed toolchain, overriding caller rust-toolchain files.
     let cargo = std::env::var_os("PATH")
@@ -355,10 +379,15 @@ fn metadata(
             .map_err(io_error);
         status.and_then(|status| { let bytes = out?; let _ = err?;
             if exceeded.load(Ordering::Relaxed) { return Err(refusal("EXTERNAL_CORPUS_INCOMPLETE", "Cargo metadata output exceeded cap")); }
-            if !status.success() { return Err(refusal("EXTERNAL_DISCOVERY_FAILED", "offline locked Cargo discovery failed; registry/git/vendor sources and missing or stale locks are not supported")); }
+            if !status.success() { return Err(refusal("EXTERNAL_DISCOVERY_FAILED", "offline locked Cargo discovery failed; required local package/index, configuration or lock is unavailable or inconsistent; no downloads permitted")); }
             serde_json::from_slice(&bytes).map_err(|_| refusal("EXTERNAL_DISCOVERY_FAILED", "invalid Cargo metadata JSON"))
         })
     });
+    let mut output = output;
+    if let (Ok(metadata), Some(sources)) = (&mut output, sources) {
+        sources.comparison = sources.verify_staged(&scratch.0, limits, controls)?;
+        sources.restore_paths(metadata, &scratch.0)?;
+    }
     fs::remove_dir_all(&scratch.0).map_err(|_| {
         refusal(
             "EXTERNAL_STATE_UNAVAILABLE",
@@ -648,6 +677,11 @@ fn manifest_closure(
             let root = parent.join(candidate);
             disjoint(tree, [root.clone()])?;
             let root = no_links(&root)?;
+            // A library/bin target's literal path is also a conservative lexical
+            // candidate. Cargo never loads a package manifest from a regular file.
+            if root.is_file() {
+                continue;
+            }
             let child = root.join("Cargo.toml");
             if dependency {
                 children.push(child.clone());
@@ -918,6 +952,21 @@ fn capture(
     let mut bytes = 0;
     for path in &paths {
         let data = read(path, limits.max_file_bytes, controls)?;
+        if let Some(prior) = observed.get(path) {
+            if prior != &data {
+                return Err(refusal(
+                    "EXTERNAL_SOURCE_CHANGED",
+                    "dependency source changed after discovery capture",
+                ));
+            }
+        } else if observed.len() >= limits.max_files
+            || observed.values().map(Vec::len).sum::<usize>() + data.len() > limits.max_source_bytes
+        {
+            return Err(refusal(
+                "EXTERNAL_CORPUS_INCOMPLETE",
+                "combined discovery/source capture cap exhausted",
+            ));
+        }
         bytes += data.len();
         if bytes > limits.max_source_bytes
             || texts.values().map(String::len).sum::<usize>() + data.len() > limits.max_source_bytes
@@ -1022,6 +1071,25 @@ fn discover_at(
     controls: Controls<'_>,
     tree: &Path,
 ) -> Result<Corpus, DomainError> {
+    discover_at_home(
+        repository,
+        crate_root,
+        config,
+        limits,
+        controls,
+        tree,
+        &sources::cargo_home()?,
+    )
+}
+fn discover_at_home(
+    repository: &Path,
+    crate_root: &str,
+    config: &Configuration,
+    limits: &Limits,
+    controls: Controls<'_>,
+    tree: &Path,
+    cargo_home: &Path,
+) -> Result<Corpus, DomainError> {
     items::check(controls.0, controls.1)?;
     disjoint(tree, [repository.to_path_buf()])?;
     let mut directory = repository
@@ -1048,7 +1116,7 @@ fn discover_at(
             manifests.extend(ancestor_manifests(parent, controls)?);
         }
     }
-    let mut observed = manifest_closure(manifests, tree, limits, controls)?;
+    let observed = manifest_closure(manifests, tree, limits, controls)?;
     // Require a captured lock before invocation. Cargo must not synthesize one.
     if !directory
         .ancestors()
@@ -1059,7 +1127,16 @@ fn discover_at(
             "an existing locked caller workspace is required",
         ));
     }
-    let metadata = metadata(&directory, tree, controls)?;
+    let mut sources =
+        sources::Sources::prepare(&directory, cargo_home, tree, observed, limits, controls)?;
+    let metadata = metadata_with_sources(&directory, tree, Some(&mut sources), limits, controls)?;
+    // Archive comparison shares the budget with later path-library capture,
+    // not just the registry inputs already observed before Cargo runs.
+    let mut capture_limits = limits.clone();
+    capture_limits.max_files = limits.max_files.saturating_sub(sources.comparison.0);
+    capture_limits.max_source_bytes = limits.max_source_bytes.saturating_sub(sources.comparison.1);
+    sources.recheck(limits, controls)?;
+    let mut observed = sources.observed.clone();
     // An external enclosing workspace is allowed only when captured and checked
     // before Cargo. Explicit non-ancestor workspace routes remain unsupported.
     if !observed.contains_key(&metadata.workspace_root.join("Cargo.toml"))
@@ -1070,6 +1147,7 @@ fn discover_at(
             "Cargo workspace manifest/lock was not captured before discovery",
         ));
     }
+    sources.bind_workspace(&metadata.workspace_root)?;
     disjoint(tree, [metadata.workspace_root.clone()])?;
     let caller = metadata
         .packages
@@ -1144,6 +1222,28 @@ fn discover_at(
     let mut roots = Vec::new();
     let mut identities = BTreeMap::new();
     let mut consulted = Vec::new();
+    // Package IDs, not bare Cargo/crate names, key the internal graph. Adapter
+    // labels are unique even when two versions share a library name or one
+    // package is reachable under multiple renamed edges.
+    let mut graph_nodes: BTreeMap<String, String> = BTreeMap::new();
+    let mut package_ids = BTreeSet::new();
+    let mut package_identities = BTreeSet::new();
+    let mut node_ids = BTreeSet::new();
+    if metadata.packages.iter().any(|p| {
+        !package_ids.insert(&p.id)
+            || !package_identities.insert((
+                &p.name,
+                &p.version,
+                &p.source,
+                p.source.is_none().then_some(&p.manifest_path),
+            ))
+    }) || resolve.nodes.iter().any(|n| !node_ids.insert(&n.id))
+    {
+        return Err(refusal(
+            "EXTERNAL_PACKAGE_AMBIGUOUS",
+            "duplicate package or resolved node identity",
+        ));
+    }
     for edge in &caller_node.deps {
         items::check(controls.0, controls.1)?;
         if edge
@@ -1179,26 +1279,38 @@ fn discover_at(
             .ok_or_else(|| {
                 refusal(
                     "EXTERNAL_ROOT_UNSUPPORTED",
-                    "dependency is not a declared direct path edge",
+                    "dependency is not a declared direct edge",
                 )
             })?;
-        if package.source.is_some() || declared.path.is_none() {
+        if declared.name != package.name || declared.source != package.source {
+            return Err(refusal(
+                "EXTERNAL_CONFIGURATION_MISMATCH",
+                "declared dependency name/source does not identify resolved package",
+            ));
+        }
+        if package
+            .source
+            .as_ref()
+            .is_some_and(|s| !s.starts_with("registry+") && !s.starts_with("sparse+"))
+        {
             return Err(refusal(
                 "EXTERNAL_DEPENDENCY_UNSUPPORTED",
-                "only declared direct path libraries are supported; registry/git/vendor sources are not admitted",
+                "git and non-registry dependencies are not admitted",
             ));
         }
         let root =
             no_links(package.manifest_path.parent().ok_or_else(|| {
                 refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid package manifest")
             })?)?;
-        if declared
-            .path
-            .as_ref()
-            .map(|p| p.canonicalize())
-            .transpose()
-            .map_err(io_error)?
-            != Some(root.clone())
+        let provenance = sources.provenance(package, &root, controls)?;
+        if package.source.is_none()
+            && declared
+                .path
+                .as_ref()
+                .map(|p| p.canonicalize())
+                .transpose()
+                .map_err(io_error)?
+                != Some(root.clone())
         {
             return Err(refusal(
                 "EXTERNAL_CONFIGURATION_MISMATCH",
@@ -1206,8 +1318,10 @@ fn discover_at(
             ));
         }
         disjoint(tree, [root.clone()])?;
-        config_guard(&root)?;
-        if root.starts_with(repository) || repository.starts_with(&root) {
+        if provenance == "path" {
+            config_guard(&root)?;
+        }
+        if provenance == "path" && (root.starts_with(repository) || repository.starts_with(&root)) {
             return Err(refusal(
                 "EXTERNAL_ROOT_UNSUPPORTED",
                 "external path library must be disjoint from caller repository",
@@ -1255,28 +1369,59 @@ fn discover_at(
             })?
             .to_str()
             .ok_or_else(|| refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid library path"))?;
+        if configuration.crates[root_index]
+            .dependencies
+            .iter()
+            .any(|d| d.name == edge.name)
+        {
+            return Err(refusal(
+                "EXTERNAL_CONFIGURATION_MISMATCH",
+                "external dependency alias conflicts with explicit graph",
+            ));
+        }
+        if configuration.crates[root_index].dependencies.len() >= 32 {
+            return Err(refusal(
+                "EXTERNAL_CORPUS_INCOMPLETE",
+                "external dependency edge cap exhausted",
+            ));
+        }
+        if let Some(name) = graph_nodes.get(&package.id) {
+            configuration.crates[root_index]
+                .dependencies
+                .push(DependencyInput {
+                    name: edge.name.clone(),
+                    crate_name: name.clone(),
+                });
+            continue;
+        }
         let index = roots.len();
         let namespace = format!("{PREFIX}{index}/");
         let name = format!("external_path_{index}");
-        if configuration
-            .crates
-            .iter()
-            .any(|c| c.name == name || c.dependencies.iter().any(|d| d.name == edge.name))
-        {
+        if configuration.crates.iter().any(|c| c.name == name) {
             return Err(refusal(
                 "EXTERNAL_CONFIGURATION_MISMATCH",
                 "external dependency conflicts with explicit graph",
             ));
         }
-        observed.insert(
-            package.manifest_path.clone(),
-            read(&package.manifest_path, limits.max_file_bytes, controls)?,
-        );
+        if !observed.contains_key(&package.manifest_path) {
+            return Err(refusal(
+                "EXTERNAL_ROOT_UNSUPPORTED",
+                "resolved package manifest was not captured before Cargo",
+            ));
+        }
+        if configuration.crates.len() >= 32
+            || configuration.crates[root_index].dependencies.len() >= 32
+        {
+            return Err(refusal(
+                "EXTERNAL_CORPUS_INCOMPLETE",
+                "external crate graph cap exhausted",
+            ));
+        }
         let (files, bytes) = capture(
             &root,
             &src,
             &namespace,
-            limits,
+            &capture_limits,
             controls,
             &mut texts,
             &mut observed,
@@ -1294,6 +1439,7 @@ fn discover_at(
                 name: edge.name.clone(),
                 crate_name: name.clone(),
             });
+        graph_nodes.insert(package.id.clone(), name.clone());
         configuration.crates.push(CrateInput {
             name,
             root_file,
@@ -1306,7 +1452,8 @@ fn discover_at(
             package_id: package.id.clone(),
             package: package.name.clone(),
             version: package.version.clone(),
-            source: "path".into(),
+            source: package.source.clone().unwrap_or_else(|| "path".into()),
+            provenance: provenance.into(),
             root: root
                 .to_str()
                 .ok_or_else(|| refusal("EXTERNAL_ROOT_UNSUPPORTED", "invalid package root"))?
@@ -1327,7 +1474,7 @@ fn discover_at(
         &(&consulted, &observed, &configuration),
         controls,
     )?;
-    Ok(Corpus { texts, configuration, coverage: Coverage { complete: true, consulted_roots: consulted, corpus_digest: digest, omissions: vec!["direct path libraries only; no registry/git/vendor or transitive closure; no build-script/proc-macro execution, sysroot or compilation".into()] }, observed, roots, identities, limits: limits.clone(), repository: repository.into(), crate_root: crate_root.into(), caller_configuration: config.clone() })
+    Ok(Corpus { texts, configuration, coverage: Coverage { complete: true, consulted_roots: consulted, corpus_digest: digest, omissions: vec!["direct path/locally cached registry/source-replaced libraries only; no git or transitive closure; no build-script/proc-macro execution, sysroot or compilation".into()] }, observed, roots, identities, limits: limits.clone(), repository: repository.into(), crate_root: crate_root.into(), caller_configuration: config.clone(), cargo_home: cargo_home.into(), discovery_tree: tree.into() })
 }
 impl Corpus {
     pub(crate) fn recheck(&self, controls: Controls<'_>) -> Result<(), DomainError> {
@@ -1370,12 +1517,14 @@ impl Corpus {
         }
         // Re-discovery binds manifests, workspace features and package/edge identity,
         // including configuration appearance between capture and publication.
-        let fresh = discover(
+        let fresh = discover_at_home(
             &self.repository,
             &self.crate_root,
             &self.caller_configuration,
             &self.limits,
             controls,
+            &self.discovery_tree,
+            &self.cargo_home,
         )?;
         if fresh.coverage.corpus_digest != self.coverage.corpus_digest {
             return Err(refusal(
