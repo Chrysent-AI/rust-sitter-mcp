@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add `move_item`'s `plan.blocked_summary` over the full blocking decision set,
+  with typed reasons, every distinct refusal class, occurrence anchors and exact
+  totals. Budget omissions are explicit and never change applicability or the
+  existing individual-blocker disclosure.
+
 * Disclose group-level `selection_completeness`, explicit reviewed supported
   bundles and visible exclusions in `suggest_split`. Keep incomplete selections
   and dominated files without supported names in destination-free

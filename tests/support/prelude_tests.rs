@@ -21,6 +21,14 @@ fn refusal_behavior(mut value: Value) -> Vec<u8> {
     for decision in value["plan"]["decisions"].as_array_mut().unwrap() {
         decision.as_object_mut().unwrap().remove("refusal_basis");
     }
+    value["plan"]
+        .as_object_mut()
+        .unwrap()
+        .remove("blocked_summary");
+    value["counts"]
+        .as_object_mut()
+        .unwrap()
+        .remove("blocked_summary");
     value["counts"]
         .as_object_mut()
         .unwrap()

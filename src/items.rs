@@ -9,7 +9,7 @@ pub(crate) use attributes::{
 mod globs;
 mod lexical;
 mod refusal;
-pub use refusal::RefusalBasis;
+pub use refusal::{RefusalAnchor, RefusalBasis};
 mod test_consumers;
 use crate::{
     matching::Lines,

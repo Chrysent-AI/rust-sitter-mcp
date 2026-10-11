@@ -61,6 +61,20 @@ fn run(repo: &Fixture, args: Value) -> Value {
 }
 
 #[test]
+fn applicable_and_noop_plans_have_empty_blocking_summaries() {
+    let selected = "fn selected() {}";
+    let repo = fixture(selected);
+    for args in [request(&repo, &[selected]), request(&repo, &[])] {
+        let result = run(&repo, args);
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["blocked_summary"], json!([]));
+        assert_eq!(result["counts"]["blocked_decisions"], 0);
+        assert_eq!(result["counts"]["blocked_summary"], 0);
+        assert_eq!(result["schema_version"], 2);
+    }
+}
+
+#[test]
 fn assumed_matches_coverage_survives_proof_omission() {
     let selected = "pub(crate) enum Choice { First }";
     let patterns = std::iter::repeat_n("Choice::First", 80)
@@ -146,6 +160,13 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
         "keep_in_place"
     );
     assert_eq!(blocking_group["count"], 360);
+    let summary = &result["plan"]["blocked_summary"];
+    assert_eq!(result["counts"]["blocked_decisions"], 360);
+    assert_eq!(result["counts"]["blocked_summary"], 1);
+    assert_eq!(summary[0]["reason"], "member_or_constructor_unproved");
+    assert_eq!(summary[0]["class"], "written_binding_unproved");
+    assert_eq!(summary[0]["count"], 360);
+    assert!(summary[0]["top_anchor"]["range"].is_object());
     assert_eq!(
         blocking_group["decision_ids"],
         json!([{"first_id":"d/0","count":360}])
@@ -164,6 +185,7 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
     assert_eq!(full["plan"]["decisions"].as_array().unwrap().len(), 361);
     assert!(full["counts"]["omissions"]["decisions"].is_null());
     assert_eq!(full["plan"]["decision_groups"], *groups);
+    assert_eq!(full["plan"]["blocked_summary"], *summary);
     for compact in decisions {
         let expanded = full["plan"]["decisions"]
             .as_array()
@@ -211,6 +233,8 @@ fn blocked_details_are_counts_first_deduplicated_and_explicitly_expandable() {
     assert_eq!(zero["plan"]["decisions"], json!([]));
     assert_eq!(zero["counts"]["omissions"]["decisions"], 361);
     assert_eq!(zero["plan"]["decision_groups"], *groups);
+    assert_eq!(zero["plan"]["blocked_summary"], *summary);
+    assert_eq!(zero["counts"]["blocked_decisions"], 360);
 }
 
 #[test]

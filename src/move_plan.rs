@@ -1,5 +1,6 @@
 //! One simultaneous, read-only relocation plan with itemized written-binding repairs.
 mod actions;
+mod blocked_summary;
 mod dead_imports;
 mod derive_relocation;
 pub(crate) mod ergonomics;
@@ -525,6 +526,8 @@ pub struct MoveCounts {
     pub analysis_descriptor_bytes: usize,
     pub rewrites: usize,
     pub creations: usize,
+    pub blocked_decisions: usize,
+    pub blocked_summary: usize,
     pub omissions: BTreeMap<String, usize>,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -557,6 +560,7 @@ pub struct MovePlan {
     pub trivia_decisions: Vec<MoveTriviaDecision>,
     pub decisions: Vec<Decision>,
     pub decision_groups: Vec<MoveDecisionGroup>,
+    pub blocked_summary: Vec<blocked_summary::BlockedSummary>,
     pub chain_diagnostics: Vec<items::ChainDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub binding_proofs: Vec<BindingProof>,
@@ -633,6 +637,7 @@ impl MoveEnvelope {
                 trivia_decisions: Vec::new(),
                 decisions: Vec::new(),
                 decision_groups: Vec::new(),
+                blocked_summary: Vec::new(),
                 chain_diagnostics: Vec::new(),
                 binding_proofs: Vec::new(),
                 resolution_coverage: None,
@@ -1143,7 +1148,11 @@ impl MoveEnvelope {
         serde_json::to_vec(&serde_json::json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":self.error.is_some()})).expect("wire JSON").len() + 4096
     }
     fn fit(&mut self) {
-        if self.wire_bytes() <= self.limits.response_bytes {
+        self.fit_plan();
+        self.fit_blocked_summary();
+    }
+    fn fit_plan(&mut self) {
+        if self.planning_wire_bytes() <= self.limits.response_bytes {
             return;
         }
         self.incomplete("response_bytes");
@@ -1176,7 +1185,7 @@ impl MoveEnvelope {
                 .entry("display_text_fields".into())
                 .or_default() += text_fields;
         }
-        if self.wire_bytes() <= self.limits.response_bytes {
+        if self.planning_wire_bytes() <= self.limits.response_bytes {
             return;
         }
         // Groups still name the complete analyzed set when detail is withheld.
@@ -1191,7 +1200,7 @@ impl MoveEnvelope {
                         .or_default() += count;
                     self.plan.$field.clear();
                 }
-                if self.wire_bytes() <= self.limits.response_bytes {
+                if self.planning_wire_bytes() <= self.limits.response_bytes {
                     return;
                 }
             };
@@ -1207,7 +1216,7 @@ impl MoveEnvelope {
                 .omissions
                 .entry("resolution_coverage".into())
                 .or_default() += 1;
-            if self.wire_bytes() <= self.limits.response_bytes {
+            if self.planning_wire_bytes() <= self.limits.response_bytes {
                 return;
             }
         }
@@ -1227,13 +1236,15 @@ impl MoveEnvelope {
         }
         drop_preview!(decisions);
         drop_preview!(chain_diagnostics);
-        while self.wire_bytes() > self.limits.response_bytes && self.plan.blockers.len() > 1 {
+        while self.planning_wire_bytes() > self.limits.response_bytes
+            && self.plan.blockers.len() > 1
+        {
             self.plan.blockers.pop();
             *self.counts.omissions.entry("blockers".into()).or_default() += 1;
         }
         // Only the final tier may discard membership. Root/snapshot/coverage/counts
         // remain usable even if the complete summary itself cannot fit.
-        if self.wire_bytes() > self.limits.response_bytes {
+        if self.planning_wire_bytes() > self.limits.response_bytes {
             let links = self
                 .plan
                 .decision_groups
@@ -1323,6 +1334,7 @@ fn run_with_recheck(
             *id = links[id].clone();
         }
     }
+    result.summarize_blockers();
     let groups = decision_groups(
         result.plan.decisions.iter().map(|d| {
             (

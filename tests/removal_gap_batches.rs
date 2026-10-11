@@ -236,6 +236,11 @@ fn single_item_serialized_plans_match_legacy_default_and_replay_bytes() {
         apply(&repo, &replayed);
         plans.push(replayed["plan"].clone());
     }
+    // Compare the captured audit shape without the additive blocking summary.
+    for plan in &mut plans {
+        assert_eq!(plan["blocked_summary"], json!([]));
+        plan.as_object_mut().unwrap().remove("blocked_summary");
+    }
     // Captured from the parent of the batch-collapse change (85f14c7), not rebuilt
     // from the current response: compare complete serialized plans, including audits.
     assert_eq!(

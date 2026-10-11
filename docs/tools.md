@@ -1230,6 +1230,36 @@ missing higher ancestors disclose `directory_creation_unsupported_layout`.
 
 Existing-file edits are sorted by path/start/end, with additive item/rewrite links (absent from replacement results). Reconstruct existing files in reverse original-coordinate order after matching `original_text`; create files separately from complete `created_files[].content` only after rechecking absence. For schema 3, first recheck source/parent bytes and modes, directory captured states and identities, effective in-root ignore inputs, and competing layouts; then externally create only the disclosed `absent_then_directory` paths with caller-chosen permissions. Any appearance of a previously absent directory invalidates the plan, even if now safe. A Git patch instead creates the nested file (and necessary directory) without a separate directory artifact; `git apply --check` alone does not prove these freshness inputs. The server observationally repeats these checks before publication, never executes Cargo, formatters, builds or caller scripts, and creates nothing. Never interpret creation as insertion into a fictional empty base. Review all audit records together, then externally run `git apply --check` and apply on unchanged disposable copies. Creation sections use C-quoted Git paths, `/dev/null`, `b/<path>` and `new file mode 100644`; existing modes are unchanged and there are no deletion/rename/mode transitions. JSON reconstruction and patch application yield identical paths, bytes and canonical modes.
 
+### Blocking summary
+
+`plan.blocked_summary` is additive in both move schemas 2 and 3. Each entry is
+`{reason,class,count,top_anchor}`: `reason` is the existing typed decision reason;
+`class` is an additional refusal-basis string (or null when no basis exists),
+not a new taxonomy. `count` counts distinct blocking decisions for that
+reason/class pair. Every distinct class on a decision is represented, not just
+its first refusal basis; repeated same-class witnesses count once. Counts across
+classes are not additive. `top_anchor` is the first original witness in analysis
+order, `{path,range?}`, or null if no original anchor exists; it is diagnostic,
+not a byte-exact replay selection.
+
+Aggregation uses the full internal blocking decision set before grouping or
+preview caps. Nonblocking decisions do not contribute; nonblocked plans return
+`[]`. `counts.blocked_decisions` is the observed distinct blocking-decision total
+and `counts.blocked_summary` is the total number of reason/class entries before
+budget fitting. Incomplete analysis still reports only observed decisions, never
+unexamined blockers. Existing decisions, groups, blockers and their omission
+counts retain their meaning and remain the detailed evidence.
+
+Under response pressure only summary entries are removed to fit this additive
+disclosure, without changing applicability, artifacts or any existing preview.
+`counts.omissions.blocked_summary` counts omitted entries;
+`counts.omissions.blocked_summary_decisions` counts their decision/class
+memberships (not distinct decisions across classes). The totals remain and
+`truncation_reasons` includes `blocked_summary_response_bytes`. An empty summary
+with omissions does not mean the plan is unblocked. Like existing mandatory
+response metadata, totals and omission disclosure survive even when the budget
+cannot accommodate that irreducible metadata.
+
 Blocked, failed and incomplete move previews are counts-first: `decision_groups`
 contains complete analyzed counts, blocking flags and one routing summary for
 identical cause/route/consequence records. By default, `decisions` contains one
