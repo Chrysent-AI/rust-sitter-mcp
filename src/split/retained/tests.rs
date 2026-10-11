@@ -359,6 +359,91 @@ fn capacity_release_restart_and_inflight_accounting_do_not_silently_evict() {
 }
 
 #[test]
+fn durable_references_survive_in_memory_capacity_refusal() {
+    let repo = Fixture::new(SOURCE);
+    let storage = Fixture::new("fn stored() {}\n");
+    let mut request = repo.request();
+    request.response_mode = ResponseMode::References;
+    let (full, evidence) = repo.analyze(&request);
+    let flag = AtomicBool::new(false);
+    let spilled = spill::persist_at(
+        &storage.0.join("analyses"),
+        &full,
+        Some(&evidence),
+        &request,
+        controls(&flag),
+    )
+    .unwrap();
+    let expected = serde_json::to_value(&full).unwrap();
+    for (topic, value) in expected.as_object().unwrap() {
+        let stored: Value =
+            serde_json::from_slice(&fs::read(&spilled.files[topic]).unwrap()).unwrap();
+        assert_eq!(&stored, value, "canonical topic {topic}");
+    }
+    assert!(
+        fs::read_to_string(&spilled.files["source_buffers"])
+            .unwrap()
+            .contains("fn alpha()")
+    );
+    let store = Store::new(RetentionLimits {
+        aggregate_bytes: 1,
+        ..RetentionLimits::default()
+    });
+    let response = present_spilled(
+        full,
+        Some(evidence),
+        &request,
+        &store,
+        controls(&flag),
+        Some(spilled),
+    );
+    let wire = serde_json::to_value(response).unwrap();
+    assert_eq!(wire["response_mode"], "references");
+    assert_eq!(wire["retention"]["state"], "unavailable");
+    assert_eq!(wire["retention"]["spill"]["state"], "persisted");
+    assert_eq!(wire["integrity"]["semantic"], "not_performed");
+    for path in wire["references"].as_object().unwrap().values() {
+        assert!(std::path::Path::new(path.as_str().unwrap()).is_file());
+    }
+    assert!(wire["candidate_summaries"].as_array().unwrap().is_empty());
+    assert!(serde_json::to_vec(&wire).unwrap().len() <= request.limits.response_bytes);
+}
+
+#[test]
+fn failed_spill_preserves_inline_compact_contract() {
+    let repo = Fixture::new(SOURCE);
+    let mut request = repo.request();
+    request.response_mode = ResponseMode::References;
+    let (full, evidence) = repo.analyze(&request);
+    let expected_candidates = full.ownership_candidates.len();
+    let store = Store::default();
+    let failed = Spill {
+        state: "unavailable".into(),
+        directory: None,
+        index: None,
+        files: BTreeMap::new(),
+        reason: Some("disk unavailable".into()),
+    };
+    let response = present_spilled(
+        full,
+        Some(evidence),
+        &request,
+        &store,
+        controls(&AtomicBool::new(false)),
+        Some(failed),
+    );
+    let wire = serde_json::to_value(response).unwrap();
+    assert_eq!(wire["response_mode"], "compact");
+    assert_eq!(
+        wire["candidate_summaries"].as_array().unwrap().len(),
+        expected_candidates
+    );
+    assert_eq!(wire["retention"]["spill"]["reason"], "disk unavailable");
+    assert!(wire.get("references").is_none());
+    assert_eq!(wire["analysis_status"], "complete");
+}
+
+#[test]
 fn independent_analyses_on_equal_corpus_never_alias() {
     let repo = Fixture::new(SOURCE);
     let engine = Engine::with_retention_limits(

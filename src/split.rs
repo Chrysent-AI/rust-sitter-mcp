@@ -1376,7 +1376,7 @@ fn build(
     result.counts.inventory_items = advice_units.len();
     result.counts.eligible_items = advice_units.iter().filter(|i| draftable(i)).count();
     let canonical_requested =
-        request.retain_snapshot || request.response_mode == retained::ResponseMode::Compact;
+        request.retain_snapshot || request.response_mode != retained::ResponseMode::Full;
     result.inventory = advice_units
         .iter()
         .take(if canonical_requested {

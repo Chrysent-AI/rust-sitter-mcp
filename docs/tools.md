@@ -1759,8 +1759,8 @@ Empty/singleton/recovered or unsupported-layout files return inventory and an ex
 
 ### Retained advice and compact manifests
 
-`retain_snapshot` is a strict boolean, default false. `response_mode` is `full|compact`,
-default full; compact does **not** implicitly retain. Legacy full retention-off calls
+`retain_snapshot` is a strict boolean, default false. `response_mode` is `full|compact|references`,
+default full; neither compact nor references implicitly retains. Legacy full retention-off calls
 allocate no retained record and keep their previous wire shape (no `retention` field).
 Explicit retention adds a sub-result independently of full-response presentation.
 
@@ -1827,7 +1827,64 @@ for lifecycle and measurement checks; they add no runtime knobs or MCP flags.
 Registry removal does not subtract records or bytes still owned by an in-flight
 reader. Expiry is monotonic and fixed, not extended by navigation; expired
 payloads are reclaimed lazily. Release is explicit. No silent eviction,
-persistence, background refresh, jobs or restart-survival promise exists.
+background refresh, jobs or restart-survival promise exists for live handles.
+
+#### Durable analysis files and reference presentation
+
+Explicit `retain_snapshot:true` also spills the entire pre-wire-fitting canonical
+envelope to server-owned state, independently of the bounded live-handle cache.
+`retention.spill` reports `state:"persisted"`, absolute `directory` and `index`
+paths, and a `files` map from canonical topic names to absolute paths. A successful
+spill remains usable even when live retention reports `record_too_large` or
+`capacity`. `get_split_detail` and `export_move_request` still require live handles;
+they do not load spilled files. Their limits, expiry and applicability are unchanged.
+
+The reserved tree is `$XDG_DATA_HOME/rust-sitter-mcp/analyses`, or
+`~/.local/share/rust-sitter-mcp/analyses` when XDG_DATA_HOME is unset. XDG_DATA_HOME
+must be absolute. The server rejects a spill location inside the caller repository,
+including symlink-resolved paths. Each unique `analysis-<process>-<time>-<sequence>`
+directory contains `index.json` and UTF-8 pretty JSON files such as
+`test_observations.json`, `decisions.json`, `advice_decisions.json`,
+`ownership_candidates.json`, `drafts.json`, `inspection_partitions.json` and
+`inventory.json`. All envelope fields have matching topic files; `request.json`
+records options, `source_buffers.json` preserves captured source bytes as JSON
+strings, and `scope_evidence.json` preserves captured scope/input metadata. The
+index discloses canonical omissions and whether evidence was captured. These are
+full **captured** records, not a promise that stopped analysis scanned everything.
+No new observation cap is introduced. For example, on the server host:
+
+```sh
+grep -n 'observation spelling' /absolute/analysis-directory/test_observations.json
+rust-sitter-mcp flush
+```
+
+Files survive expiry, release and restart until explicitly flushed. `flush` removes
+only the reserved analysis subtree and reports entry count/location; absent state
+is a successful no-op. Source buffers can contain sensitive caller content; protect
+the server account and flush when no longer needed. Analysis directories are private
+on Unix. Paths refer to the server host, not necessarily the MCP client's filesystem.
+
+`response_mode:"references"` plus `retain_snapshot:true` explicitly opts out of
+duplicated inline manifest summaries. It returns the schema-1 manifest with
+`response_mode:"references"` and a `references` map: `candidate_summaries` and
+`consequence_summaries` point to canonical ownership candidates; `draft_memberships`
+and `coverage.local_forecasts` point to canonical drafts; `decision_groups` and
+`inspection_partitions` point to their matching files. Corresponding inline arrays
+are empty, their counts are disclosed in `omissions`, and local forecasts are not
+inlined. These references identify richer canonical records, not identical display
+projections. Totals, analysis coverage, uncertainty and input-only integrity remain
+inline. Full and ordinary compact modes preserve their previous inline meanings;
+spill metadata is additive. Without requested retention, references falls back to
+ordinary compact presentation.
+
+Writes stream each topic through a cancellation-aware writer into a temporary
+private directory, flush/sync files, then rename the completed directory. No network
+is used. A write/path/cancellation failure reports `retention.spill.state:"unavailable"`
+and a `reason`, publishes no file pointers and preserves the ordinary inline contract
+(including fallback to `response_mode:"compact"` for references). Spill failure does
+not by itself change analysis applicability or semantic labeling. Concurrent flush
+can invalidate previously returned pointers; re-check file existence before use.
+
 
 `scope_input_digest` binds the corpus snapshot, normalized scope and effective
 in-root `.gitignore` inputs consulted in discovery, including absence and exact

@@ -47,6 +47,28 @@ raise the limit or fetch a slice. See `docs/tools.md` for the response contract.
 - **Lossless.** Untouched bytes stay byte-identical; moved items carry their comments with them; line endings and formatting are never normalized.
 - **Honest.** Results report completeness, coverage, and skips precisely. Default plans keep `semantic: "not_performed"`. Opt-in move resolution uses `ra_resolved` occurrence proofs and `semantic: "resolution_performed"`, scoped to one explicit crate graph/configuration and the exact final virtual batch. Neither mode claims compilation or semantic equivalence (the test suite separately compiles fixture patches). No Cargo discovery, caller build scripts or proc macros are executed.
 
+## Persisted split advice
+
+With `suggest_split`'s explicit `retain_snapshot:true`, the server writes full
+captured canonical advice into per-topic UTF-8 JSON files plus `index.json` under
+`$XDG_DATA_HOME/rust-sitter-mcp/analyses` (fallback:
+`~/.local/share/rust-sitter-mcp/analyses`). This server-owned location must be
+outside the caller repository. `retention.spill` discloses paths or a failure;
+disk availability is independent of the bounded, expiring live analysis handle.
+Use `response_mode:"references"` with retention to receive file pointers instead
+of duplicated compact summaries. Default full/compact inline contracts remain
+unchanged; failures fall back to inline data. Grep files on the server host;
+they are historical evidence, not current execution anchors.
+
+```sh
+rust-sitter-mcp flush
+```
+
+`flush` reports the removed analysis entries/location; absent state is a clean
+no-op. Files otherwise survive handle expiry, release and server restart. Captured
+source can contain sensitive content: protect the server account and flush when
+finished. See `docs/tools.md` for pointer mappings, omissions and failure behavior.
+
 ## Install
 
 Requires: Rust toolchain per [`rust-toolchain.toml`](rust-toolchain.toml), Git 2.39+, and a C11 compiler for the bundled tree-sitter grammars.

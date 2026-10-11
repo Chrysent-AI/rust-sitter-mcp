@@ -16,10 +16,12 @@ use std::{
 
 mod accounting;
 mod export;
+mod spill;
 #[cfg(test)]
 use accounting::evidence_allocation;
 use accounting::{preparation_allocation, record_allocation, retention_allocation};
 pub use export::{ExportEnvelope, ExportRequest};
+pub use spill::{Spill, flush};
 
 /// Active records, including preparations and in-flight readers.
 pub const DEFAULT_RECORDS: usize = 1;
@@ -57,6 +59,8 @@ pub struct Retention {
     pub limits: RetentionLimits,
     pub accounted_bytes: usize,
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spill: Option<Spill>,
 }
 impl Retention {
     fn unavailable(limits: RetentionLimits, reason: &str) -> Self {
@@ -72,6 +76,7 @@ impl Retention {
             limits,
             accounted_bytes: 0,
             reason: Some(reason.into()),
+            spill: None,
         }
     }
 }
@@ -297,6 +302,7 @@ impl Store {
                 limits: self.limits,
                 accounted_bytes: 0,
                 reason: None,
+                spill: None,
             },
             evidence,
             captured_at: now,
@@ -1211,6 +1217,7 @@ pub enum ResponseMode {
     #[default]
     Full,
     Compact,
+    References,
 }
 #[derive(Debug, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -1248,6 +1255,8 @@ pub struct Manifest {
     pub consequence_summaries: Vec<Value>,
     pub decision_groups: Vec<AdviceDecisionGroup>,
     pub detail_availability: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references: Option<BTreeMap<String, String>>,
     pub retention: Retention,
     pub omissions: BTreeMap<String, usize>,
     pub error: Option<DomainError>,
@@ -1328,6 +1337,7 @@ impl Manifest {
             draft_memberships: memberships,
             decision_groups: full.decision_groups.clone(),
             detail_availability: availability,
+            references: None,
             retention,
             omissions: full.counts.omissions.clone(),
             error: full.error.clone(),
@@ -1383,11 +1393,25 @@ impl Manifest {
 }
 
 pub(super) fn present(
+    full: SuggestSplitEnvelope,
+    evidence: Option<Evidence>,
+    request: &SuggestSplitRequest,
+    store: &Store,
+    controls: Controls<'_>,
+) -> SplitResponse {
+    let spilled = request
+        .retain_snapshot
+        .then(|| spill::persist(&full, evidence.as_ref(), request, controls));
+    present_spilled(full, evidence, request, store, controls, spilled)
+}
+
+fn present_spilled(
     mut full: SuggestSplitEnvelope,
     evidence: Option<Evidence>,
     request: &SuggestSplitRequest,
     store: &Store,
     controls: Controls<'_>,
+    spilled: Option<Spill>,
 ) -> SplitResponse {
     let budget = request
         .limits
@@ -1421,20 +1445,69 @@ pub(super) fn present(
             full.error = Some(error);
         }
     }
+    retention.spill = spilled.clone();
     // Terminal output is still bounded after cancellation; it cannot publish a record.
     let terminal_flag = AtomicBool::new(false);
     let terminal = Controls {
         deadline: Instant::now() + Duration::from_secs(5),
         cancelled: &terminal_flag,
     };
-    let mut response = if request.response_mode == ResponseMode::Compact {
+    let mut response = if request.response_mode != ResponseMode::Full {
         let mut manifest = Manifest::from_full(&full, retention.clone());
+        if request.response_mode == ResponseMode::References
+            && spilled.as_ref().is_some_and(|s| s.state == "persisted")
+        {
+            manifest.response_mode = "references".into();
+            let files = &spilled.as_ref().expect("persisted spill").files;
+            manifest.references = Some(
+                [
+                    ("candidate_summaries", "ownership_candidates"),
+                    ("consequence_summaries", "ownership_candidates"),
+                    ("draft_memberships", "drafts"),
+                    ("decision_groups", "decision_groups"),
+                    ("inspection_partitions", "inspection_partitions"),
+                    ("coverage.local_forecasts", "drafts"),
+                ]
+                .into_iter()
+                .map(|(presentation, canonical)| {
+                    (presentation.to_owned(), files[canonical].clone())
+                })
+                .collect(),
+            );
+            for (name, count) in [
+                ("candidate_summaries", manifest.candidate_summaries.len()),
+                (
+                    "consequence_summaries",
+                    manifest.consequence_summaries.len(),
+                ),
+                ("draft_memberships", manifest.draft_memberships.len()),
+                ("decision_groups", manifest.decision_groups.len()),
+                (
+                    "inspection_partitions",
+                    manifest.inspection_partitions.len(),
+                ),
+            ] {
+                manifest.omissions.insert(name.into(), count);
+            }
+            manifest.candidate_summaries.clear();
+            manifest.consequence_summaries.clear();
+            manifest.draft_memberships.clear();
+            manifest.decision_groups.clear();
+            manifest.inspection_partitions.clear();
+            manifest
+                .coverage
+                .as_object_mut()
+                .expect("coverage object")
+                .remove("local_forecasts");
+        }
+        manifest.retention.spill = spilled.clone();
         if wire_bytes(&manifest) > budget {
             manifest.set_retention(if request.retain_snapshot {
                 Retention::unavailable(store.limits, "response_budget")
             } else {
                 retention.clone()
             });
+            manifest.retention.spill = spilled.clone();
             manifest.overflow();
             record = None;
         }
@@ -1468,6 +1541,9 @@ pub(super) fn present(
                     "cancelled_before_publication",
                 ));
             }
+            if let Some(retention) = &mut full.retention {
+                retention.spill = spilled.clone();
+            }
             let _ = full.fit(terminal);
         }
         // Large normalized options are mandatory retention metadata, not silently truncated.
@@ -1475,6 +1551,7 @@ pub(super) fn present(
             record = None;
             if request.retain_snapshot {
                 full.retention = Some(Retention::unavailable(store.limits, "response_budget"));
+                full.retention.as_mut().expect("retention").spill = spilled.clone();
             }
             let _ = full.fit(terminal);
         }
@@ -1489,6 +1566,15 @@ pub(super) fn present(
             SplitResponse::Full(full) => full.retention = Some(retention),
             SplitResponse::Compact(manifest) => manifest.set_retention(retention),
         }
+    }
+    // Durable availability is independent of the bounded, expiring in-memory handle.
+    match &mut response {
+        SplitResponse::Full(full) => {
+            if let Some(retention) = &mut full.retention {
+                retention.spill = spilled;
+            }
+        }
+        SplitResponse::Compact(manifest) => manifest.retention.spill = spilled,
     }
     response
 }

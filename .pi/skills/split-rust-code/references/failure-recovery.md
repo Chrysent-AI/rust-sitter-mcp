@@ -49,7 +49,8 @@ A new `suggest_split` call is a separately requested analysis with a new identit
 
 | Condition or error | Meaning | Recovery |
 |---|---|---|
-| Retention `unavailable` with `capacity` or `record_too_large` | No usable historical handle was published | Review the ordinary full response if complete; release a retained record you no longer need if it occupies capacity, or retry without retention. Larger output limits do not remove the record/capacity limit. |
+| Retention `unavailable` with `capacity` or `record_too_large` | No usable historical handle was published | Check `retention.spill` before declaring historical evidence unavailable: a persisted disk record is greppable despite no live detail/export handle. Then review the ordinary full response if complete; release a retained record you no longer need if it occupies capacity, or retry without retention. Larger output limits do not remove the record/capacity limit. |
+| Spill `retention.spill.state:"unavailable"` | The full canonical record could not be written to server-owned XDG data | Inspect `retention.spill.reason`; required inline output remains authoritative. Do not guess missing paths or assume a requested `response_mode:"references"` presentation succeeded. Verify referenced spill files exist before reading: explicit `rust-sitter-mcp flush` intentionally removes them. |
 | Retention `unavailable` with `analysis_incomplete` | The completed-analysis retention precondition was not met | Recover the incomplete advice cause first; do not treat a partial result as retained evidence. |
 | Retention `unavailable` with `response_budget` | Retention metadata or response did not fit | Raise `response_bytes` within bounds or use the full response mode; no retrievable handle is promised. |
 | Retention `unavailable` with `cancelled_before_publication` | Cancellation prevented publication | Retry only if the analysis is still requested. |
@@ -79,8 +80,16 @@ Retention defaults are one active record, 134,217,728 aggregate accounted bytes
 Preparations and in-flight readers occupy capacity; conservative reservation may
 refuse before final stored charges would fit. The cap is not allocated upfront or
 a repository-size, response-byte or process-RSS limit. Navigation does not extend
-expiry, there is no silent eviction or disk persistence, restart loses records,
-and explicit release removes only the process-local record. Since v0.5.0, retained
+expiry, there is no silent eviction, restart loses live records, and explicit
+release removes only the process-local record. `retain_snapshot:true`
+additionally persists the full captured canonical advice to greppable per-topic
+JSON plus `index.json` in server-owned XDG data (`$XDG_DATA_HOME/rust-sitter-mcp/analyses`, otherwise `~/.local/share/rust-sitter-mcp/analyses`); inspect
+`retention.spill.state` — `persisted` supplies `directory`, `index` and per-topic
+`files`, `unavailable` supplies a failure reason without pointers. Disk
+persistence is independent of `retention.state` and its bounded live handle;
+files survive handle expiry, release and restart until `rust-sitter-mcp flush`;
+paths refer to the server host and persisted evidence is historical, not fresh
+execution anchors. Since v0.5.0, retained
 `normalized_request.include_balanced` records the effective value (false for
 omission/false, true only for explicit opt-in) alongside server-version provenance.
 Historical pages preserve those memberships and never regroup the record.

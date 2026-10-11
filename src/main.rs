@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rmcp::{
     RoleServer,
     service::{RxJsonRpcMessage, TxJsonRpcMessage},
@@ -38,13 +38,25 @@ impl<T: Transport<RoleServer>> Transport<RoleServer> for CancelOnClose<T> {
 #[derive(Parser)]
 #[command(name = "rust-sitter-mcp", version = env!("VERSION_FULL"))]
 #[command(about = "Read-only structural Rust search over stdio MCP")]
-struct Cli {}
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Clear persisted analyses in the server-owned XDG data directory.
+    Flush,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use anyhow::Context;
     use rmcp::ServiceExt;
-    Cli::parse();
+    if let Some(Command::Flush) = Cli::parse().command {
+        println!("{}", rust_sitter_mcp::split::retained::flush()?);
+        return Ok(());
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
