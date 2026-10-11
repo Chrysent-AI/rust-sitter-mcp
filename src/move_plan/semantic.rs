@@ -813,19 +813,22 @@ fn evaluate(
         let proof = (|| {
             let final_anchor = mapped(&anchor, origins, new)?;
             refusal_class = "semantic_source_fact_unproved";
-            let before = fact(old, &anchor, need.attribute_range.is_some())?;
-            if old
+            let mut before = fact(old, &anchor, need.attribute_range.is_some())?;
+            let external = old
                 .external_origins
                 .values()
-                .any(|origin| origin == &before.declaration.crate_origin)
-                && before.classification != "inherent_function"
-            {
+                .any(|origin| origin == &before.declaration.crate_origin);
+            if external && !external_fact_supported(old, &anchor, &mut before) {
                 refusal_class = "external_fact_unsupported";
                 return None;
             }
             let before_assumed = old.assumed_declared_helpers.get();
             refusal_class = "semantic_final_fact_unproved";
-            let after = fact(new, &final_anchor, need.attribute_range.is_some())?;
+            let mut after = fact(new, &final_anchor, need.attribute_range.is_some())?;
+            if external && !external_fact_supported(new, &final_anchor, &mut after) {
+                refusal_class = "external_fact_unsupported";
+                return None;
+            }
             let assumed = before_assumed || new.assumed_declared_helpers.get();
             refusal_class = "semantic_identity_unproved";
             if before.classification != after.classification
@@ -892,6 +895,85 @@ fn evaluate(
     }
     *needs = retained;
     Ok(proofs)
+}
+
+// This gate is reached only for captured external declarations. In particular,
+// `type_or_constructor` alone cannot authorize a type path, pattern or variant.
+fn external_fact_supported(inputs: &Inputs, anchor: &SourceAnchor, fact: &mut Fact) -> bool {
+    match fact.classification {
+        "inherent_function" | "field" => true,
+        "type_or_constructor" => {
+            let supported = ra_ap_hir::attach_db(&inputs.db, || {
+                external_constructor(inputs, anchor).is_some()
+            });
+            if supported {
+                fact.fact_class = FactClass::GeneratedItems;
+            }
+            supported
+        }
+        _ => false,
+    }
+}
+
+fn external_constructor(inputs: &Inputs, anchor: &SourceAnchor) -> Option<()> {
+    let sema = Semantics::new(&inputs.db);
+    let root = sema.parse_guess_edition(*inputs.ids.get(&anchor.path)?);
+    let path = exact_path(root.syntax(), &anchor.range)?;
+    let parent = path.syntax().parent()?;
+    let tuple_call = if let Some(record) = ast::RecordExpr::cast(parent.clone()) {
+        if record.path()?.syntax() != path.syntax() {
+            return None;
+        }
+        false
+    } else {
+        let expr = ast::PathExpr::cast(parent)?;
+        let call = ast::CallExpr::cast(expr.syntax().parent()?)?;
+        if call.expr()?.syntax() != expr.syntax() {
+            return None;
+        }
+        true
+    };
+    let PathResolution::Def(ModuleDef::Adt(Adt::Struct(structure))) = sema.resolve_path(&path)?
+    else {
+        return None;
+    };
+    let module = ordinary_context(inputs, &sema, path.syntax())?;
+    let source = sema.source(structure)?;
+    // Written ADTs only, with the same conservative context gate as members.
+    source.file_id.file_id()?;
+    ordinary_context(inputs, &sema, source.value.syntax())?;
+    if source.value.generic_param_list().is_some()
+        || matches!(
+            source.value.field_list(),
+            Some(ast::FieldList::TupleFieldList(_))
+        ) != tuple_call
+        || !structure.is_visible_from(&inputs.db, module)
+        || !structure
+            .fields(&inputs.db)
+            .iter()
+            .all(|field| field.is_visible_from(&inputs.db, module))
+    {
+        return None;
+    }
+    // Conditional or provider-uncertain fields cannot establish a constructor's
+    // shape, including fields that the analyzer omitted under incomplete cfg.
+    for attr in source
+        .value
+        .syntax()
+        .descendants()
+        .filter_map(ast::Attr::cast)
+    {
+        if !context::active_binding_attr(
+            inputs,
+            &sema,
+            structure.module(&inputs.db),
+            &attr,
+            FactClass::GeneratedItems,
+        ) {
+            return None;
+        }
+    }
+    Some(())
 }
 
 struct Fact {

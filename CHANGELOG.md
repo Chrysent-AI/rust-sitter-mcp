@@ -58,6 +58,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Extend opt-in external evidence to accessible written named-field accesses,
+  struct literals and tuple-struct calls, preserving both-overlay declaration
+  and receiver identity in read-only `@external/` coordinates. Private, generic,
+  trait-associated, generated and context-unproved probes still refuse; ordinary
+  external type paths and enum variant paths remain unsupported.
+
 * Extend external library evidence to the complete bounded normal-dependency
   transitive source closure, including mixed path, cached registry and vendor
   origins. Preserve package-ID edges and distinct namespaces across both overlays;
@@ -70,7 +76,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Resolve with bounded independent copies in ephemeral server state, preserve
   renamed edges and distinct package versions, disclose original source identity
   and `provenance`, and refuse missing or ambiguous local packages. External
-  evidence remains read-only and inherent-method-only across both overlays.
+  evidence remains read-only across both overlays; supported proofs are bounded
+  inherent methods, written named fields and struct/tuple-struct constructors.
 
 * Clarify that compact response-byte budgets and canonical retained-allocation
   budgets are independent; raising `response_bytes` does not recover

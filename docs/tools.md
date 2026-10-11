@@ -532,7 +532,7 @@ original anchors and state in their consequence that the declared configuration
 was consulted; expand `diagnostic_count` to see full decision prose. Independent
 macro, access, collision, API, chain and repair blockers remain.
 
-### Opt-in external library method evidence
+### Opt-in external library evidence
 
 Set `external_path_dependencies:true` on `move_item` together with
 `resolve_semantic:true` and an explicit `semantic_configuration` for the admitted
@@ -682,12 +682,19 @@ exhaustion never produces a partial-success corpus. Captured dependency features
 come from Cargo; arbitrary caller cfg atoms are not copied into libraries.
 
 The same immutable corpus enters distinct library source roots in both pure RA
-resolution overlays. This opt-in proves only eligible concrete written inherent
-methods/functions on dependency types, with existing receiver identity,
+resolution overlays. This opt-in proves eligible concrete written inherent
+methods/functions, named-field accesses and direct struct/tuple-struct
+constructions on dependency types, with existing receiver identity,
 trait/generic exclusion, macro/provider and both-overlay access gates intact.
-External fields, nominal type/direct ADT constructor/variant facts are not discharged by this tier.
-Only actual successful both-overlay proofs count in `coverage.ra_resolved`.
-No compilation, build script or proc-macro execution is performed by the server.
+Ordinary external type paths, patterns, uncalled constructor values and
+enum-variant facts are not discharged by this tier; private, trait/generic,
+generated and context-unproved probes retain their actual source/final-fact or
+external-support refusals. Constructor admissions additionally require a written
+non-generic struct whose declared shape matches the written construction
+(including fields hidden by incomplete cfg) with struct and field accessibility
+at the use site. Only actual successful both-overlay proofs count in
+`coverage.ra_resolved`. No compilation, build script or proc-macro execution is
+performed by the server.
 
 Inspect additive `coverage.external_dependencies`: `complete`,
 `consulted_roots` (package ID/name/version, original source identity, provenance
@@ -738,8 +745,9 @@ Typed refusals include `EXTERNAL_DISCOVERY_FAILED`,
 `EXTERNAL_SOURCE_CHANGED`, `EXTERNAL_STATE_UNAVAILABLE`,
 `EXTERNAL_STATE_OVERLAP`, `EXTERNAL_NAMESPACE_CONFLICT`,
 `EXTERNAL_PACKAGE_UNAVAILABLE` and `EXTERNAL_PACKAGE_AMBIGUOUS`; normal cancellation
-and deadline refusals remain unchanged. An otherwise resolved non-method external
-fact retains its original decision with `external_fact_unsupported` refusal basis.
+and deadline refusals remain unchanged. An otherwise resolved external fact
+outside the supported method/field/direct-constructor set retains its original
+decision with `external_fact_unsupported` refusal basis.
 `EXTERNAL_PACKAGE_UNAVAILABLE` includes missing/malformed/mismatched package
 checksums or archive/checkout correspondence; Cargo may instead return
 `EXTERNAL_DISCOVERY_FAILED` while rejecting inconsistent locked/index/vendor

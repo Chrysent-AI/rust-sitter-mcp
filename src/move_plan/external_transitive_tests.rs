@@ -111,6 +111,14 @@ fn cached_package(
 }
 // Each origin exercises the same production metadata/capture/overlay boundary.
 fn fixture(origin: &str) -> (Fixture, Fixture, Fixture, Fixture, PathBuf, PathBuf) {
+    fixture_with_facts(origin, LEAF, "pub use leaf::Thing;\n", SELECTED)
+}
+fn fixture_with_facts(
+    origin: &str,
+    library: &str,
+    reexport: &str,
+    selected: &str,
+) -> (Fixture, Fixture, Fixture, Fixture, PathBuf, PathBuf) {
     let repo = Fixture::generate();
     let home = Fixture::empty();
     let state = Fixture::empty();
@@ -120,21 +128,21 @@ fn fixture(origin: &str) -> (Fixture, Fixture, Fixture, Fixture, PathBuf, PathBu
             "leaf/Cargo.toml",
             "[package]\nname='leaf-library'\nversion='1.0.0'\nedition='2024'\n",
         );
-        paths.write("leaf/src/lib.rs", LEAF);
+        paths.write("leaf/src/lib.rs", library);
         paths.write("bridge/Cargo.toml", "[package]\nname='bridge-library'\nversion='1.0.0'\nedition='2024'\n[dependencies]\nleaf={package='leaf-library',path='../leaf'}\n");
-        paths.write("bridge/src/lib.rs", "pub use leaf::Thing;\n");
+        paths.write("bridge/src/lib.rs", reexport);
         let bridge = paths.0.join("bridge");
         repo.write("Cargo.toml", &format!("[package]\nname='caller'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep={{package='bridge-library',path={:?}}}\n", bridge.canonicalize().unwrap().to_str().unwrap()));
         (bridge, paths.0.join("leaf"))
     } else {
         let vendor = origin == "vendor";
         let holder = if vendor { &repo } else { &home };
-        let leaf = cached_package(holder, "leaf-library", LEAF, "", json!([]), vendor);
+        let leaf = cached_package(holder, "leaf-library", library, "", json!([]), vendor);
         let deps = json!([{"name":"leaf","req":"=1.0.0","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal","registry":null,"package":"leaf-library"}]);
         let bridge = cached_package(
             holder,
             "bridge-library",
-            "pub use leaf::Thing;\n",
+            reexport,
             "[dependencies]\nleaf={package='leaf-library',version='=1.0.0'}\n",
             deps,
             vendor,
@@ -149,7 +157,7 @@ fn fixture(origin: &str) -> (Fixture, Fixture, Fixture, Fixture, PathBuf, PathBu
         }
         if origin == "mixed" {
             paths.write("bridge/Cargo.toml", "[package]\nname='bridge-library'\nversion='1.0.0'\nedition='2024'\n[dependencies]\nleaf={package='leaf-library',version='=1.0.0'}\n");
-            paths.write("bridge/src/lib.rs", "pub use leaf::Thing;\n");
+            paths.write("bridge/src/lib.rs", reexport);
             let bridge = paths.0.join("bridge");
             repo.write("Cargo.toml", &format!("[package]\nname='caller'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep={{package='bridge-library',path={:?}}}\n", bridge.canonicalize().unwrap().to_str().unwrap()));
             (bridge, leaf)
@@ -159,7 +167,7 @@ fn fixture(origin: &str) -> (Fixture, Fixture, Fixture, Fixture, PathBuf, PathBu
         }
     };
     repo.write("src/lib.rs", "mod source;\n");
-    repo.write("src/source.rs", &format!("{SELECTED}\n"));
+    repo.write("src/source.rs", &format!("{selected}\n"));
     lock(&repo, &home);
     (repo, home, state, paths, bridge, leaf)
 }
@@ -213,6 +221,39 @@ fn transitive_method_vertical_slices_are_applicable_and_compile_without_source_w
         assert!(!paths.0.join("target").exists());
     }
 }
+#[test]
+fn transitive_fields_and_constructors_keep_identity_for_every_source_origin() {
+    for origin in ["path", "registry", "vendor", "mixed"] {
+        let (repo, home, state, paths, _, _) = fixture_with_facts(
+            origin,
+            "pub struct Thing { pub number: u32 } pub struct Tuple(pub u32);\n",
+            "pub use leaf::{Thing, Tuple};\n",
+            "pub fn selected() -> u32 { let thing = dep::Thing { number: 7 }; let _ = dep::Tuple(7); let reference = &&thing; reference.number }",
+        );
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "move_plan::external::transitive_tests::transitive_worker",
+                "--nocapture",
+            ])
+            .env("TRANSITIVE_SOURCE_FIXTURE", &repo.0)
+            .env("TRANSITIVE_ORIGIN", origin)
+            .env("TRANSITIVE_FACTS", "fields_and_constructors")
+            .env("CARGO_HOME", &home.0)
+            .env("XDG_DATA_HOME", &state.0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{origin}\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(!paths.0.join("target").exists());
+    }
+}
+
 #[test]
 fn transitive_worker() {
     let Some(repo) = std::env::var_os("TRANSITIVE_SOURCE_FIXTURE") else {
@@ -291,9 +332,42 @@ fn transitive_worker() {
     let proofs = value["plan"]["binding_proofs"].as_array().unwrap();
     assert!(!proofs.is_empty());
     assert_eq!(value["coverage"]["ra_resolved"], proofs.len());
+    let fields = std::env::var_os("TRANSITIVE_FACTS").is_some();
+    if fields {
+        assert_eq!(proofs.len(), 3);
+        assert_eq!(
+            proofs
+                .iter()
+                .filter(|p| p["classification"] == "field")
+                .count(),
+            1
+        );
+        assert_eq!(
+            proofs
+                .iter()
+                .filter(|p| p["classification"] == "type_or_constructor")
+                .count(),
+            2
+        );
+        let names: BTreeSet<_> = proofs
+            .iter()
+            .map(|p| {
+                p["declaration"]["anchor"]["expected_text"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(names, BTreeSet::from(["number", "Thing", "Tuple"]));
+    }
+    assert_eq!(
+        value["plan"]["resolution_coverage"]["decisions"],
+        proofs.len()
+    );
     for proof in proofs {
         assert_eq!(proof["class"], "ra_resolved");
-        assert_eq!(proof["classification"], "inherent_function");
+        if !fields {
+            assert_eq!(proof["classification"], "inherent_function");
+        }
         assert_eq!(proof["declaration"], proof["final_declaration"]);
         assert!(
             proof["declaration"]["anchor"]["path"]
@@ -304,6 +378,19 @@ fn transitive_worker() {
         assert_eq!(proof["source_access"], true);
         assert_eq!(proof["final_access"], true);
         assert_eq!(proof["original_receiver"], proof["final_original_receiver"]);
+        assert_eq!(proof["adjusted_receiver"], proof["final_adjusted_receiver"]);
+        assert!(
+            proof["original_receiver"]["declaration"]["anchor"]["path"]
+                .as_str()
+                .unwrap()
+                .starts_with(roots[1]["namespace"].as_str().unwrap())
+        );
+        assert!(
+            proof["declaration"]["crate_origin"]
+                .as_str()
+                .unwrap()
+                .starts_with(roots[1]["package_id"].as_str().unwrap())
+        );
     }
     let advice = crate::engine::Engine::new(repo.clone()).unwrap().suggest_split(serde_json::from_value(json!({"repo_path":repo,"crate_root":"src/lib.rs","source_path":"src/source.rs","paths":["src"],"external_path_dependencies":true,"semantic_configuration":configuration(),"limits":{"time_budget_ms":30000}})).unwrap(), &AtomicBool::new(false));
     let advice = serde_json::to_value(advice).unwrap();
@@ -346,7 +433,8 @@ fn transitive_worker() {
         assert_eq!(&observe(root), captured);
     }
     println!(
-        "{origin}: transitive reexport both-overlay proof, roots=2 files/overlay=2 bytes/overlay={source_bytes}; default-off byte equivalence; patch/JSON match; independent cargo check passes; all caller/source/cache trees unchanged"
+        "{origin}: transitive reexport both-overlay proof, fields/constructors={fields}, proofs={} roots=2 files/overlay=2 bytes/overlay={source_bytes}; default-off byte equivalence; patch/JSON match; independent cargo check passes; all caller/source/cache trees unchanged",
+        proofs.len()
     );
     let flag = AtomicBool::new(false);
     let stale =
@@ -651,7 +739,7 @@ fn diamond_closures_deduplicate_ids_but_keep_transitive_versions_distinct() {
 #[test]
 fn blocked_external_plans_still_recheck_before_publishing_informational_proofs() {
     let (repo, home, _state, _paths, _, leaf) = fixture("path");
-    fs::write(leaf.join("src/lib.rs"), "pub struct Thing { pub number: u32 } impl Thing { pub fn new() -> Self { Self { number: 7 } } }\n").unwrap();
+    fs::write(leaf.join("src/lib.rs"), "pub struct Thing { number: u32 } impl Thing { pub fn new() -> Self { Self { number: 7 } } }\n").unwrap();
     repo.write(
         "src/source.rs",
         "pub fn selected() -> u32 { dep::Thing::new().number }\n",

@@ -57,8 +57,10 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   or opt-in captured path, locally cached registry or source-replaced
   libraries and their bounded transitive normal-dependency closure can discharge
   under `resolve_semantic`. Git dependencies,
-  trait/generic methods and external fields/direct ADT constructors remain
-  outside the external-library method tier.
+  trait/generic members and external facts outside the supported
+  method/field/direct-constructor set (ordinary type paths, patterns, uncalled
+  constructor values, type/variant facts) remain refused in the external-library
+  evidence tier.
 - **Trait methods and generic functions block.** `fact_attached` refuses trait-associated
   and generic declarations; only bounded concrete inherent facts are provable.
 - **Macro expansion is not modeled.** Any macro invocation in a moved body vetoes
