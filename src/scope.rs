@@ -570,7 +570,7 @@ impl Scope {
         }
         Ok(directory_identity)
     }
-    fn admits(&self, path: &Path) -> bool {
+    pub(crate) fn admits(&self, path: &Path) -> bool {
         self.paths
             .as_ref()
             .is_none_or(|paths| paths.iter().any(|p| p == "." || path.starts_with(p)))

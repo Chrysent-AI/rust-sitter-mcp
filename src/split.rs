@@ -356,6 +356,9 @@ pub struct GroupMembership {
 pub struct DraftEligibility {
     pub state: String,
     pub reasons: Vec<String>,
+    /// Advisory scope remedies; absent when no targeted hint applies.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hints: Vec<String>,
     pub membership_complete: bool,
     pub evidence_complete: bool,
 }
@@ -480,6 +483,7 @@ impl SuggestSplitEnvelope {
             draft_eligibility: DraftEligibility {
                 state: "no_draft".into(),
                 reasons: Vec::new(),
+                hints: Vec::new(),
                 membership_complete: false,
                 evidence_complete: false,
             },

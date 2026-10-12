@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add an advisory `suggest_split` parent-directory scope hint when destination
+  naming fails solely on `paths`/`globs` exclusions. Preserve existing reasons,
+  ignore/collision disclosures and unaffected response shapes; admission policy
+  remains unchanged.
+
 * Add default-off `external_path_dependencies` source consultation for direct
   out-of-tree path libraries, with offline locked Cargo discovery in an ephemeral
   server-owned Cargo home, immutable bounded capture, consulted-root/digest

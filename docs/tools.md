@@ -1662,6 +1662,28 @@ remains as the bounded-search exhaustion marker, accompanied by these causes.
 It is never evidence that the source is already modularized or has nothing to do.
 Structural `partition_outcome`, candidates and extraction payoff remain unchanged.
 
+An optional `draft_eligibility.hints` string array supplies targeted advisory
+recovery text. It is omitted, not an empty array, when no hint applies, preserving
+all unaffected response shapes. When no draft forms, `destination_scope_rejected`
+is present, and **every observed naming rejection** was the `paths` prefix/positive
+`globs` exclusion (no ignore/policy rejections, collisions or unsupported names),
+it contains exactly:
+
+```json
+["destination naming search was blocked by paths/globs; admit an existing parent directory (such as the source's parent) in paths and ensure globs include proposed sibling files"]
+```
+
+File-only `paths` cannot admit absent sibling files: add an existing parent
+directory to `paths`, not the absent filename. Positive `globs` must also include
+the proposed files; admitting a directory alone does not override them. The
+classification covers all naming attempts, including skips before an earlier
+group found a destination. Mixed rejection classes retain their existing reasons
+and warning counts without this remedy hint. Ignore-file exclusions, collisions,
+unsupported layouts and destination-bearing drafts do not receive the hint.
+The text reveals no caller path/glob values, grants no admission, changes no
+scope/ignore policy and promises no move applicability. This additive field
+retains full-advice schema 2 (and compact-manifest schema 1).
+
 Full draft/inspection group `warnings` separately report
 `no_credible_concept_name` when the selection lacks a supported shared name prefix.
 This is a bounded naming observation, not proof that no human concept exists:

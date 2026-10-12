@@ -714,6 +714,7 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     let warnings = alpha["warnings"].to_string();
     assert!(warnings.contains("destination_name_collision: 3"));
     assert!(warnings.contains("destination_scope_rejected: 1"));
+    assert!(result["draft_eligibility"].get("hints").is_none());
     // A parent's ordinary child formula, not the source's basename, determines the sibling parent.
     repo.write("src/lib.rs", "mod legacy;\n");
     repo.write(
@@ -735,6 +736,14 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     ]);
     let filtered = run(&repo, narrowed);
     assert!(filtered["drafts"].as_array().unwrap().is_empty());
+    let hints = filtered["draft_eligibility"]["hints"].as_array().unwrap();
+    assert_eq!(hints.len(), 1);
+    assert!(
+        hints[0]
+            .as_str()
+            .unwrap()
+            .contains("admit an existing parent directory")
+    );
     // Exhaust all deterministic base/suffix candidates for a two-item fallback.
     for i in 1..=99 {
         let stem = if i == 1 {
@@ -756,6 +765,7 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     assert!(reasons.contains(&json!("destination_name_collision")));
     assert!(reasons.contains(&json!("no_credible_concept_name")));
     assert!(!reasons.contains(&json!("destination_scope_rejected")));
+    assert!(exhausted["draft_eligibility"].get("hints").is_none());
 }
 #[test]
 fn incomplete_membership_and_wire_caps_never_leave_drafts_or_dangling_links() {

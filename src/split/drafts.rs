@@ -273,10 +273,26 @@ fn filename(request: &SuggestSplitRequest, prefix: Option<&str>) -> String {
 struct NamingSearch {
     destination: Option<ProposedDestination>,
     scope_rejections: usize,
+    scope_shape_rejections: usize,
     collisions: usize,
     unsupported_names: usize,
 }
 impl NamingSearch {
+    fn record_scope_hint(&self, result: &mut SuggestSplitEnvelope) {
+        if result.drafts.is_empty()
+            && self.scope_rejections != 0
+            && self.scope_shape_rejections == self.scope_rejections
+            && self.collisions == 0
+            && self.unsupported_names == 0
+            && result
+                .draft_eligibility
+                .reasons
+                .iter()
+                .any(|r| r == "destination_scope_rejected")
+        {
+            result.draft_eligibility.hints.push("destination naming search was blocked by paths/globs; admit an existing parent directory (such as the source's parent) in paths and ensure globs include proposed sibling files".into());
+        }
+    }
     fn warnings(&self) -> Vec<String> {
         let mut warnings = Vec::new();
         for (reason, count) in [
@@ -419,6 +435,8 @@ fn choose_destination(
             Ok(()) => {}
             Err(e) if e.code == "INVALID_DESTINATION" => {
                 outcome.scope_rejections += 1;
+                // The same immutable predicate gates admission before ignore/filesystem checks.
+                outcome.scope_shape_rejections += usize::from(!scope.admits(Path::new(&path)));
                 continue;
             }
             Err(e) if e.code == "DESTINATION_ALREADY_EXISTS" => {
@@ -445,6 +463,7 @@ fn make_draft(
     layout: &Layout<'_>,
     parent: &str,
     result: &mut SuggestSplitEnvelope,
+    naming: &mut NamingSearch,
 ) -> Result<Option<Draft>, DomainError> {
     let controls = layout.controls;
     let request = layout.request;
@@ -488,6 +507,10 @@ fn make_draft(
         } else {
             let base = filename(request, prefix.as_deref());
             let outcome = choose_destination(layout, parent, &base, &mut reserved)?;
+            naming.scope_rejections += outcome.scope_rejections;
+            naming.scope_shape_rejections += outcome.scope_shape_rejections;
+            naming.collisions += outcome.collisions;
+            naming.unsupported_names += outcome.unsupported_names;
             warnings.extend(outcome.warnings());
             if outcome.destination.is_none() {
                 outcome.record_failure(result);
@@ -768,22 +791,25 @@ pub(super) fn build(
         return Ok(());
     }
     let a = primary(result, controls)?;
-    let Some(first) = make_draft(a.clone(), false, &layout, parent, result)? else {
+    let mut naming = NamingSearch::default();
+    let Some(first) = make_draft(a.clone(), false, &layout, parent, result, &mut naming)? else {
         result
             .draft_eligibility
             .reasons
             .push("no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99".into());
+        naming.record_scope_hint(result);
         return Ok(());
     };
     publish_draft(result, first)?;
     if request.include_balanced.unwrap_or(false) {
         let b = balanced(result, controls)?;
         if a != b
-            && let Some(second) = make_draft(b, true, &layout, parent, result)?
+            && let Some(second) = make_draft(b, true, &layout, parent, result, &mut naming)?
         {
             publish_draft(result, second)?;
         }
     }
+    naming.record_scope_hint(result);
     result.counts.drafts = result.drafts.len();
     result.draft_eligibility.state = if result.drafts.is_empty() {
         "no_draft"
