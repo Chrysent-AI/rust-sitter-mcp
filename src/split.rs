@@ -359,6 +359,9 @@ pub struct DraftEligibility {
     /// Advisory scope remedies; absent when no targeted hint applies.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hints: Vec<String>,
+    /// Observed naming rejection counts when no destination-bearing draft forms.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub membership_complete: bool,
     pub evidence_complete: bool,
 }
@@ -484,6 +487,7 @@ impl SuggestSplitEnvelope {
                 state: "no_draft".into(),
                 reasons: Vec::new(),
                 hints: Vec::new(),
+                warnings: Vec::new(),
                 membership_complete: false,
                 evidence_complete: false,
             },

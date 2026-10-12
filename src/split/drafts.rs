@@ -274,11 +274,15 @@ struct NamingSearch {
     destination: Option<ProposedDestination>,
     scope_rejections: usize,
     scope_shape_rejections: usize,
+    ignore_policy_rejections: usize,
     collisions: usize,
     unsupported_names: usize,
 }
 impl NamingSearch {
-    fn record_scope_hint(&self, result: &mut SuggestSplitEnvelope) {
+    fn record_disclosure(&self, result: &mut SuggestSplitEnvelope) {
+        if result.drafts.is_empty() {
+            result.draft_eligibility.warnings = self.warnings();
+        }
         if result.drafts.is_empty()
             && self.scope_rejections != 0
             && self.scope_shape_rejections == self.scope_rejections
@@ -304,7 +308,20 @@ impl NamingSearch {
             ),
         ] {
             if count != 0 {
-                warnings.push(format!("{reason}: {count} candidate names skipped in base or suffix _2 through _99; naming advice only, not absence of useful extraction"));
+                let mut warning = format!(
+                    "{reason}: {count} candidate names skipped in base or suffix _2 through _99; naming advice only, not absence of useful extraction"
+                );
+                if reason == "destination_scope_rejected" {
+                    for (class, count) in [
+                        ("paths_globs_excluded", self.scope_shape_rejections),
+                        ("ignore_policy_excluded", self.ignore_policy_rejections),
+                    ] {
+                        if count != 0 {
+                            warning.push_str(&format!("; {class}: {count}"));
+                        }
+                    }
+                }
+                warnings.push(warning);
             }
         }
         warnings
@@ -435,8 +452,12 @@ fn choose_destination(
             Ok(()) => {}
             Err(e) if e.code == "INVALID_DESTINATION" => {
                 outcome.scope_rejections += 1;
-                // The same immutable predicate gates admission before ignore/filesystem checks.
-                outcome.scope_shape_rejections += usize::from(!scope.admits(Path::new(&path)));
+                // The immutable predicate gates admission before ignore/filesystem policy.
+                if scope.admits(Path::new(&path)) {
+                    outcome.ignore_policy_rejections += 1;
+                } else {
+                    outcome.scope_shape_rejections += 1;
+                }
                 continue;
             }
             Err(e) if e.code == "DESTINATION_ALREADY_EXISTS" => {
@@ -509,6 +530,7 @@ fn make_draft(
             let outcome = choose_destination(layout, parent, &base, &mut reserved)?;
             naming.scope_rejections += outcome.scope_rejections;
             naming.scope_shape_rejections += outcome.scope_shape_rejections;
+            naming.ignore_policy_rejections += outcome.ignore_policy_rejections;
             naming.collisions += outcome.collisions;
             naming.unsupported_names += outcome.unsupported_names;
             warnings.extend(outcome.warnings());
@@ -797,7 +819,7 @@ pub(super) fn build(
             .draft_eligibility
             .reasons
             .push("no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99".into());
-        naming.record_scope_hint(result);
+        naming.record_disclosure(result);
         return Ok(());
     };
     publish_draft(result, first)?;
@@ -809,7 +831,7 @@ pub(super) fn build(
             publish_draft(result, second)?;
         }
     }
-    naming.record_scope_hint(result);
+    naming.record_disclosure(result);
     result.counts.drafts = result.drafts.len();
     result.draft_eligibility.state = if result.drafts.is_empty() {
         "no_draft"

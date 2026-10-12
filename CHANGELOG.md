@@ -63,6 +63,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Disclose observed `paths`/`globs` versus ignore/policy rejection counts in
+  `suggest_split` naming warnings; preserve collision counts and retain naming
+  exhaustion warnings in optional `draft_eligibility.warnings`. Admission policy,
+  reason IDs and the parent-directory recovery hint remain unchanged.
+
 * Extend opt-in external evidence to accessible written named-field accesses,
   struct literals and tuple-struct calls, preserving both-overlay declaration
   and receiver identity in read-only `@external/` coordinates. Private, generic,

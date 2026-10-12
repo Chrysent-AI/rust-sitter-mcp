@@ -1662,6 +1662,35 @@ remains as the bounded-search exhaustion marker, accompanied by these causes.
 It is never evidence that the source is already modularized or has nothing to do.
 Structural `partition_outcome`, candidates and extraction payoff remain unchanged.
 
+The existing `destination_scope_rejected: N` warning keeps its total and text,
+then appends observed sub-classes in stable order as semicolon-delimited
+`class: count` pairs:
+
+```text
+destination_scope_rejected: 99 candidate names skipped in base or suffix _2 through _99; naming advice only, not absence of useful extraction; paths_globs_excluded: 98; ignore_policy_excluded: 1
+```
+
+`paths_globs_excluded` counts candidates outside the `paths` prefix/positive
+`globs` predicate. `ignore_policy_excluded` counts candidates that pass that
+predicate but are rejected by subsequent ignore/filesystem policy checks; it
+must not be interpreted as proof that a particular ignore file is responsible.
+Zero-count classes are omitted; the observed sub-class counts sum to the unchanged
+scope-rejection total. `destination_name_collision: M` stays a separate, unchanged
+warning for observed occupied paths or conflicting layouts/bindings. No dominant
+cause is guessed, and no caller paths, glob values or ignore-file contents appear
+in these disclosures.
+
+Successful draft/inspection groups retain their per-search warnings. When no
+destination-bearing draft forms, optional `draft_eligibility.warnings` preserves
+these naming warnings with counts aggregated across all attempted groups, including
+skips before an earlier group found a destination. Compact manifests carry the
+same array under `coverage.draft_eligibility.warnings`. The array is omitted when
+empty or when a destination-bearing draft exists, preserving unaffected response
+shapes. Eligibility reason IDs continue to describe failed searches; warning counts
+may additionally include earlier successful searches. Scope hints remain separate
+recovery advice, not a duplicate count disclosure. Full-advice schema 2 and
+compact-manifest schema 1 remain unchanged.
+
 An optional `draft_eligibility.hints` string array supplies targeted advisory
 recovery text. It is omitted, not an empty array, when no hint applies, preserving
 all unaffected response shapes. When no draft forms, `destination_scope_rejected`
@@ -1697,7 +1726,8 @@ concepts. Supply a caller-chosen explicit destination in `move_item` after revie
 supported prefix, `draft_eligibility.reasons` also includes
 `no_credible_concept_name`. Successful groups disclose skipped scope/collision/
 unsupported candidate counts in `warnings`; naming exhaustion preserves every
-observed cause in eligibility reasons. Destination withholding for incomplete
+observed failed-search cause in eligibility reasons and observed counts in
+`draft_eligibility.warnings`. Destination withholding for incomplete
 selections or dominant indivisible items remains unchanged. None of these naming
 outcomes means no useful extraction or establishes move applicability.
 

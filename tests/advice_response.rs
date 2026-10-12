@@ -459,7 +459,11 @@ fn exact_file_scope_still_honestly_reports_unadmitted_sibling_destinations() {
     );
     assert_eq!(result["error"], Value::Null);
     assert_eq!(result["draft_eligibility"]["hints"], json!([SCOPE_HINT]));
-    assert_eq!(result["draft_eligibility"].as_object().unwrap().len(), 5);
+    assert_eq!(
+        result["draft_eligibility"]["warnings"],
+        json!([scope_warning(99, 0)])
+    );
+    assert_eq!(result["draft_eligibility"].as_object().unwrap().len(), 6);
     let wire = json!({"content":[{"type":"text","text":result.to_string()}],
         "structuredContent":result,"isError":false})
     .to_string()
@@ -489,7 +493,27 @@ const NAMED_CORE: &str = "fn retained() {}\nfn packet_read() { packet_write(); }
 
 fn assert_no_scope_hint(result: &Value) {
     assert!(result["draft_eligibility"].get("hints").is_none());
-    assert_eq!(result["draft_eligibility"].as_object().unwrap().len(), 4);
+    assert_eq!(
+        result["draft_eligibility"].as_object().unwrap().len(),
+        4 + usize::from(result["draft_eligibility"].get("warnings").is_some())
+    );
+}
+
+fn naming_warning(reason: &str, count: usize) -> String {
+    format!(
+        "{reason}: {count} candidate names skipped in base or suffix _2 through _99; naming advice only, not absence of useful extraction"
+    )
+}
+
+fn scope_warning(paths_globs: usize, ignore_policy: usize) -> String {
+    let mut warning = naming_warning("destination_scope_rejected", paths_globs + ignore_policy);
+    if paths_globs != 0 {
+        warning.push_str(&format!("; paths_globs_excluded: {paths_globs}"));
+    }
+    if ignore_policy != 0 {
+        warning.push_str(&format!("; ignore_policy_excluded: {ignore_policy}"));
+    }
+    warning
 }
 
 #[test]
@@ -503,7 +527,14 @@ fn naming_prefix_and_collision_suffix_keep_success_and_disclose_real_collision()
     );
     assert_eq!(plain["drafts"][0]["groups"][1]["warnings"], json!([]));
     assert_no_scope_hint(&plain);
+    assert!(plain["draft_eligibility"].get("warnings").is_none());
     assert_naming_is_not_no_work(&plain);
+    let mut explicit_off = request(&repo);
+    explicit_off["include_balanced"] = json!(false);
+    assert_eq!(
+        serde_json::to_vec(&plain).unwrap(),
+        serde_json::to_vec(&client.call("suggest_split", explicit_off)).unwrap()
+    );
     repo.write("cases/advice/packet.rs", "// occupied\n");
     let collision = client.call("suggest_split", request(&repo));
     assert_eq!(
@@ -514,6 +545,11 @@ fn naming_prefix_and_collision_suffix_keep_success_and_disclose_real_collision()
     assert!(warnings.contains("destination_name_collision: 1"));
     assert!(!warnings.contains("destination_scope_rejected"));
     assert!(!warnings.contains("no_credible_concept_name"));
+    assert_eq!(
+        collision["drafts"][0]["groups"][1]["warnings"],
+        json!([naming_warning("destination_name_collision", 1)])
+    );
+    assert!(collision["draft_eligibility"].get("warnings").is_none());
     assert_no_scope_hint(&collision);
     assert_naming_is_not_no_work(&collision);
 }
@@ -533,6 +569,10 @@ fn naming_exhaustion_distinguishes_collision_scope_and_mixed_causes() {
         ])
     );
     assert_eq!(rejected["draft_eligibility"]["hints"], json!([SCOPE_HINT]));
+    assert_eq!(
+        rejected["draft_eligibility"]["warnings"],
+        json!([scope_warning(99, 0)])
+    );
     assert_naming_is_not_no_work(&rejected);
     repo.write("cases/advice/packet.rs", "// occupied\n");
     // Only this candidate is in scope, and it really exists; the rest are excluded.
@@ -544,6 +584,13 @@ fn naming_exhaustion_distinguishes_collision_scope_and_mixed_causes() {
             "destination_scope_rejected",
             "destination_name_collision",
             "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+        ])
+    );
+    assert_eq!(
+        mixed["draft_eligibility"]["warnings"],
+        json!([
+            scope_warning(98, 0),
+            naming_warning("destination_name_collision", 1)
         ])
     );
     assert_no_scope_hint(&mixed);
@@ -559,6 +606,10 @@ fn naming_exhaustion_distinguishes_collision_scope_and_mixed_causes() {
             "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
         ])
     );
+    assert_eq!(
+        exhausted["draft_eligibility"]["warnings"],
+        json!([naming_warning("destination_name_collision", 99)])
+    );
     assert_no_scope_hint(&exhausted);
     assert_naming_is_not_no_work(&exhausted);
 }
@@ -570,14 +621,32 @@ fn glob_scope_exclusion_hint_fits_the_small_wire_budget_without_echoing_filters(
     let mut args = request(&repo);
     args["globs"] = json!(["cases/advice/lib.rs"]);
     args["limits"] = json!({"response_bytes":65536,"text_bytes":0});
-    let result = client.call("suggest_split", args);
+    let result = client.call("suggest_split", args.clone());
     assert_eq!(result["status"], "complete");
     assert_eq!(result["draft_eligibility"]["hints"], json!([SCOPE_HINT]));
+    assert_eq!(
+        result["draft_eligibility"]["warnings"],
+        json!([scope_warning(99, 0)])
+    );
     assert_eq!(result["drafts"], json!([]));
     assert_eq!(result["schema_version"], 2);
     assert_eq!(result["truncation_reasons"], json!([]));
     let wire = json!({"content":[{"type":"text","text":result.to_string()}],
         "structuredContent":result,"isError":false})
+    .to_string()
+    .len()
+        + 4096;
+    assert!(wire <= 65536);
+    args["response_mode"] = json!("compact");
+    let compact = client.call("suggest_split", args);
+    assert_eq!(compact["schema_version"], 1);
+    assert_eq!(compact["manifest_complete"], true);
+    assert_eq!(
+        compact["coverage"]["draft_eligibility"],
+        result["draft_eligibility"]
+    );
+    let wire = json!({"content":[{"type":"text","text":compact.to_string()}],
+        "structuredContent":compact,"isError":false})
     .to_string()
     .len()
         + 4096;
@@ -600,6 +669,10 @@ fn ignore_and_mixed_ignore_scope_exhaustion_do_not_offer_the_parent_remedy() {
             "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
         ])
     );
+    assert_eq!(
+        ignored["draft_eligibility"]["warnings"],
+        json!([scope_warning(0, 99)])
+    );
     assert_no_scope_hint(&ignored);
     let mut args = request(&repo);
     // The base is admitted by the glob but ignored; all 98 suffixes fail the glob.
@@ -607,10 +680,56 @@ fn ignore_and_mixed_ignore_scope_exhaustion_do_not_offer_the_parent_remedy() {
     let mixed = client.call("suggest_split", args);
     assert_eq!(mixed["status"], "complete");
     assert_eq!(mixed["drafts"], json!([]));
-    assert_eq!(mixed["draft_eligibility"], ignored["draft_eligibility"]);
+    assert_eq!(
+        mixed["draft_eligibility"]["reasons"],
+        ignored["draft_eligibility"]["reasons"]
+    );
+    assert_eq!(
+        mixed["draft_eligibility"]["warnings"],
+        json!([scope_warning(98, 1)])
+    );
     assert_no_scope_hint(&mixed);
     assert_naming_is_not_no_work(&ignored);
     assert_naming_is_not_no_work(&mixed);
+    assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
+fn naming_exhaustion_discloses_scope_ignore_and_collision_without_echoing_policy() {
+    let repo = fixture(NAMED_CORE);
+    repo.write(".gitignore", "cases/advice/packet*.rs\n");
+    repo.write(
+        "cases/advice/lib.rs",
+        &format!("{NAMED_CORE}const packet_2: u8 = 0;\n"),
+    );
+    let before = observe(&repo.0);
+    let mut args = request(&repo);
+    args["globs"] = json!([
+        "cases/advice/lib.rs",
+        "cases/advice/packet.rs",
+        "cases/advice/packet_2.rs"
+    ]);
+    let mut client = Client::new();
+    let result = client.call("suggest_split", args);
+    assert_eq!(result["status"], "complete");
+    assert_eq!(result["drafts"], json!([]));
+    assert_eq!(
+        result["draft_eligibility"]["warnings"],
+        json!([
+            scope_warning(97, 1),
+            naming_warning("destination_name_collision", 1)
+        ])
+    );
+    assert_eq!(
+        result["draft_eligibility"]["reasons"],
+        json!([
+            "destination_scope_rejected",
+            "destination_name_collision",
+            "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
+        ])
+    );
+    assert_no_scope_hint(&result);
+    assert_naming_is_not_no_work(&result);
     assert_eq!(observe(&repo.0), before);
 }
 
@@ -642,6 +761,17 @@ fn earlier_group_ignore_or_collision_skips_suppress_a_later_scope_remedy() {
                 "no_admitted_nonconflicting_name_in_base_or_suffix_2_through_99"
             ])
         );
+        assert_eq!(
+            result["draft_eligibility"]["warnings"],
+            if ignored {
+                json!([scope_warning(99, 1)])
+            } else {
+                json!([
+                    scope_warning(99, 0),
+                    naming_warning("destination_name_collision", 1)
+                ])
+            }
+        );
         // The second group alone is all-prefix exclusion; the whole search is not.
         assert_no_scope_hint(&result);
     }
@@ -666,6 +796,7 @@ fn drafted_primary_has_no_scope_hint_when_balanced_names_are_excluded() {
             .contains(&json!("destination_scope_rejected"))
     );
     assert_no_scope_hint(&result);
+    assert!(result["draft_eligibility"].get("warnings").is_none());
 }
 
 #[test]

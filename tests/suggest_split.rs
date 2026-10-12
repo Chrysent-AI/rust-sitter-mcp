@@ -714,7 +714,10 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     let warnings = alpha["warnings"].to_string();
     assert!(warnings.contains("destination_name_collision: 3"));
     assert!(warnings.contains("destination_scope_rejected: 1"));
+    assert!(warnings.contains("ignore_policy_excluded: 1"));
+    assert!(!warnings.contains("paths_globs_excluded"));
     assert!(result["draft_eligibility"].get("hints").is_none());
+    assert!(result["draft_eligibility"].get("warnings").is_none());
     // A parent's ordinary child formula, not the source's basename, determines the sibling parent.
     repo.write("src/lib.rs", "mod legacy;\n");
     repo.write(
@@ -736,6 +739,10 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     ]);
     let filtered = run(&repo, narrowed);
     assert!(filtered["drafts"].as_array().unwrap().is_empty());
+    let warnings = filtered["draft_eligibility"]["warnings"].to_string();
+    assert!(warnings.contains("destination_scope_rejected: 99"));
+    assert!(warnings.contains("paths_globs_excluded: 99"));
+    assert!(!warnings.contains("ignore_policy_excluded"));
     let hints = filtered["draft_eligibility"]["hints"].as_array().unwrap();
     assert_eq!(hints.len(), 1);
     assert!(
@@ -766,6 +773,11 @@ fn admission_parent_formula_suffix_probing_and_exhaustion() {
     assert!(reasons.contains(&json!("no_credible_concept_name")));
     assert!(!reasons.contains(&json!("destination_scope_rejected")));
     assert!(exhausted["draft_eligibility"].get("hints").is_none());
+    assert!(
+        exhausted["draft_eligibility"]["warnings"]
+            .to_string()
+            .contains("destination_name_collision: 99")
+    );
 }
 #[test]
 fn incomplete_membership_and_wire_caps_never_leave_drafts_or_dangling_links() {
