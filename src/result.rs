@@ -257,6 +257,8 @@ pub struct Coverage {
     pub scope_exhaustive: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_dependencies: Option<crate::move_plan::external::Coverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sysroot_sources: Option<crate::move_plan::sysroot::Coverage>,
 }
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]

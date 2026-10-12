@@ -766,6 +766,164 @@ inputs. Neither case publishes proofs or move artifacts. Missing unreadable file
 and unsafe forms retain their existing unreadable/root/corpus refusal codes.
 Correct the input/scope and re-plan; no override admits an incomplete corpus.
 
+### Opt-in installed sysroot evidence
+
+`move_item` accepts the separate, default-off `sysroot_sources:true` flag. It
+requires `resolve_semantic:true` and an explicit valid caller
+`semantic_configuration`; missing prerequisites return field-specific
+`INVALID_PARAMS` even for an empty move list. Omission or false does no sysroot
+identification, capture or resolution and adds no sysroot response fields.
+`external_path_dependencies` is unchanged and does not imply this flag.
+`suggest_split` and exported inactive scaffolds do not enable it. Add these
+options explicitly to the reviewed ordinary move request (the roots here remain
+caller roots, not manually supplied sysroot files):
+
+```json
+{
+  "resolve_semantic": true,
+  "sysroot_sources": true,
+  "semantic_configuration": {
+    "crates": [{
+      "name": "caller", "root_file": "src/lib.rs", "edition": "2024",
+      "features": [], "cfg": [], "dependencies": []
+    }]
+  },
+  "limits": {"time_budget_ms": 300000}
+}
+```
+
+The initial audited profile is **official rustup stable 1.97.1**, compiler commit
+`8bab26f4f68e0e26f0bb7960be334d5b520ea452`, host **aarch64-apple-darwin**, with
+installed `rust-src`. Other compiler versions, hosts, custom-built libraries and
+installation layouts refuse; this is not a Linux or cross-target support claim.
+Selection uses the server's `RUSTUP_TOOLCHAIN`, defaulting to `stable`, not the
+caller's project override. A `rustc` on an absolute server PATH outside the caller
+is queried from `/` with a scrubbed environment, selected `RUSTUP_HOME`, and
+`RUSTUP_AUTO_INSTALL=0`. Only identification commands run: `-vV`, `--print
+sysroot`, and `-Z unstable-options --print cfg` (the latter uses
+`RUSTC_BOOTSTRAP=1` solely to expose internal identification atoms). No caller or
+library compilation, build script, procedural macro, installation or download
+runs. Prepare the selected installation and matching sources outside the server.
+
+Assurance is explicitly **trusted local rustup installation, without independent
+release authentication**. The compiler release/commit/host, conventional selected
+toolchain, installed `components`, `multirust-channel-manifest.toml` compiler and
+source release claims, and exact library-file membership in `manifest-rust-src`
+are bound to the captured bytes and analyzer identity. A SHA-256 `corpus_digest`
+identifies this evidence; it is not a signature or independent proof that the
+sources match a compiler release. Modified or inconsistent receipts refuse.
+
+The complete raw `lib/rustlib/src/rust/library` boundary is captured in memory,
+including manifests and binary inputs, without following links. Only UTF-8 text
+is staged in the immutable virtual source root `@sysroot/0/library/`; non-UTF-8
+Rust files refuse and raw-only binary files cannot supply Rust/include-string
+facts. The exact finite graph has 13 library roots: core, alloc, std,
+compiler_builtins, two workspace shims, panic_abort, unwind, std_detect, and the
+bundled cfg-if, libc, hashbrown and rustc-demangle libraries. Reviewed manifest
+hashes pin this graph recipe, including editions, features and aliases. Literal
+module/path/include closure stays within captured bytes; unresolved, competing,
+dynamic or escaping routes refuse, with no live fallback. Dev/build-only and
+inactive optional edges are not admitted source-analysis dependencies. No cache
+or sysroot-specific server state is created, and these evidence coordinates
+never authorize selection, destinations, rewrites or caller-consumer scans.
+
+The disclosed **source-analysis recipe is not binary-build equivalence**. It
+uses complete compiler identification cfg and explicitly enumerated ON/OFF facts
+per sysroot crate: audited manifest features (including `optimize_for_size` OFF),
+`no_global_oom_handling` OFF, fixed-host build-script formulas, and finite internal
+non-test/non-doc controls. Absent values in finite complete identification domains
+are individually disclosed as OFF; arbitrary absent atoms remain unknown. Each
+`cfg_recipe` row names crate/key/value, enabled state, evidence and consequence.
+Caller features/cfg never become sysroot facts, and caller/external unlisted atoms
+remain unknown. Compiler-identified ON values such as `ub_checks` and
+`overflow_checks` cannot be overwritten by an OFF recipe; the analyzer options,
+admission map and per-atom disclosure must agree or capture refuses. Unknown
+attributes refuse: the finite compiler-provider table,
+root-only controls, exact String lang identity and actual builtin-derive providers
+are audited, not granted a wildcard `rustc_*` exemption.
+
+The verified application probe is:
+
+```rust
+pub fn selected() { let mut s = std::string::String::new(); s.push_str("x"); }
+```
+
+Moving these exact function bytes to a new sibling can publish two real
+`ra_resolved` inherent-function proofs, for written `String::new` and
+`String::push_str` in captured `alloc/src/string.rs`. Original/final declarations,
+concrete original/adjusted receiver identities and positive access must agree
+across the assembler's actual whole batch. No prelude/helper assertion or other
+waiver is implied. Source presence or matching spelling alone never proves a
+fact. Eligible named fields and direct non-generic struct/tuple constructions use
+the existing strict fact gate, but no additional installed positive category is
+claimed by this first profile demonstration. Ordinary sysroot type/variant paths,
+trait dispatch, generic functions, unsupported inference/substitutions and
+macro-generated members remain refused. `.iter()`, `.push()` and `.ok()` are not
+a promised allowlist. `format!`, `vec!` and other independent caller macro walls
+remain intact.
+
+A bounded sysroot-only namespace audit substitutes written same-crate declarative
+macro tokens and accepts only complete trait-impl-only output, with admitted
+attributes and no inherent impl/import/module output: 4,096 significant tokens
+and nesting 32 for definition, invocation and output. It admits surrounding
+written-fact context, **not generated members or trait facts**. Reached
+`sysroot_module_macro` and `sysroot_macro_definition` evaluations include written
+anchors at both revisions. Failed individual probes retain anchored
+`semantic_source_fact_unproved`, `semantic_final_fact_unproved`,
+`semantic_identity_unproved` or `sysroot_fact_unsupported` reasons and their
+reached context refusals. Caller/external namespace and attribute gates do not
+acquire this admission.
+
+Inspect mandatory `coverage.sysroot_sources`: `complete`, `stage`, `compiler`,
+`compiler_executable`, `selection`, `toolchain`, `source_root`, `component_release`,
+`identity_inputs`, `assurance`, `analyzer`, `request_deadline_ms`, `consulted_roots`,
+`configuration`, `graph`, `cfg_recipe`, `corpus_digest`, `freshness`, `omissions`
+and `capture_usage`. Only captured/staged roots appear, never discovery-only
+candidates. Capture success with zero proofs is not resolution success. Both
+pure overlays receive the same captured source bytes/graph; per-proof coverage
+retains digests/configuration while reached contexts are shared once in the
+batch's `resolution_coverage` rather than repeated per occurrence.
+
+Sysroot quotas are separate from caller/external capture but share the request
+deadline: at most `min(max_files,20000)` raw files/entries plus identity inputs,
+8 MiB per input, `min(max_source_bytes,128 MiB)` captured bytes plus identity
+bytes, enumeration/route depth 32, 20,000 route edges, 32 composite crates and 32
+dependencies per crate (at most 1,024 graph edges). Identification output is capped
+at 64 KiB per stream per subprocess. Publication comparison has the same bounded
+raw/identity allowance separately and discloses its actual charges. Usage includes
+capture/comparison entries/files/bytes, identity input files/bytes, retained
+identification/comparison stdout/stderr bytes and subprocess counts, graph/route
+edges, raw-only file counts, `source_files_per_overlay`, `source_bytes_per_overlay`
+and `overlays_materialized`. The last count is actual completed materializations;
+per-overlay totals describe the staged text supplied to each completed overlay,
+not heap/RSS or whole-installation size. Failure retains partial usage and the
+stopping stage, but no usable corpus digest. The measured installed boundary has
+3,483 raw files / 70,378,227 bytes and 3,473 UTF-8 entries / 70,349,623 bytes per
+overlay, plus three bounded component-identity inputs. A fresh debug-profile
+request in local testing takes approximately three minutes; use the existing
+`limits.time_budget_ms:300000` when needed. The default remains 60,000 ms; no
+production latency or cold-disk percentile is promised.
+
+Before publication the server re-identifies compiler/toolchain/cfg, rereads local
+component claims, and compares all captured bytes, file/directory identities and
+membership. Successful `freshness:"observationally_unchanged"` is not atomic or
+application-time freshness. Changed/interrupted evidence withholds every artifact,
+all composite resolution records/coverage and real/assumed resolution counters;
+`integrity.semantic` may still say `resolution_performed` because queries ran.
+Mandatory capture disclosure survives response fitting; if a complete audit cannot
+fit, no shortened batch or patch is applicable.
+
+Discovery/capture typed refusals are `SYSROOT_TOOLCHAIN_UNAVAILABLE`,
+`SYSROOT_SOURCES_UNAVAILABLE`, `SYSROOT_IDENTITY_AMBIGUOUS`,
+`SYSROOT_IDENTITY_UNSUPPORTED`, `SYSROOT_LAYOUT_UNSUPPORTED`,
+`SYSROOT_CONFIGURATION_UNSUPPORTED`, `SYSROOT_INPUT_UNSAFE`,
+`SYSROOT_INPUT_UNREADABLE`, `SYSROOT_CAPTURE_EXHAUSTED`, `SYSROOT_GRAPH_EXHAUSTED`,
+`SYSROOT_NAMESPACE_CONFLICT`, `SYSROOT_STATE_OVERLAP` and `SYSROOT_SOURCE_CHANGED`.
+Normal cancellation/deadline and response-budget refusals remain unchanged.
+Missing sources require preparation outside the server; unsupported profiles or
+facts cannot be admitted by an override. Correct the identified inputs or retain
+the selected code, then re-plan without narrowing away required caller evidence.
+
 ### Opt-in bounded resolution
 
 `resolve_semantic` defaults to **false**. Omission or false leaves

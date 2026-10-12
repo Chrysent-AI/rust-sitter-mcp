@@ -60,6 +60,14 @@ pub(super) fn record(
         return;
     };
     let anchor = declaration.anchor;
+    let basis = if declaration.crate_origin.starts_with("sysroot:") {
+        fact_class.basis().replace(
+            "no expansion",
+            "bounded sysroot trait-only namespace footprint audit",
+        )
+    } else {
+        fact_class.basis().into()
+    };
     inputs.context.borrow_mut().insert(
         (
             anchor.path.clone(),
@@ -73,7 +81,7 @@ pub(super) fn record(
             anchor,
             kind: outcome.0.into(),
             fact_class: fact_class.name().into(),
-            basis: fact_class.basis().into(),
+            basis,
             status: outcome.1.into(),
             value: outcome.2,
             reason: outcome.3.into(),
@@ -155,6 +163,7 @@ fn check_attr(
     // Only direct written type attributes qualify, never attributes on imports,
     // modules, functions, macro definitions/invocations or cfg_attr payloads.
     let assumed = outcome == Err("unsupported_attribute")
+        && super::sysroot_context::crate_name(inputs, sema, module, attr.syntax()).is_none()
         && inputs.assume_declared_helpers
         && fact_class == FactClass::NominalIdentity
         && attr
@@ -227,6 +236,11 @@ fn safe_meta(
     let (fact_class, require_active) = admission;
     if depth > 32 {
         return Err("attribute_depth_limit");
+    }
+    if !matches!(meta, ast::Meta::CfgMeta(_) | ast::Meta::CfgAttrMeta(_))
+        && let Some(outcome) = super::sysroot_context::metadata(inputs, sema, module, meta)
+    {
+        return outcome;
     }
     match meta {
         ast::Meta::CfgMeta(cfg) => {
@@ -451,31 +465,47 @@ fn predicate(
     fact_class: FactClass,
     depth: usize,
 ) -> Result<bool, &'static str> {
-    items::cfg::predicate(
-        pred,
-        &|key, value| {
-            config.cfg.iter().any(|c| c.key == key && &c.value == value)
-                || (key == "feature" && value.as_ref().is_some_and(|v| config.features.contains(v)))
-        },
-        &mut |pred, outcome| {
-            record(
-                inputs,
-                sema,
-                module,
-                pred.syntax(),
-                fact_class,
-                (
-                    "cfg_predicate",
-                    if outcome.is_ok() {
-                        "evaluated"
-                    } else {
-                        "skipped"
-                    },
-                    outcome.ok(),
-                    outcome.err().unwrap_or("declared_configuration"),
-                ),
-            );
-        },
-        depth,
-    )
+    let mut observe = |pred: &ast::CfgPredicate, outcome: Result<bool, &'static str>| {
+        record(
+            inputs,
+            sema,
+            module,
+            pred.syntax(),
+            fact_class,
+            (
+                "cfg_predicate",
+                if outcome.is_ok() {
+                    "evaluated"
+                } else {
+                    "skipped"
+                },
+                outcome.ok(),
+                outcome.err().unwrap_or("declared_configuration"),
+            ),
+        );
+    };
+    if let Some(name) = super::sysroot_context::crate_name(inputs, sema, module, pred.syntax()) {
+        super::super::sysroot::predicate(
+            pred,
+            &|key, value| {
+                inputs
+                    .sysroot
+                    .as_ref()
+                    .and_then(|profile| profile.value(name, key, value))
+            },
+            &mut observe,
+            depth,
+        )
+    } else {
+        items::cfg::predicate(
+            pred,
+            &|key, value| {
+                config.cfg.iter().any(|c| c.key == key && &c.value == value)
+                    || (key == "feature"
+                        && value.as_ref().is_some_and(|v| config.features.contains(v)))
+            },
+            &mut observe,
+            depth,
+        )
+    }
 }

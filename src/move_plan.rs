@@ -8,6 +8,7 @@ pub(crate) mod external;
 mod glob_patterns;
 mod prelude;
 pub(crate) mod semantic;
+pub(crate) mod sysroot;
 use crate::{
     edit::{self, Edit},
     items::{self, DecisionReason, Item, ModuleEvidence, ParsedFile},
@@ -218,6 +219,9 @@ pub struct MoveRequest {
     /// Capture direct out-of-tree path libraries as read-only method evidence (default off).
     #[serde(default, skip_serializing_if = "external::disabled")]
     pub external_path_dependencies: bool,
+    /// Move-only installed-source evidence; omitted/false performs no discovery.
+    #[serde(default, skip_serializing_if = "external::disabled")]
+    pub sysroot_sources: bool,
 }
 impl MoveRequest {
     pub(crate) fn artifact_schema_version(&self) -> u8 {
@@ -1063,6 +1067,26 @@ impl MoveEnvelope {
         self.plan.origins.truncate(preview_count);
     }
     fn withhold_external_resolution(&mut self) {
+        let composite = self.coverage.scan.external_dependencies.is_some()
+            || self.coverage.scan.sysroot_sources.is_some();
+        if composite {
+            self.plan
+                .binding_proofs
+                .retain(|proof| !matches!(proof, BindingProof::RaResolved(_)));
+            self.coverage.ra_resolved = 0;
+            self.coverage.assumed_declared_identity = 0;
+            self.plan.resolution_coverage = None;
+        }
+        if let Some(coverage) = &mut self.coverage.scan.sysroot_sources {
+            coverage.complete = false;
+            if coverage.freshness != "not_performed" {
+                coverage.freshness = "failed_or_interrupted".into();
+            }
+            coverage.corpus_digest.clear();
+            coverage.omissions.push(
+                "composite publication failed; all resolution records and counts withheld".into(),
+            );
+        }
         if let Some(coverage) = &mut self.coverage.scan.external_dependencies {
             // An interrupted or stale composite database must not publish even
             // informational resolution proofs on a failed plan.
@@ -1176,6 +1200,9 @@ impl MoveEnvelope {
             return;
         }
         self.incomplete("response_bytes");
+        if self.coverage.scan.sysroot_sources.is_some() {
+            self.withhold_external_resolution();
+        }
         // Display-only material first. Never shorten a surviving replay anchor.
         self.diagnostics_omitted += self.diagnostics.len();
         self.diagnostics.clear();
@@ -1393,6 +1420,9 @@ fn run_with_recheck(
             result.plan.state = "blocked".into();
             result.withhold();
         }
+        if result.coverage.scan.sysroot_sources.is_some() {
+            result.withhold_external_resolution();
+        }
         result.shape_diagnostics(
             request.include_unselected_trivia,
             request.limits.preview_count(),
@@ -1588,6 +1618,40 @@ fn build(
             &mut result.coverage.scan.external_dependencies,
         )?;
         Some(corpus)
+    } else {
+        None
+    };
+    let sysroot = if request.sysroot_sources {
+        if !request.resolve_semantic {
+            return Err(error(
+                "INVALID_PARAMS",
+                "sysroot_sources requires resolve_semantic",
+                "sysroot_sources",
+            ));
+        }
+        let config = request.semantic_configuration.as_ref().ok_or_else(|| {
+            error(
+                "INVALID_PARAMS",
+                "sysroot_sources requires explicit semantic_configuration",
+                "semantic_configuration",
+            )
+        })?;
+        if files.keys().any(|path| path.starts_with(sysroot::PREFIX)) {
+            return Err(DomainError::new(
+                "SYSROOT_NAMESPACE_CONFLICT",
+                "repository path collides with read-only sysroot namespace",
+            ));
+        }
+        let composite = external
+            .as_ref()
+            .map_or(config, |corpus| &corpus.configuration);
+        Some(sysroot::discover(
+            &scope.root,
+            composite,
+            &request.limits.clone().into(),
+            (deadline, cancelled),
+            &mut result.coverage.scan.sysroot_sources,
+        )?)
     } else {
         None
     };
@@ -2602,13 +2666,15 @@ fn build(
         result,
     )?;
     if request.resolve_semantic {
-        if (!semantic_needs.is_empty() || external.is_some()) && !overlay.is_empty() {
+        if (!semantic_needs.is_empty() || external.is_some() || sysroot.is_some())
+            && !overlay.is_empty()
+        {
             semantic::discharge(
                 request,
                 &files,
                 overlay,
                 &mut semantic_needs,
-                external.as_ref(),
+                (external.as_ref(), sysroot.as_ref()),
                 (deadline, cancelled),
                 result,
             )?;
@@ -2646,13 +2712,24 @@ fn build(
         result.account(descriptor_bytes(&result.plan.directory_preconditions)?)?;
     }
     items::check(deadline, cancelled)?;
-    if !result.plan.blockers.is_empty() && external.is_none() {
+    if !result.plan.blockers.is_empty() && external.is_none() && sysroot.is_none() {
         result.plan.integrity.syntax = "blocked".into();
         return Ok(());
     }
     before_recheck();
     if let Some(corpus) = &external {
         corpus.recheck((deadline, cancelled))?;
+    }
+    if let Some(corpus) = &sysroot {
+        corpus.recheck(
+            result
+                .coverage
+                .scan
+                .sysroot_sources
+                .as_mut()
+                .expect("enabled disclosure"),
+            (deadline, cancelled),
+        )?;
     }
     if !result.plan.blockers.is_empty() {
         result.plan.integrity.syntax = "blocked".into();

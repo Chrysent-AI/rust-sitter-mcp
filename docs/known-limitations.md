@@ -51,21 +51,33 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   guards, unsupported/recovered patterns, macro/conditional context, unresolved
   glob constant competition and constructor identity remain independent refusals.
 
-- **Sysroot member calls still block.** Method calls on `std` types
-  (`.iter()`, `.push()`, `format!`-adjacent chains) cannot be proven without sysroot
-  coverage. Concrete written inherent calls in explicitly configured local crates
-  or opt-in captured path, locally cached registry or source-replaced
-  libraries and their bounded transitive normal-dependency closure can discharge
-  under `resolve_semantic`. Git dependencies,
-  trait/generic members and external facts outside the supported
+- **Sysroot member evidence requires a separate narrow opt-in.**
+  `move_item` can prove written `String::new`/`String::push_str` moves with
+  `sysroot_sources:true`, `resolve_semantic:true` and explicit caller configuration
+  on the audited official stable 1.97.1 aarch64-apple-darwin rustup/rust-src profile.
+  This is trusted-local-installation source analysis, not independent release
+  authentication or binary-build equivalence. Other profiles, missing sources,
+  unknown attributes/cfg, unresolved includes and changed evidence refuse without
+  installation or source writes. Complete bounded capture and both-overlay access,
+  declaration/receiver identity and publication freshness are required; consultation
+  alone is not proof. The bounded sysroot trait-only macro footprint audit admits
+  surrounding written context, not generated members or trait facts. `.iter()`,
+  `.push()`, `.ok()` and `format!`-adjacent chains are not a supported allowlist;
+  default-off requests retain their existing refusals. Concrete written inherent
+  calls in explicitly configured local crates or opt-in captured path, locally
+  cached registry or source-replaced libraries and their bounded transitive
+  normal-dependency closure can separately discharge under `resolve_semantic`.
+  Git dependencies, trait/generic members and external facts outside the supported
   method/field/direct-constructor set (ordinary type paths, patterns, uncalled
   constructor values, type/variant facts) remain refused in the external-library
-  evidence tier.
+  evidence tier. See `docs/tools.md`, "Opt-in installed sysroot evidence".
 - **Trait methods and generic functions block.** `fact_attached` refuses trait-associated
   and generic declarations; only bounded concrete inherent facts are provable.
-- **Macro expansion is not modeled.** Any macro invocation in a moved body vetoes
-  (`macro_context_unexamined`); declarative (`macro_rules!`) expansion is admitted ONLY for
-  declaration-identity facts via the bounded tier (`declarative.rs`), with containment for
+- **General macro expansion is not modeled.** Any macro invocation in a moved
+  body vetoes (`macro_context_unexamined`); the bounded declarative
+  declaration-identity tier and sysroot-only trait-impl footprint audit are the
+  explicit narrow exceptions described here, not general macro support.
+  Declaration-identity facts use the bounded tier (`declarative.rs`), with containment for
   provider-uncertain helper attributes and a labeled caller-assumption flag
   (`assume_declared_helpers`). Location-observable macros are a known residual risk class
   and must be reviewed by callers.

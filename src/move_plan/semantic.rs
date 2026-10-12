@@ -35,6 +35,8 @@ mod context;
 mod declarative;
 #[path = "semantic_identity.rs"]
 mod identity;
+#[path = "sysroot_context.rs"]
+mod sysroot_context;
 pub use context::ContextEvaluation;
 use context::{FactClass, safe_attr};
 use std::cell::{Cell, RefCell};
@@ -44,6 +46,9 @@ const ANALYZER: &str = "ra_ap@0.0.357";
 #[cfg(test)]
 #[path = "declarative_tests.rs"]
 mod declarative_tests;
+#[cfg(test)]
+#[path = "sysroot_semantic_tests.rs"]
+mod sysroot_tests;
 #[cfg(test)]
 #[path = "semantic_tests.rs"]
 mod tests;
@@ -185,6 +190,8 @@ struct Inputs {
     assumed_declared_helpers: Cell<bool>,
     context: RefCell<BTreeMap<ContextKey, ContextEvaluation>>,
     external_origins: BTreeMap<String, String>,
+    sysroot: Option<super::sysroot::Profile>,
+    sysroot_origins: BTreeMap<String, String>,
 }
 /// Reject unusable caller configuration without querying or constructing a database.
 pub(crate) fn validate(
@@ -364,10 +371,20 @@ impl Inputs {
     ) -> Result<Self, DomainError> {
         Self::with_external(texts, config, None, controls)
     }
+    #[cfg(test)]
     fn with_external(
+        texts: BTreeMap<String, String>,
+        config: &Configuration,
+        external: Option<&super::external::Corpus>,
+        controls: (Instant, &AtomicBool),
+    ) -> Result<Self, DomainError> {
+        Self::with_composite(texts, config, external, None, controls)
+    }
+    fn with_composite(
         mut texts: BTreeMap<String, String>,
         config: &Configuration,
         external: Option<&super::external::Corpus>,
+        sysroot: Option<&super::sysroot::Corpus>,
         controls: (Instant, &AtomicBool),
     ) -> Result<Self, DomainError> {
         let mut external_origins = BTreeMap::new();
@@ -389,7 +406,32 @@ impl Inputs {
                 );
             }
         }
-        let config = external.map_or(config, |corpus| &corpus.configuration);
+        let mut sysroot_origins = BTreeMap::new();
+        if let Some(corpus) = sysroot {
+            if texts
+                .keys()
+                .any(|path| path.starts_with(super::sysroot::PREFIX))
+            {
+                return Err(DomainError::new(
+                    "SYSROOT_NAMESPACE_CONFLICT",
+                    "repository/external path collides with sysroot namespace",
+                ));
+            }
+            texts.extend(corpus.texts.clone());
+            for root in &corpus.coverage.consulted_roots {
+                sysroot_origins.insert(
+                    root.name.clone(),
+                    format!(
+                        "sysroot:{}:{}",
+                        root.language_origin, corpus.coverage.corpus_digest
+                    ),
+                );
+            }
+        }
+        let config = sysroot.map_or_else(
+            || external.map_or(config, |corpus| &corpus.configuration),
+            |corpus| &corpus.configuration,
+        );
         validate(config, &texts.keys().map(String::as_str).collect(), None)?;
         if texts.len() > 100_000 {
             return Err(DomainError::new(
@@ -412,7 +454,12 @@ impl Inputs {
             }
             let id = FileId::from_raw(index as u32);
             let vpath = VfsPath::new_virtual_path(format!("/{path}"));
-            if let Some(root) = external.and_then(|corpus| {
+            if sysroot.is_some() && path.starts_with(super::sysroot::PREFIX) {
+                libraries
+                    .entry(super::sysroot::PREFIX.into())
+                    .or_default()
+                    .insert(id, vpath);
+            } else if let Some(root) = external.and_then(|corpus| {
                 corpus
                     .coverage
                     .consulted_roots
@@ -455,7 +502,11 @@ impl Inputs {
                 cfg,
                 None,
                 Default::default(),
-                if external_origins.contains_key(&input.name) {
+                if let Some(origin) =
+                    sysroot.and_then(|corpus| corpus.profile.origins.get(&input.name))
+                {
+                    CrateOrigin::Lang(ra_ap_base_db::LangCrateOrigin::from(origin.as_str()))
+                } else if external_origins.contains_key(&input.name) {
                     CrateOrigin::Library {
                         repo: None,
                         name: Symbol::intern(&input.name),
@@ -484,7 +535,18 @@ impl Inputs {
                 graph
                     .add_dep(
                         crates[&input.name],
-                        DependencyBuilder::new(name, crates[&dep.crate_name]),
+                        if let Some(corpus) = sysroot {
+                            let (prelude, injected) =
+                                corpus.profile.edge_flags(&input.name, &dep.crate_name);
+                            DependencyBuilder::with_prelude(
+                                name,
+                                crates[&dep.crate_name],
+                                prelude,
+                                injected,
+                            )
+                        } else {
+                            DependencyBuilder::new(name, crates[&dep.crate_name])
+                        },
                     )
                     .expect("validated acyclic dependency graph");
             }
@@ -506,6 +568,8 @@ impl Inputs {
             assumed_declared_helpers: Cell::new(false),
             context: RefCell::new(BTreeMap::new()),
             external_origins,
+            sysroot: sysroot.map(|corpus| corpus.profile.clone()),
+            sysroot_origins,
         })
     }
     fn declaration(
@@ -524,7 +588,11 @@ impl Inputs {
                 let name = self
                     .roots
                     .get(&module.krate(&self.db).root_file(&self.db))?;
-                self.external_origins.get(name).unwrap_or(name).clone()
+                self.sysroot_origins
+                    .get(name)
+                    .or_else(|| self.external_origins.get(name))
+                    .unwrap_or(name)
+                    .clone()
             },
             anchor: SourceAnchor {
                 path: path.clone(),
@@ -542,10 +610,14 @@ pub fn discharge(
     files: &BTreeMap<String, FileSnapshot>,
     overlay: BTreeMap<String, String>,
     needs: &mut Vec<Need>,
-    external: Option<&super::external::Corpus>,
+    sources: (
+        Option<&super::external::Corpus>,
+        Option<&super::sysroot::Corpus>,
+    ),
     controls: (Instant, &AtomicBool),
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
+    let (external, sysroot) = sources;
     let Some(config) = &request.semantic_configuration else {
         configuration_refusal(needs);
         return Ok(());
@@ -570,14 +642,32 @@ pub fn discharge(
             controls,
         )?;
     }
+    if let Some(corpus) = sysroot {
+        digest = crate::scope::hash_serialized(
+            root,
+            &(
+                &digest,
+                &corpus.coverage.corpus_digest,
+                &corpus.configuration,
+                &corpus.coverage.cfg_recipe,
+            ),
+            controls,
+        )?;
+    }
     let final_digest = crate::scope::hash_serialized(root, &(&digest, &overlay), controls)?;
     validate(
         config,
         &original.keys().map(String::as_str).collect(),
         Some(&request.crate_root),
     )?;
-    let mut old = Inputs::with_external(original, config, external, controls)?;
-    let mut new = Inputs::with_external(overlay, config, external, controls)?;
+    let mut old = Inputs::with_composite(original, config, external, sysroot, controls)?;
+    if let Some(capture) = &mut result.coverage.scan.sysroot_sources {
+        capture.capture_usage.overlays_materialized += 1;
+    }
+    let mut new = Inputs::with_composite(overlay, config, external, sysroot, controls)?;
+    if let Some(capture) = &mut result.coverage.scan.sysroot_sources {
+        capture.capture_usage.overlays_materialized += 1;
+    }
     old.assume_declared_helpers = request.assume_declared_helpers;
     new.assume_declared_helpers = request.assume_declared_helpers;
     let coverage = ResolutionCoverage {
@@ -599,6 +689,10 @@ pub fn discharge(
             "sysroot or git dependency sources",
         );
     }
+    if sysroot.is_some() {
+        coverage.omissions[1] = "captured installed sysroot source-analysis profile; no git dependency discovery, build-script environment, procedural expansion, generated members, trait/generic facts, target layout, compilation or equivalence checks; bounded sysroot trait-only namespace audits do not authorize generated facts".into();
+        coverage.omissions[2] = "reached context checks only; finite per-atom sysroot ON/OFF recipe in coverage.sysroot_sources; unlisted caller/external atoms remain unknown".into();
+    }
     for (revision, inputs) in [("original", &old), ("final", &new)] {
         coverage
             .context_evaluations
@@ -615,10 +709,11 @@ pub fn discharge(
     // The reached-context inventory belongs to the batch, not each occurrence.
     // Keep per-proof configuration/digests/counts without quadratic disclosure.
     let mut proof_coverage = coverage.clone();
-    if request
-        .moves
-        .iter()
-        .any(|entry| entry.enclosing_impl.is_some())
+    if sysroot.is_some()
+        || request
+            .moves
+            .iter()
+            .any(|entry| entry.enclosing_impl.is_some())
     {
         proof_coverage.context_evaluations.clear();
     }
@@ -818,15 +913,27 @@ fn evaluate(
                 .external_origins
                 .values()
                 .any(|origin| origin == &before.declaration.crate_origin);
-            if external && !external_fact_supported(old, &anchor, &mut before) {
-                refusal_class = "external_fact_unsupported";
+            let sysroot = old
+                .sysroot_origins
+                .values()
+                .any(|origin| origin == &before.declaration.crate_origin);
+            if (external || sysroot) && !external_fact_supported(old, &anchor, &mut before) {
+                refusal_class = if sysroot {
+                    "sysroot_fact_unsupported"
+                } else {
+                    "external_fact_unsupported"
+                };
                 return None;
             }
             let before_assumed = old.assumed_declared_helpers.get();
             refusal_class = "semantic_final_fact_unproved";
             let mut after = fact(new, &final_anchor, need.attribute_range.is_some())?;
-            if external && !external_fact_supported(new, &final_anchor, &mut after) {
-                refusal_class = "external_fact_unsupported";
+            if (external || sysroot) && !external_fact_supported(new, &final_anchor, &mut after) {
+                refusal_class = if sysroot {
+                    "sysroot_fact_unsupported"
+                } else {
+                    "external_fact_unsupported"
+                };
                 return None;
             }
             let assumed = before_assumed || new.assumed_declared_helpers.get();
@@ -867,6 +974,8 @@ fn evaluate(
                     declarative::ASSUMED_BASIS
                 } else if before.declaration.declarative_macro.is_some() {
                     declarative::BASIS
+                } else if sysroot {
+                    "written installed-sysroot fact under disclosed trusted-local-installation source-analysis profile; bounded trait-only declarative namespace audits, no generated-member admission, compilation or equivalence checks"
                 } else {
                     before.fact_class.basis()
                 }
@@ -1178,6 +1287,9 @@ fn scoped_context(
         };
         for child in syntax.children() {
             if let Some(call) = ast::MacroCall::cast(child.clone()) {
+                if sysroot_context::module_macro(inputs, sema, scope, &call, fact_class) {
+                    continue;
+                }
                 if fact_class == FactClass::NominalIdentity
                     && declarative::context_admitted(inputs, sema, scope, &call)
                 {

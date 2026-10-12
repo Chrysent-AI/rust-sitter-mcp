@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add default-off, move-only `sysroot_sources` evidence from the audited installed
+  stable 1.97.1 aarch64-apple-darwin `rust-src` profile. Publish real both-overlay
+  written `String::new`/`push_str` proofs with bounded immutable capture, explicit
+  sysroot-only configuration and trusted-local-installation disclosure; missing,
+  unsupported or stale inputs withhold proofs and artifacts. No installation,
+  source writes, compilation, trait/generic or generated-member support is added.
+
 * Add partial-only `suggest_split.analysis_budget` disclosure for descriptor
   guard stops, with typed collector stage, aggregate work cap and additive
   per-stage byte charges in full advice and compact manifests. Distinguish
