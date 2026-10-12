@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Bumped version.
+
+## [0.6.0] - 2026-10-12
+
+### Added
+
 * Add default-off, move-only `sysroot_sources` evidence from the audited installed
   stable 1.97.1 aarch64-apple-darwin `rust-src` profile. Publish real both-overlay
   written `String::new`/`push_str` proofs with bounded immutable capture, explicit
