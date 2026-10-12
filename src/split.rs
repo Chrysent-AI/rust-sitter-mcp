@@ -1,5 +1,7 @@
 //! Request-local advisory inventories and partitions; never an execution plan.
 mod boundary;
+mod budget;
+pub use budget::{AnalysisBudget, AnalysisBudgetStop, AnalysisStage};
 mod consequences;
 mod drafts;
 pub use consequences::{
@@ -409,6 +411,10 @@ pub struct SuggestSplitEnvelope {
     pub counts: AdviceCounts,
     pub limits: Limits,
     pub effective_work_limits: AdviceWorkLimits,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_budget: Option<AnalysisBudget>,
+    #[serde(skip)]
+    accounting: budget::Accounting,
     pub truncation_reasons: Vec<String>,
     pub skipped: Skipped,
     pub diagnostics: Vec<Diagnostic>,
@@ -459,6 +465,8 @@ impl SuggestSplitEnvelope {
                 query_state_limit_applicable: false,
                 reference_coverage: "intra-file written candidates only; admitted-scope module evidence; no generated/build-target reference proof".into(),
             },
+            analysis_budget: None,
+            accounting: budget::Accounting::default(),
             truncation_reasons: Vec::new(),
             skipped: skipped_map(),
             diagnostics: Vec::new(),
@@ -1153,6 +1161,7 @@ fn analyze_with_recheck(
     .and_then(|()| drafts::finalize(&mut result, controls))
     .and_then(|()| controls.check());
     if let Err(error) = outcome {
+        result.disclose_analysis_budget(&error);
         result.omit("inspection_partitions", result.inspection_partitions.len());
         result.inspection_partitions.clear();
         result.extraction_payoff.completed = false;
@@ -1233,7 +1242,9 @@ fn analyze_with_recheck(
             let root = result.root.take();
             let snapshot = result.snapshot_id.take();
             let coverage = std::mem::take(&mut result.coverage);
+            let analysis_budget = result.analysis_budget.take();
             result = SuggestSplitEnvelope::empty(request.limits.clone().into());
+            result.analysis_budget = analysis_budget;
             result.root = root;
             result.snapshot_id = snapshot;
             result.coverage = coverage;
@@ -1372,6 +1383,7 @@ fn build(
             "source_path",
         ));
     };
+    result.analysis_stage(AnalysisStage::Inventory);
     let mut source_data = items::parse(
         source,
         request.limits.text_bytes,
@@ -1434,7 +1446,9 @@ fn build(
         .cloned()
         .collect();
     result.draft_eligibility.membership_complete = result.inventory.len() == advice_units.len();
+    result.analysis_stage(AnalysisStage::Overlaps);
     result.link_overlaps(controls)?;
+    result.analysis_stage(AnalysisStage::Contexts);
     let lines = Lines::new(&source.source);
     let physical_lines = source.source.bytes().filter(|b| *b == b'\n').count()
         + usize::from(!source.source.is_empty() && !source.source.ends_with('\n'));
@@ -1488,6 +1502,7 @@ fn build(
         &result.item_contexts,
         &result.impl_contexts,
     ))?)?;
+    result.analysis_stage(AnalysisStage::ScopeTrivia);
     signals::scope_trivia(&source_data, &lines, controls, result)?;
     if !result.draft_eligibility.membership_complete {
         result.omit(
@@ -1502,6 +1517,7 @@ fn build(
         return Ok(());
     }
     if !files.contains_key(&request.crate_root) {
+        result.analysis_stage(AnalysisStage::ModuleChain);
         let mut diagnostic = items::ChainDiagnostic::boundary(
             &request.crate_root,
             &request.source_path,
@@ -1518,6 +1534,7 @@ fn build(
             "crate_root",
         ));
     }
+    result.analysis_stage(AnalysisStage::Inventory);
     let mut parsed = BTreeMap::new();
     parsed.insert(source.path.clone(), source_data);
     for (path, file) in &files {
@@ -1535,6 +1552,7 @@ fn build(
         result.account(descriptor_bytes(&(&data.items, &data.trivia))?)?;
         parsed.insert(path.clone(), data);
     }
+    result.analysis_stage(AnalysisStage::ModuleChain);
     let analysis = items::modules(
         &scope,
         &request.crate_root,
@@ -1553,6 +1571,7 @@ fn build(
             request.limits.text_bytes,
         ));
     }
+    result.analysis_stage(AnalysisStage::Signals);
     let glob_routes = items::GlobRoutes::new(
         &files,
         &parsed,
@@ -1568,7 +1587,9 @@ fn build(
         controls,
         result,
     )?;
+    result.analysis_stage(AnalysisStage::Decisions);
     signals::risks(source, &parsed[&source.path], &lines, controls, result)?;
+    result.analysis_stage(AnalysisStage::BoundaryObservations);
     boundary::collect(
         request,
         &files,
@@ -1578,9 +1599,13 @@ fn build(
         controls,
         result,
     )?;
+    result.analysis_stage(AnalysisStage::Ownership);
     ownership::build(result, controls)?;
+    result.analysis_stage(AnalysisStage::ExtractionPayoff);
     presentation::payoff(result, controls)?;
+    result.analysis_stage(AnalysisStage::BoundaryObservations);
     boundary::link(result, controls)?;
+    result.analysis_stage(AnalysisStage::TestObservations);
     test_observations::collect(
         request,
         &scope,
@@ -1608,6 +1633,7 @@ fn build(
             .into(),
         );
     } else {
+        result.analysis_stage(AnalysisStage::Drafts);
         drafts::build(
             &scope, request, &files, &parsed, &analysis, controls, result,
         )?;
@@ -1664,6 +1690,7 @@ fn build(
             }
         }
     }
+    result.analysis_stage(AnalysisStage::FinalProjection);
     result.account(descriptor_bytes(&(
         &result.inventory,
         &result.signals,

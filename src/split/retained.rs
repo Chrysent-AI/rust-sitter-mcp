@@ -1243,6 +1243,8 @@ pub struct Manifest {
     pub response_mode: String,
     pub advisory: bool,
     pub analysis_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_budget: Option<AnalysisBudget>,
     pub manifest_complete: bool,
     pub root: Option<String>,
     pub snapshot_id: Option<String>,
@@ -1321,6 +1323,7 @@ impl Manifest {
             response_mode: "compact".into(),
             advisory: true,
             analysis_status: full.status.clone(),
+            analysis_budget: full.analysis_budget.clone(),
             manifest_complete: true,
             root: full.root.clone(),
             snapshot_id: full.snapshot_id.clone(),

@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+* Add partial-only `suggest_split.analysis_budget` disclosure for descriptor
+  guard stops, with typed collector stage, aggregate work cap and additive
+  per-stage byte charges in full advice and compact manifests. Distinguish
+  analysis work from retention and wire budgets; preserve incomplete labels,
+  conservative draft withholding, limits and unaffected response shapes.
+
 * Add an advisory `suggest_split` parent-directory scope hint when destination
   naming fails solely on `paths`/`globs` exclusions. Preserve existing reasons,
   ignore/collision disclosures and unaffected response shapes; admission policy

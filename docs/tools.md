@@ -2044,6 +2044,66 @@ Only the final tier may omit summaries, with exact summary/reference counts.
 
 Empty/singleton/recovered or unsupported-layout files return inventory and an explicit no-draft reason. A work, discovery, membership, freshness or mandatory evidence/output limit gives incomplete advice and withholds **all complete drafts**. Counts distinguish observed inventory/descriptors/candidates from returned items; `counts.omissions` records suppressed arrays and membership/decision links. Dropping source/context display text or sharing the proven duplicate declaration displays described above preserves complete drafts when full coordinates and required evidence links fit. `span.text:null` is not a shortened `expected_text`: obtain the complete current original bytes before execution. Integrity is input-only (`input_checked`, `input_recovered` or `not_checked`), always `semantic:"not_performed"`.
 
+### Analysis work-budget disclosure
+
+When a descriptor guard stops analysis, full advice and compact manifests add
+`analysis_budget` (absent on successful analyses and other stopping reasons):
+
+```json
+{"stopped_by":"aggregate_descriptor_bytes","exhausted_stage":"test_observations","aggregate_limit_bytes":134217728,"accounted_bytes":162905270,"stage_bytes":{"inventory":2749208,"test_observations":158975331,"decisions":1180731}}
+```
+
+Numbers above illustrate the shape, not a repository-size estimate. In an actual
+response the `stage_bytes` values sum to `accounted_bytes`, which equals full
+`counts.analysis_descriptor_bytes`. These are cumulative **work charges**,
+including transient estimates and repeated serialization of assembled projections,
+not unique retained descriptors, response bytes, source bytes or process RSS.
+The aggregate work guard is independent of retention's equally sized default cap
+and applies even with `retain_snapshot:false`. An attempted charge is added before
+comparison, so `accounted_bytes` can exceed `aggregate_limit_bytes`. Nothing raises
+or bypasses the existing limits.
+
+`stopped_by:"aggregate_descriptor_bytes"` means the shared counter exceeded that
+cap. `stopped_by:"stage_local_guard"` means the stage stopped without exceeding the
+shared counter (for example a serialization guard or decision-record guard).
+Rejected local work not added to the shared counter is not included in the stage
+shares; this is not a claim that its local limit equals the aggregate byte cap.
+The original `analysis_descriptor_bytes` truncation reason and all incomplete
+labels, conservative draft withholding and evidence omissions remain authoritative.
+The object survives terminal response fitting; it contains only typed stage/stop
+names and byte counts, no extra paths or source content. Absence is not evidence
+of complete analysis: continue checking status, coverage and omissions.
+
+Stages are collector phases, not counts of each output record type. Phases
+revisited during the call are added together; a nested collector's charges belong
+to its calling phase. Names are `scope_inputs`, `inventory`, `overlaps`, `contexts`,
+`scope_trivia`, `module_chain`, `signals`, `decisions`, `boundary_observations`,
+`ownership`, `extraction_payoff`, `test_observations`, `drafts`, `final_projection`,
+`decision_groups` and `consequences`. Only reached phases appear (including zero
+charges); they do not assert completion of a phase.
+
+Use the exhausted phase and largest shares to choose a narrower request:
+
+- `inventory`, `module_chain`, `boundary_observations` or `test_observations`:
+  narrow admitted files with `paths` and positive `globs`, retaining the selected
+  root, source and necessary module-chain/binding evidence. Admit an existing
+  parent directory in `paths` and future sibling names in `globs` for drafts.
+  For example `paths:["src"]` with `globs:["src/lib.rs","src/worker*.rs"]`
+  excludes unrelated tests while admitting `src/worker_part.rs`. Excluded tests
+  remain unassessed, not proved unaffected.
+- Source-local phases (`signals`, `decisions`, `contexts`, `ownership`) or large
+  projections: choose a smaller source, or lower `limits.text_bytes` to reduce
+  repeated display descriptors. This does not remove semantic or binding blockers.
+- Draft/finalization phases: leave `include_balanced` omitted/false if the extra
+  low-confidence alternative is unnecessary. It cannot help an earlier test scan.
+
+`max_items` bounds displayed source membership; lowering it can stop before
+whole-scope analysis but produces incomplete membership, not a complete cheaper
+analysis. Raising it only remedies a `max_items` stop. Increasing `response_bytes`
+or `diagnostic_count`, disabling retention, or choosing compact presentation does
+not raise the analysis work cap. Narrowing may remove required evidence and still
+return incomplete or blocked advice; always recheck the resulting labels.
+
 ### Retained advice and compact manifests
 
 `retain_snapshot` is a strict boolean, default false. `response_mode` is `full|compact|references`,

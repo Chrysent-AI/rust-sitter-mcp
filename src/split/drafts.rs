@@ -872,6 +872,7 @@ pub(super) fn finalize(
         controls.check()?;
         decision.id = format!("d/{index}");
     }
+    result.analysis_stage(AnalysisStage::DecisionGroups);
     result.decision_groups = decision_groups(
         result.decisions.iter().map(|d| {
             (
@@ -996,7 +997,9 @@ pub(super) fn finalize(
             }
         }
     }
+    result.analysis_stage(AnalysisStage::Drafts);
     result.account(descriptor_bytes(&result.drafts)?)?;
     result.account(descriptor_bytes(&result.overlaps)?)?;
+    result.analysis_stage(AnalysisStage::Consequences);
     consequences::attach(result, controls)
 }

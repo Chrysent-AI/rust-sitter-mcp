@@ -87,6 +87,98 @@ fn decision_fields(decisions: &Value) {
 }
 
 #[test]
+fn unscoped_descriptor_exhaustion_discloses_the_stage_without_retention() {
+    let repo = Fixture::empty();
+    repo.git(&["init", "--quiet", "--template="]);
+    let mut root = "mod worker;\n".to_owned();
+    // Each observation repeats its enclosing-function anchor. This workload
+    // fits the individual and collection charges below 128 MiB, then crosses
+    // the real aggregate cap when the assembled final projection is charged.
+    for index in 0..60 {
+        root.push_str(&format!("#[cfg(test)] mod check_{index};\n"));
+        repo.write(
+            &format!("budget/check_{index}.rs"),
+            &format!(
+                "#[test] fn repeated() {{ {} }}\n",
+                "crate::worker::alpha_read();\n".repeat(150)
+            ),
+        );
+    }
+    for index in 0..87 {
+        root.push_str(&format!("mod empty_{index};\n"));
+        repo.write(&format!("budget/empty_{index}.rs"), "");
+    }
+    repo.write("budget/lib.rs", &root);
+    repo.write(
+        "budget/worker.rs",
+        "fn alpha_read() { alpha_parse(); }\nfn alpha_parse() { alpha_read(); }\nfn retain() {}\n",
+    );
+    let before = observe(&repo.0);
+    let request = json!({"repo_path":repo.0,"crate_root":"budget/lib.rs","source_path":"budget/worker.rs","max_items":120,"limits":{"time_budget_ms":300000,"response_bytes":65536}});
+    let mut client = Client::new();
+    let result = client.call("suggest_split", request.clone());
+    assert_eq!(result["status"], "partial");
+    assert_eq!(result["partition_outcome"], "incomplete_analysis");
+    assert_eq!(result["error"], Value::Null);
+    assert_eq!(result["drafts"], json!([]));
+    assert_eq!(result["draft_eligibility"]["evidence_complete"], false);
+    assert_eq!(result["test_observations"]["coverage"]["completed"], false);
+    assert!(result.get("retention").is_none());
+    assert_eq!(result["counts"]["discovered_files"], 149);
+    let budget = &result["analysis_budget"];
+    assert_eq!(
+        budget["exhausted_stage"], "final_projection",
+        "budget={} counts={} reasons={}",
+        budget, result["counts"], result["truncation_reasons"]
+    );
+    assert_eq!(budget["stopped_by"], "aggregate_descriptor_bytes");
+    assert_eq!(budget["aggregate_limit_bytes"], 134217728);
+    assert_eq!(
+        budget["accounted_bytes"],
+        result["counts"]["analysis_descriptor_bytes"]
+    );
+    let sum: u64 = budget["stage_bytes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_u64().unwrap())
+        .sum();
+    assert_eq!(sum, budget["accounted_bytes"].as_u64().unwrap());
+    let limit = budget["aggregate_limit_bytes"].as_u64().unwrap();
+    let projection = budget["stage_bytes"]["final_projection"].as_u64().unwrap();
+    assert!(
+        sum > limit,
+        "attempted overshoot must be accounted: {budget}"
+    );
+    assert!(
+        sum - projection < limit,
+        "pre-projection charges must stay under the cap: {budget}"
+    );
+    let wire = json!({"content":[{"type":"text","text":result.to_string()}],"structuredContent":result,"isError":false}).to_string().len() + 4096;
+    assert!(wire <= 65536);
+    let mut compact_request = request.clone();
+    compact_request["response_mode"] = json!("compact");
+    let compact = client.call("suggest_split", compact_request);
+    assert_eq!(compact["analysis_status"], "partial");
+    assert_eq!(compact["analysis_budget"], *budget);
+    assert_eq!(compact["retention"]["state"], "not_requested");
+    let mut narrowed = request;
+    narrowed["paths"] = json!(["budget"]);
+    narrowed["globs"] = json!(["budget/lib.rs", "budget/worker*.rs", "budget/alpha*.rs"]);
+    narrowed["limits"]["response_bytes"] = json!(2097152);
+    let complete = client.call("suggest_split", narrowed);
+    assert_eq!(complete["status"], "complete");
+    assert!(
+        !complete["drafts"].as_array().unwrap().is_empty(),
+        "eligibility={} outcome={}",
+        complete["draft_eligibility"],
+        complete["partition_outcome"]
+    );
+    assert!(complete.get("analysis_budget").is_none());
+    assert_eq!(observe(&repo.0), before);
+}
+
+#[test]
 fn workspace_member_metadata_allows_advice_but_cfg_edges_remain_unknown() {
     let repo = Fixture::generate();
     let root = "cases/member/src/lib.rs";
