@@ -84,15 +84,14 @@ for args in 'minor 2.0.0' 'invalid' '01.2.3'; do
   reject bash scripts/bump-version.sh "$first" "${second:-}"
   grep -Eq 'Choose BUMP or VERSION|Expected major, minor, patch' "$scratch/rejection.log"
 done
-export VERSION_FIXTURE_FAIL=test
+export VERSION_FIXTURE_FAIL=metadata
 reject bash scripts/bump-version.sh '' 2.4.6
 grep -q 'Version verification failed' "$scratch/rejection.log"
 grep -q 'version = "2.4.6"' Cargo.toml
 unset VERSION_FIXTURE_FAIL
 bash scripts/bump-version.sh '' 3.5.7 > "$scratch/success.log"
-grep -q 'workspace tests passed' "$scratch/success.log"
-grep -q '^check --offline --quiet$' "$VERSION_FIXTURE_LOG"
-grep -q '^test --workspace --all-features --locked --offline --quiet$' "$VERSION_FIXTURE_LOG"
+grep -q 'version literals re-checked' "$scratch/success.log"
+grep -q '^metadata --offline --format-version 1$' "$VERSION_FIXTURE_LOG"
 ! git rev-parse --verify HEAD >/dev/null 2>&1
 [[ -z $(git tag) ]]
 printf '%s\n' 'Version fixtures passed: literal comparisons, historical prose, derived versions, fixture versions, inline tests, argument errors, visible failed bumps, no commit/tag, absent/misconfigured/non-executable hooks.'

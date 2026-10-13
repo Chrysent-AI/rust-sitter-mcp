@@ -38,7 +38,8 @@ Missing a gate tool? `make install-tools` installs pinned versions (`cargo-deny`
 Run `make bump-version BUMP=patch` (or `minor`, `major`, or `VERSION=x.y.z`).
 The helper requires active, executable tracked hooks, rejects direct test
 comparisons against the current package-version literal before and after the
-rewrite, refreshes the package lock entry offline, and runs the workspace tests.
+rewrite, and refreshes the package lock entry offline. It does not compile or
+run the workspace test suite: bumping assumes the tree already passed the gates.
 Verification failure leaves any manifest/lock diff visible for inspection; it
 never commits or tags. Derive current-version expectations with
 `env!("CARGO_PKG_VERSION")`; historical prose and other fixture versions are
@@ -47,7 +48,8 @@ allowed. The lexical guard checks integration test sources and inline
 `stringify!` when those macros are direct `assert_eq!`/`assert_ne!` operands.
 It does not resolve variables, assemble versions from fragments, inspect other
 operand wrappers (including function calls), expand arbitrary macros, or handle
-custom test frameworks; bump-time tests are the backstop for stale expectations.
+custom test frameworks; the bump runs no tests, so the lexical guard and the
+new-version re-check are the only bump-time stale-expectation checks.
 
 Hook checks detect missing or misconfigured activation when the helper or gate
 runs. They cannot prevent Git's explicit `--no-verify` bypass, which remains

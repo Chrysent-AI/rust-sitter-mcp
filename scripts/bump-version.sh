@@ -42,12 +42,13 @@ awk -v choice="$choice" '
 ' Cargo.toml > "$tmp"
 chmod 644 "$tmp"
 mv "$tmp" Cargo.toml
-# Refresh only the package lock entry, without re-resolving dependencies.
-# Failure deliberately leaves a visible diff; no automatic commit or tag.
-if ! cargo check --offline --quiet ||
-   ! bash scripts/check-test-versions.sh ||
-   ! cargo test --workspace --all-features --locked --offline --quiet; then
+# Refresh only the package lock entry, without re-resolving dependencies and
+# without compiling or running the workspace test suite. Bumping assumes the
+# tree already passed the gates; failure deliberately leaves a visible diff and
+# no automatic commit or tag.
+if ! cargo metadata --offline --format-version 1 >/dev/null ||
+   ! bash scripts/check-test-versions.sh; then
   echo 'Version verification failed; Cargo.toml and Cargo.lock changes are left visible for inspection. No commit or tag was created.' >&2
   exit 1
 fi
-printf '%s\n' 'Version updated and workspace tests passed; inspect Cargo.toml and Cargo.lock before committing.'
+printf '%s\n' 'Version updated and version literals re-checked; inspect Cargo.toml and Cargo.lock before committing.'
