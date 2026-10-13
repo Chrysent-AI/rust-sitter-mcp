@@ -22,40 +22,74 @@ fn proof_count(result: &Value) -> usize {
 }
 
 #[test]
-fn probe_a_signatures_discharge_with_conditional_root_and_unrelated_derives() {
+fn signatures_with_conditional_root_admit_known_derives_but_refuse_unknown_expansions() {
     let a = "fn claim_review_status<T>(input: Option<&T>) -> Option<&T> { input }";
     let b = "fn single_transition<T>(input: Option<&T>) -> Option<&T> { input }";
-    let repo = fixture(&format!(
-        "{a}\n{b}\nmod unrelated {{ #[derive(custom::Debug)] struct Other; }}\n"
-    ));
-    repo.write("cases/layout/lib.rs", "#[cfg(test)] mod tests;\n#[derive(custom::Debug)] struct RootRecord;\nuse unknown::*;\nstruct Option;\nmod source;\nmod destination;\n");
-    repo.write(
-        "cases/layout/tests.rs",
-        "#[derive(custom::Debug)] struct Unrelated;\n",
-    );
-    for destination in [existing(), new("cases/layout/status.rs")] {
-        let result = run(
-            &repo,
-            enabled(request(
-                &repo,
-                json!([
-                    entry(&repo, a, destination.clone()),
-                    entry(&repo, b, destination)
-                ]),
-            )),
+    for derive in ["Debug", "Serialize", "custom::Debug"] {
+        let repo = fixture(&format!(
+            "{a}\n{b}\nmod unrelated {{ #[derive({derive})] struct Other; }}\n"
+        ));
+        repo.write("cases/layout/lib.rs", &format!("#[cfg(test)] mod tests;\n#[derive({derive})] struct RootRecord;\nuse unknown::*;\nstruct Option;\nmod source;\nmod destination;\n"));
+        repo.write(
+            "cases/layout/tests.rs",
+            &format!("#[derive({derive})] struct Unrelated;\n"),
         );
-        assert_eq!(proof_count(&result), 4, "{result}");
-        assert_eq!(result["plan"]["applicable"], true, "{result}");
-        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
-        for proof in result["plan"]["binding_proofs"].as_array().unwrap() {
-            assert!(
-                proof["basis"]
-                    .as_str()
-                    .unwrap()
-                    .contains("written token-tree not expanded")
+        for destination in [existing(), new("cases/layout/status.rs")] {
+            let result = run(
+                &repo,
+                enabled(request(
+                    &repo,
+                    json!([
+                        entry(&repo, a, destination.clone()),
+                        entry(&repo, b, destination)
+                    ]),
+                )),
             );
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            if derive == "custom::Debug" {
+                withheld(&result);
+                assert_eq!(proof_count(&result), 0, "{result}");
+                for file in ["cases/layout/lib.rs", "cases/layout/source.rs"] {
+                    let source = fs::read_to_string(repo.0.join(file)).unwrap();
+                    let attribute = "#[derive(custom::Debug)]";
+                    let start = source.find(attribute).unwrap();
+                    for decision in result["plan"]["decisions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|d| d["anchors"][0]["expected_text"] == "Option")
+                    {
+                        assert!(
+                            decision["refusal_basis"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|basis| {
+                                    basis["class"] == "conditional_context"
+                                        && basis.get("name").is_none()
+                                        && basis["anchor"]["path"] == file
+                                        && basis["anchor"]["range"]["start_byte"] == start
+                                        && basis["anchor"]["range"]["end_byte"]
+                                            == start + attribute.len()
+                                }),
+                            "{decision}"
+                        );
+                    }
+                }
+            } else {
+                assert_eq!(proof_count(&result), 4, "{derive}: {result}");
+                assert_eq!(result["plan"]["applicable"], true, "{derive}: {result}");
+                for proof in result["plan"]["binding_proofs"].as_array().unwrap() {
+                    assert!(
+                        proof["basis"]
+                            .as_str()
+                            .unwrap()
+                            .contains("written token-tree not expanded")
+                    );
+                }
+                apply(&repo, &result);
+            }
         }
-        apply(&repo, &result);
     }
 }
 
@@ -251,7 +285,6 @@ fn finite_attributed_names_are_local_but_unbounded_context_stays_chain_wide() {
     for prefix in [
         "#[cfg(test)] mod tests;",
         "#[cfg_attr(test, derive(Clone))] struct Other;",
-        "#[custom] struct Other;",
         "mod child { macro_rules! Debug { () => {} } }",
     ] {
         let repo = fixture(&format!("{prefix}\n{selected}"));
@@ -264,6 +297,7 @@ fn finite_attributed_names_are_local_but_unbounded_context_stays_chain_wide() {
     }
     for prefix in [
         "#[cfg_attr(test, derive(Clone))] struct Option;",
+        "#[custom] struct Other;",
         "mod unrelated { introduce!(); }",
         "#[introduce] mod unrelated {}",
         "#[cfg_attr(test, introduce)] mod unrelated {}",

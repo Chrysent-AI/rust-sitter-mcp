@@ -127,6 +127,685 @@ fn prelude_only_batch_opt_in_is_lossless_labeled_and_counted() {
 }
 
 #[test]
+fn prelude_discharge_is_independent_of_unrelated_conditional_derives() {
+    // A wildcard keeps the independent final named-binder gate out of this test.
+    let selected = "fn selected(_: Option<Result<Box<Vec<String>>, u8>>) -> Option<u8> { if true { Some(1) } else { None } }";
+    for path in ["source.rs", "destination.rs"] {
+        for prefix in [
+            "#[derive(Debug, Clone, JsonSchema)] #[schemars(crate = \"rmcp::schemars\")] struct Other;",
+            "#[derive(Debug, Clone, Serialize)] #[serde(rename_all = \"snake_case\")] struct Other;",
+            "#[derive(Debug, Clone, Deserialize)] #[serde(default)] struct Other;",
+            "#[derive(Debug)] #[doc(hidden)] struct Other;",
+            "#[derive(Debug, Serialize)] #[cfg_attr(feature = \"unknown\", serde(default))] struct Other;",
+            "#[derive(Debug)] #[cfg_attr(feature = \"unknown\", derive(Clone))] struct Other;",
+            "#[derive(Debug)] #[cfg_attr(feature = \"unknown\", cfg_attr(test, derive(Clone)))] struct Other;",
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            repo.write(&file, &format!("{prefix}\n{old}"));
+            let args = request(&repo, json!([entry(&repo, selected, existing())]));
+            let default = run(&repo, args.clone());
+            let mut off = args.clone();
+            off["assume_standard_prelude"] = json!(false);
+            assert_eq!(
+                serde_json::to_vec(&default).unwrap(),
+                serde_json::to_vec(&run(&repo, off)).unwrap()
+            );
+            withheld(&default);
+            let result = run(&repo, enabled(args));
+            assert_eq!(
+                result["plan"]["applicable"], true,
+                "{path}: {prefix}: {result}"
+            );
+            assert_eq!(result["coverage"]["standard_prelude"], 6);
+            assert_eq!(result["coverage"]["standard_prelude_constructor"], 2);
+            for (name, count) in [
+                ("Option", 2),
+                ("Result", 1),
+                ("Box", 1),
+                ("Vec", 1),
+                ("String", 1),
+                ("Some", 1),
+                ("None", 1),
+            ] {
+                assert_eq!(proof_count(&result, name), count, "{result}");
+            }
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            let copy = apply(&repo, &result);
+            assert!(
+                fs::read_to_string(copy.0.join("cases/layout/destination.rs"))
+                    .unwrap()
+                    .contains(selected)
+            );
+        }
+    }
+}
+
+#[test]
+fn qualified_prelude_is_independent_of_unrelated_conditional_companions() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for path in ["source.rs", "destination.rs"] {
+        for prefix in [
+            "#[derive(Debug, Serialize)] #[serde(default)] struct Other;",
+            "#[derive(Debug, Deserialize)] #[serde(default)] struct Other;",
+            "#[derive(Debug, JsonSchema)] #[schemars(crate = \"rmcp::schemars\")] struct Other;",
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            repo.write(&file, &format!("{prefix}\n{old}"));
+            let result = run(
+                &repo,
+                enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+            );
+            assert_eq!(
+                result["plan"]["applicable"], true,
+                "{path}: {prefix}: {result}"
+            );
+            assert_eq!(proof_count(&result, "std::result::Result"), 1, "{result}");
+            assert_eq!(proof_count(&result, "Debug"), 0, "{result}");
+            apply(&repo, &result);
+        }
+    }
+}
+
+#[test]
+fn shadowed_builtin_derive_providers_refuse_prelude_types_and_constructors() {
+    let selected = "fn selected(_: Option<Result<Box<Vec<String>>, u8>>) -> Option<u8> { if true { Some(1) } else { None } }";
+    for path in ["source.rs", "destination.rs"] {
+        for (prefix, witness) in [
+            (
+                "use unknown as Debug; #[derive(Debug)] struct Other;",
+                "unknown as Debug",
+            ),
+            (
+                "use custom::Debug; #[derive(Debug)] struct Other;",
+                "custom::Debug",
+            ),
+            (
+                "macro_rules! Debug { () => {} } #[derive(Debug)] struct Other;",
+                "Debug",
+            ),
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            repo.write(&file, &format!("{prefix}\n{old}"));
+            let args = request(&repo, json!([entry(&repo, selected, existing())]));
+            let default = run(&repo, args.clone());
+            let mut off = args.clone();
+            off["assume_standard_prelude"] = json!(false);
+            assert_eq!(
+                serde_json::to_vec(&default).unwrap(),
+                serde_json::to_vec(&run(&repo, off)).unwrap()
+            );
+            let result = run(&repo, enabled(args));
+            withheld(&result);
+            for name in [
+                "Option", "Result", "Box", "Vec", "String", "Some", "None", "Debug",
+            ] {
+                assert_eq!(proof_count(&result, name), 0, "{path}: {prefix}: {result}");
+            }
+            for decision in result["plan"]["decisions"].as_array().unwrap() {
+                if !["Option", "Result", "Box", "Vec", "String", "Some", "None"]
+                    .iter()
+                    .any(|name| decision["anchors"][0]["expected_text"] == *name)
+                {
+                    continue;
+                }
+                let bases = decision["refusal_basis"].as_array().unwrap();
+                assert!(
+                    bases.iter().any(|basis| {
+                        basis["class"] == "shadow"
+                            && basis["name"] == "Debug"
+                            && basis["anchor"]["path"] == file
+                            && basis["anchor"]["range"]["start_byte"]
+                                == prefix.find(witness).unwrap()
+                            && basis["anchor"]["range"]["end_byte"]
+                                == prefix.find(witness).unwrap() + witness.len()
+                    }),
+                    "{decision}"
+                );
+                assert!(
+                    bases
+                        .iter()
+                        .all(|basis| basis["class"] != "conditional_context"),
+                    "{decision}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn custom_debug_derive_emitting_option_cannot_receive_a_prelude_proof() {
+    let selected = "fn selected(_: Option<u8>) -> Option<u8> { if true { Some(1) } else { None } }";
+    for path in ["source.rs", "destination.rs"] {
+        let repo = fixture(selected);
+        repo.write("cases/layout/Cargo.toml", "[package]\nname = \"derive-binding-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[dependencies]\ninjector = { path = \"injector\" }\n[workspace]\nmembers = [\"injector\"]\n");
+        repo.write("cases/layout/injector/Cargo.toml", "[package]\nname = \"injector\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n");
+        repo.write("cases/layout/injector/src/lib.rs", "extern crate proc_macro;\n#[proc_macro_derive(Debug)]\npub fn debug(_: proc_macro::TokenStream) -> proc_macro::TokenStream { \"pub enum Option<T> { Some(T), None } use self::Option::{Some, None};\".parse().unwrap() }\n");
+        let file = format!("cases/layout/{path}");
+        let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+        repo.write(
+            &file,
+            &format!("use injector::Debug; #[derive(Debug)] struct Other;\n{old}"),
+        );
+        let generated = path.strip_suffix(".rs").unwrap();
+        repo.write("cases/layout/lib.rs", &format!("#![allow(dead_code, unused_imports)]\nmod source; mod destination;\nfn verify_generated_identity() {{ let _: {generated}::Option<u8> = {generated}::Option::Some(1); }}\n"));
+        let check = std::process::Command::new("cargo")
+            .args(["check", "--workspace", "--offline", "--quiet"])
+            .current_dir(repo.0.join("cases/layout"))
+            .output()
+            .unwrap();
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        for name in ["Option", "Some", "None", "Debug"] {
+            assert_eq!(proof_count(&result, name), 0, "{path}: {result}");
+        }
+    }
+}
+
+#[test]
+fn direct_custom_derive_emitting_option_refuses_at_the_exact_attribute() {
+    let selected = "fn selected(_: Option<u8>) -> Option<u8> { if true { Some(1) } else { None } }";
+    for path in ["source.rs", "destination.rs"] {
+        for (attribute, derive_name) in [
+            ("#[derive(Inject)]", "Inject"),
+            ("#[derive(Debug, Inject)]", "Inject"),
+            ("#[derive(injector::Inject)]", "injector::Inject"),
+        ] {
+            let repo = fixture(selected);
+            repo.write("cases/layout/Cargo.toml", "[package]\nname = \"direct-derive-binding-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[dependencies]\ninjector = { path = \"injector\" }\n[workspace]\nmembers = [\"injector\"]\n");
+            repo.write("cases/layout/injector/Cargo.toml", "[package]\nname = \"injector\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n");
+            repo.write("cases/layout/injector/src/lib.rs", "extern crate proc_macro;\n#[proc_macro_derive(Inject)]\npub fn inject(_: proc_macro::TokenStream) -> proc_macro::TokenStream { \"pub enum Option<T> { Some(T), None } use self::Option::{Some, None};\".parse().unwrap() }\n");
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            let source = format!(
+                "// original é coordinates\nuse injector::Inject;\n{attribute}\nstruct Other;\n{old}"
+            );
+            repo.write(&file, &source);
+            let generated = path.strip_suffix(".rs").unwrap();
+            repo.write("cases/layout/lib.rs", &format!("#![allow(dead_code, unused_imports)]\nmod source; mod destination;\nfn verify_generated_identity() {{ let _: {generated}::Option<u8> = {generated}::Option::Some(1); }}\n"));
+            let check = std::process::Command::new("cargo")
+                .args(["check", "--workspace", "--offline", "--quiet"])
+                .current_dir(repo.0.join("cases/layout"))
+                .output()
+                .unwrap();
+            assert!(
+                check.status.success(),
+                "{path}: {attribute}: {}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            for move_owner in [false, true] {
+                if move_owner && path != "source.rs" {
+                    continue;
+                }
+                let mut moves = vec![entry(&repo, selected, existing())];
+                if move_owner {
+                    moves.push(entry(&repo, "struct Other;", existing()));
+                }
+                let args = request(&repo, json!(moves));
+                let default = run(&repo, args.clone());
+                let mut off = args.clone();
+                off["assume_standard_prelude"] = json!(false);
+                assert_eq!(
+                    serde_json::to_vec(&default).unwrap(),
+                    serde_json::to_vec(&run(&repo, off)).unwrap()
+                );
+                let result = run(&repo, enabled(args));
+                withheld(&result);
+                for name in ["Option", "Some", "None", "Debug"] {
+                    assert_eq!(
+                        proof_count(&result, name),
+                        0,
+                        "{path}: {attribute}: {result}"
+                    );
+                }
+                let attribute_start = source.find(attribute).unwrap();
+                for name in ["Option", "Some", "None"] {
+                    let decisions: Vec<_> = result["plan"]["decisions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|d| d["anchors"][0]["expected_text"] == name)
+                        .collect();
+                    assert!(!decisions.is_empty(), "{name}: {result}");
+                    for decision in decisions {
+                        assert!(
+                            decision["refusal_basis"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|basis| {
+                                    basis["class"] == "conditional_context"
+                                        && basis.get("name").is_none()
+                                        && basis["anchor"]["path"] == file
+                                        && basis["anchor"]["range"]["start_byte"] == attribute_start
+                                        && basis["anchor"]["range"]["end_byte"]
+                                            == attribute_start + attribute.len()
+                                }),
+                            "{decision}"
+                        );
+                    }
+                }
+                if move_owner {
+                    let name_start = attribute_start + attribute.find(derive_name).unwrap();
+                    assert!(
+                        result["plan"]["decisions"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|decision| {
+                                decision["refusal_basis"].as_array().is_some_and(|bases| {
+                                    bases.iter().any(|basis| {
+                                        basis["class"] == "derive_veto"
+                                            && basis["anchor"]["path"] == file
+                                            && basis["anchor"]["range"]["start_byte"] == name_start
+                                            && basis["anchor"]["range"]["end_byte"]
+                                                == name_start + derive_name.len()
+                                    })
+                                })
+                            }),
+                        "{result}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cfg_attr_custom_derive_emitting_option_refuses_at_the_exact_attribute() {
+    let selected = "fn selected(_: Option<u8>) -> Option<u8> { if true { Some(1) } else { None } }";
+    for path in ["source.rs", "destination.rs"] {
+        for attribute in [
+            "#[cfg_attr(feature = \"inject\", derive(Inject))]",
+            "#[cfg_attr(feature = \"inject\", r#derive(Inject))]",
+            "#[r#cfg_attr(feature = \"inject\", derive(Inject))]",
+            "#[cfg_attr(feature = \"inject\", r#cfg_attr(feature = \"inject\", derive(Inject)))]",
+            "#[cfg_attr(feature = \"inject\", doc(hidden), cfg_attr(feature = \"inject\", derive(Inject)))]",
+        ] {
+            let repo = fixture(selected);
+            repo.write("cases/layout/Cargo.toml", "[package]\nname = \"conditional-derive-binding-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[features]\ninject = []\n[dependencies]\ninjector = { path = \"injector\" }\n[workspace]\nmembers = [\"injector\"]\n");
+            repo.write("cases/layout/injector/Cargo.toml", "[package]\nname = \"injector\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n");
+            repo.write("cases/layout/injector/src/lib.rs", "extern crate proc_macro;\n#[proc_macro_derive(Inject)]\npub fn inject(_: proc_macro::TokenStream) -> proc_macro::TokenStream { \"pub enum Option<T> { Some(T), None } use self::Option::{Some, None};\".parse().unwrap() }\n");
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            let source = format!(
+                "use injector::Inject;\n#[derive(Debug)]\n{attribute}\nstruct Other;\n{old}"
+            );
+            repo.write(&file, &source);
+            let generated = path.strip_suffix(".rs").unwrap();
+            repo.write("cases/layout/lib.rs", &format!("#![allow(dead_code, unused_imports)]\nmod source; mod destination;\nfn verify_generated_identity() {{ let _: {generated}::Option<u8> = {generated}::Option::Some(1); }}\n"));
+            let check = std::process::Command::new("cargo")
+                .args([
+                    "check",
+                    "--workspace",
+                    "--offline",
+                    "--quiet",
+                    "--features",
+                    "inject",
+                ])
+                .current_dir(repo.0.join("cases/layout"))
+                .output()
+                .unwrap();
+            assert!(
+                check.status.success(),
+                "{}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            let args = request(&repo, json!([entry(&repo, selected, existing())]));
+            let default = run(&repo, args.clone());
+            let mut off = args.clone();
+            off["assume_standard_prelude"] = json!(false);
+            assert_eq!(
+                serde_json::to_vec(&default).unwrap(),
+                serde_json::to_vec(&run(&repo, off)).unwrap()
+            );
+            for configured in [false, true] {
+                let mut args = enabled(args.clone());
+                if configured {
+                    args["semantic_configuration"] = json!({"crates":[{"name":"fixture","root_file":"cases/layout/lib.rs","edition":"2024","features":["inject"],"cfg":[],"dependencies":[]}]});
+                }
+                let result = run(&repo, args);
+                withheld(&result);
+                assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+                for name in ["Option", "Some", "None"] {
+                    assert_eq!(
+                        proof_count(&result, name),
+                        0,
+                        "{path}: {attribute}: {result}"
+                    );
+                    let decisions: Vec<_> = result["plan"]["decisions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|d| d["anchors"][0]["expected_text"] == name)
+                        .collect();
+                    assert!(!decisions.is_empty(), "{name}: {result}");
+                    for decision in decisions {
+                        assert!(
+                            decision["refusal_basis"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|basis| {
+                                    basis["class"] == "conditional_context"
+                                        && basis["name"].is_null()
+                                        && basis["anchor"]["path"] == file
+                                        && basis["anchor"]["range"]["start_byte"]
+                                            == source.find(attribute).unwrap()
+                                        && basis["anchor"]["range"]["end_byte"]
+                                            == source.find(attribute).unwrap() + attribute.len()
+                                }),
+                            "{decision}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn proc_attribute_companions_that_emit_module_items_refuse_at_the_exact_outer_witness() {
+    let selected = "fn selected(_: Option<u8>) -> Option<u8> { if true { Some(1) } else { None } }";
+    for path in ["source.rs", "destination.rs"] {
+        for (attribute, feature) in [
+            ("#[injector::inject]", None),
+            (
+                "#[cfg_attr(feature = \"inject\", injector::inject)]",
+                Some("inject"),
+            ),
+        ] {
+            let repo = fixture(selected);
+            repo.write("cases/layout/Cargo.toml", "[package]\nname = \"proc-attribute-binding-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[features]\ninject = []\n[dependencies]\ninjector = { path = \"injector\" }\n[workspace]\nmembers = [\"injector\"]\n");
+            repo.write("cases/layout/injector/Cargo.toml", "[package]\nname = \"injector\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n");
+            repo.write("cases/layout/injector/src/lib.rs", "extern crate proc_macro;\n#[proc_macro_attribute]\npub fn inject(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream { let mut out = item; out.extend(\"pub enum Option<T> { Some(T), None } use self::Option::{Some, None};\".parse::<proc_macro::TokenStream>().unwrap()); out }\n");
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            let source = format!("#[derive(Debug)]\n{attribute}\nstruct Other;\n{old}");
+            repo.write(&file, &source);
+            let generated = path.strip_suffix(".rs").unwrap();
+            repo.write("cases/layout/lib.rs", &format!("#![allow(dead_code, unused_imports)]\nmod source; mod destination;\nfn verify_generated_identity() {{ let _: {generated}::Option<u8> = {generated}::Option::Some(1); }}\n"));
+            let mut command = std::process::Command::new("cargo");
+            command.args(["check", "--workspace", "--offline", "--quiet"]);
+            if let Some(feature) = feature {
+                command.args(["--features", feature]);
+            }
+            let check = command
+                .current_dir(repo.0.join("cases/layout"))
+                .output()
+                .unwrap();
+            assert!(
+                check.status.success(),
+                "{}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            let result = run(
+                &repo,
+                enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+            );
+            withheld(&result);
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+            for name in ["Option", "Some", "None"] {
+                assert_eq!(
+                    proof_count(&result, name),
+                    0,
+                    "{path}: {attribute}: {result}"
+                );
+                let decisions: Vec<_> = result["plan"]["decisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|d| d["anchors"][0]["expected_text"] == name)
+                    .collect();
+                assert!(!decisions.is_empty(), "{name}: {result}");
+                for decision in decisions {
+                    assert!(
+                        decision["refusal_basis"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|basis| {
+                                basis["class"] == "conditional_context"
+                                    && basis["name"].is_null()
+                                    && basis["anchor"]["path"] == file
+                                    && basis["anchor"]["range"]["start_byte"]
+                                        == source.find(attribute).unwrap()
+                                    && basis["anchor"]["range"]["end_byte"]
+                                        == source.find(attribute).unwrap() + attribute.len()
+                            }),
+                        "{decision}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cfg_attr_builtin_spelling_with_a_custom_provider_keeps_the_wrapper_witness() {
+    let selected = "fn selected(_: Option<u8>) -> Option<u8> { if true { Some(1) } else { None } }";
+    let attribute = "#[cfg_attr(feature = \"inject\", derive(Debug))]";
+    for path in ["source.rs", "destination.rs"] {
+        let repo = fixture(selected);
+        let file = format!("cases/layout/{path}");
+        let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+        let source = format!("use custom::Debug;\n{attribute}\nstruct Other;\n{old}");
+        repo.write(&file, &source);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        for name in ["Option", "Some", "None", "Debug"] {
+            assert_eq!(proof_count(&result, name), 0, "{result}");
+        }
+        for decision in result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| {
+                ["Option", "Some", "None"]
+                    .iter()
+                    .any(|name| d["anchors"][0]["expected_text"] == *name)
+            })
+        {
+            assert!(
+                decision["refusal_basis"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|basis| {
+                        basis["class"] == "conditional_context"
+                            && basis["name"].is_null()
+                            && basis["anchor"]["path"] == file
+                            && basis["anchor"]["range"]["start_byte"]
+                                == source.find(attribute).unwrap()
+                            && basis["anchor"]["range"]["end_byte"]
+                                == source.find(attribute).unwrap() + attribute.len()
+                    }),
+                "{decision}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cfg_attr_custom_derives_known_off_do_not_veto_unrelated_prelude_types() {
+    let selected = "fn selected(_: Option<std::string::String>) {}";
+    for path in ["source.rs", "destination.rs"] {
+        for attribute in [
+            "#[cfg_attr(not(feature = \"inject\"), derive(Inject))]",
+            "#[cfg_attr(feature = \"unknown\", cfg_attr(false, derive(Inject)))]",
+        ] {
+            let repo = fixture(selected);
+            let file = format!("cases/layout/{path}");
+            let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+            repo.write(
+                &file,
+                &format!("#[derive(Debug)]\n{attribute}\nstruct Other;\n{old}"),
+            );
+            let mut args = enabled(request(&repo, json!([entry(&repo, selected, existing())])));
+            args["semantic_configuration"] = json!({"crates":[{"name":"fixture","root_file":"cases/layout/lib.rs","edition":"2024","features":["inject"],"cfg":[],"dependencies":[]}]});
+            let result = run(&repo, args);
+            assert_eq!(
+                result["plan"]["applicable"], true,
+                "{path}: {attribute}: {result}"
+            );
+            assert_eq!(proof_count(&result, "Option"), 1, "{result}");
+            assert_eq!(proof_count(&result, "std::string::String"), 1, "{result}");
+            assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        }
+    }
+}
+
+#[test]
+fn qualified_prelude_refuses_shadowed_builtin_derive_providers() {
+    let selected = "fn selected() -> std::result::Result<u8, u8> { loop {} }";
+    for path in ["source.rs", "destination.rs"] {
+        let repo = fixture(selected);
+        let file = format!("cases/layout/{path}");
+        let old = fs::read_to_string(repo.0.join(&file)).unwrap();
+        repo.write(
+            &file,
+            &format!("use unknown as Debug; #[derive(Debug)] struct Other;\n{old}"),
+        );
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        assert_eq!(proof_count(&result, "std::result::Result"), 0, "{result}");
+    }
+}
+
+#[test]
+fn unrelated_derive_bases_do_not_attach_to_refused_prelude_types() {
+    let selected = "fn selected() -> Option<u8> { loop {} }";
+    for (gate, class) in [
+        ("struct Option;", "shadow"),
+        ("introduce!();", "chain_macro_statement"),
+        ("#![no_implicit_prelude]", "prelude_disabled"),
+    ] {
+        let repo = fixture(&format!(
+            "#[derive(Debug, Clone)] #[serde(default)] struct Other;\n{selected}"
+        ));
+        repo.write("cases/layout/destination.rs", gate);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        assert_eq!(proof_count(&result, "Option"), 0, "{result}");
+        let decision = result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["anchors"][0]["expected_text"] == "Option")
+            .unwrap();
+        let bases = decision["refusal_basis"].as_array().unwrap();
+        assert!(bases.iter().any(|b| b["class"] == class), "{decision}");
+        assert!(
+            bases.iter().all(|b| b["class"] != "derive_veto"
+                && b["name"] != "Debug"
+                && b["name"] != "Clone"),
+            "{decision}"
+        );
+    }
+}
+
+#[test]
+fn attributable_helper_companions_do_not_veto_the_owning_declaration_types() {
+    let selected = "struct Record { value: Option<String> }";
+    for (declares, companion) in [
+        (
+            "Debug, Clone, JsonSchema",
+            "#[schemars(crate = \"rmcp::schemars\")]",
+        ),
+        (
+            "Debug, Clone, Serialize",
+            "#[serde(rename_all = \"snake_case\")]",
+        ),
+        ("Debug, Clone, Deserialize", "#[serde(default)]"),
+    ] {
+        let original = format!("#[derive({declares})]\n{companion}\n{selected}");
+        let repo = fixture(&original);
+        let result = run(
+            &repo,
+            enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+        );
+        withheld(&result);
+        assert_eq!(proof_count(&result, "Option"), 1, "{result}");
+        assert_eq!(proof_count(&result, "String"), 1, "{result}");
+        assert_eq!(proof_count(&result, "Debug"), 0, "{result}");
+        assert_eq!(proof_count(&result, "Clone"), 0, "{result}");
+        // The registered helper conditions the built-in derive identity only.
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| {
+                    d["reason"] == "conditional_or_inherited_context"
+                        && d["refusal_basis"].as_array().is_some_and(|bases| {
+                            bases.iter().any(|b| {
+                                b["class"] == "conditional_context" && b["name"] == "Debug"
+                            })
+                        })
+                }),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn unclassified_companion_on_the_owning_declaration_vetoes_its_types() {
+    let selected = "struct Record { value: Option<String> }";
+    let companion = "#[unknown_provider]";
+    let original = format!("#[derive(Debug, Clone)]\n{companion}\n{selected}");
+    let repo = fixture(&original);
+    let companion_start = original.find(companion).unwrap();
+    let result = run(
+        &repo,
+        enabled(request(&repo, json!([entry(&repo, selected, existing())]))),
+    );
+    withheld(&result);
+    assert_eq!(proof_count(&result, "Option"), 0, "{result}");
+    assert_eq!(proof_count(&result, "String"), 0, "{result}");
+    assert_eq!(proof_count(&result, "Debug"), 0, "{result}");
+    assert_eq!(proof_count(&result, "Clone"), 0, "{result}");
+    // The owning declaration still records its exact written-attribute witness.
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["refusal_basis"].as_array().is_some_and(|bases| {
+                bases.iter().any(|b| {
+                    b["class"] == "conditional_context"
+                        && b["name"].is_null()
+                        && b["anchor"]["path"] == "cases/layout/source.rs"
+                        && b["anchor"]["range"]["start_byte"] == companion_start
+                        && b["anchor"]["range"]["end_byte"] == companion_start + companion.len()
+                })
+            })),
+        "{result}"
+    );
+}
+
+#[test]
 fn qualified_prelude_signatures_are_opt_in_lossless_and_nonsemantic() {
     let selected = "fn selected(input: std::vec::Vec<std::string::String>) -> std::result::Result<std::option::Option<std::boxed::Box<u8>>, u8> { loop {} }";
     let repo = fixture(selected);
@@ -288,7 +967,6 @@ fn qualified_prelude_keeps_both_overlay_root_and_context_vetoes() {
             "use unknown::*;\n",
             "#![no_implicit_prelude]\n",
             "introduce!();\n",
-            "use unknown as Debug;\n#[derive(Debug)] struct Other;\n",
         ] {
             let repo = fixture(selected);
             let file = format!("cases/layout/{path}");
@@ -775,7 +1453,7 @@ fn prelude_does_not_bridge_constructors_associated_calls_methods_macros_or_custo
             "struct Record { value: Option<u8> }",
             "#[derive(Args)]\n",
             "conditional_or_inherited_context",
-            1,
+            0,
         ),
     ] {
         let repo = fixture(&format!("{prefix}{selected}"));

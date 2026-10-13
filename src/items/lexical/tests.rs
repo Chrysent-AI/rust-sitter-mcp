@@ -479,6 +479,8 @@ fn block_attribute_inertness_uses_the_strict_classifier_and_scope() {
         "fn f() { let _: selected; #[inline(always)] fn unrelated() {} }",
         "fn f() { let _: selected; #[inline(never)] fn unrelated() {} }",
         "fn f() { let _: selected; #[repr(C)] struct Other; }",
+        "fn f() { let _: selected; #[doc = \"docs\"] struct Other; }",
+        "fn f() { let _: selected; #[doc(hidden)] struct Other; }",
         "fn f() { let _: selected; { #[inject] fn unrelated() {} } }",
         "fn f(_: selected) { #[inject] fn unrelated() {} }",
     ] {
@@ -494,7 +496,7 @@ fn block_attribute_inertness_uses_the_strict_classifier_and_scope() {
         "#[derive(Debug)]",
         "#[derive(custom::Debug)]",
         "#[cfg_attr(test, inject)]",
-        "#[doc = \"docs\"]",
+        "#[custom::doc = \"docs\"]",
         "#[expect(dead_code)]",
         "#[custom::inline]",
     ] {

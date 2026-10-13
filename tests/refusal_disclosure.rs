@@ -111,7 +111,7 @@ fn zero_prelude_proofs_have_exact_source_destination_and_chain_veto_anchors() {
 }
 
 #[test]
-fn probe_a_shape_discharges_signature_option_and_discloses_remaining_causes() {
+fn signature_prelude_refusals_disclose_unknown_derive_and_remaining_causes() {
     let repo = Fixture::generate();
     repo.write("cases/layout/lib.rs", "mod source; #[cfg(test)] mod tests;");
     let a = "fn claim_review_status(outcome: Outcome) -> Status { match outcome { Outcome::Pass => Status::Pass } }";
@@ -122,17 +122,39 @@ fn probe_a_shape_discharges_signature_option_and_discloses_remaining_causes() {
     assert!(
         result["plan"]["binding_proofs"]
             .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["class"] == "standard_prelude" && p["anchor"]["expected_text"] == "Option"),
+            .is_none_or(|proofs| {
+                proofs.iter().all(|p| {
+                    !["Option", "Some", "None"]
+                        .iter()
+                        .any(|name| p["anchor"]["expected_text"] == *name)
+                })
+            }),
         "{result}"
     );
+    let option = result["plan"]["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["anchors"][0]["expected_text"] == "Option")
+        .unwrap();
     assert!(
-        !result["plan"]["decisions"]
+        option["refusal_basis"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|d| d["anchors"][0]["expected_text"] == "Option"),
+            .any(|basis| {
+                basis["class"] == "conditional_context" && basis.get("name").is_none()
+            }),
+        "{option}"
+    );
+    assert!(
+        witnessed(
+            &repo,
+            &result,
+            "conditional_context",
+            "cases/layout/source.rs",
+            "#[derive(custom::Debug)]"
+        ),
         "{result}"
     );
     assert!(
@@ -178,7 +200,7 @@ fn probe_a_shape_discharges_signature_option_and_discloses_remaining_causes() {
             "{decision}"
         );
     }
-    assert_eq!(result["coverage"]["standard_prelude"], 1);
+    assert!(result["coverage"].get("standard_prelude").is_none());
     assert!(result["plan"]["patch"].is_null());
 }
 

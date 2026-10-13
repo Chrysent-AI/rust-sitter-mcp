@@ -11,6 +11,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 * Bumped version.
 
+### Fixed
+
+* Discharge unshadowed standard-prelude types and `Some`/`None` independently of
+  registered helper attributes (`serde`, `schemars`) attributable to a
+  same-declaration derive on unrelated declarations. Fail closed on every other
+  companion attribute — qualified, unknown or custom, written directly or inside
+  `cfg_attr` — with an exact written-attribute witness, because a proc-attribute
+  macro can emit module-scope items. Direct unknown/custom/path-qualified derives
+  also veto unrelated prelude type/constructor proofs with unnamed
+  `conditional_context` evidence at the exact outer `#[derive(...)]` attribute,
+  retaining their own derive-name `derive_veto` and suppressing mixed-list builtin
+  proofs. Admit bare `Serialize`/`Deserialize`/`JsonSchema` registrar spellings
+  under the same disclosed spelling-based trust as their helpers, without
+  discharging their own derive-identity needs. Preserve shadowed/unresolved
+  derive-provider, same-spelling shadow and unproved-context refusals; recognize
+  bare compiler `doc` metadata as context-independent.
+
 ## [0.6.0] - 2026-10-12
 
 ### Added

@@ -12,7 +12,11 @@ use crate::{
 };
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
-use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::atomic::AtomicBool,
+    time::Instant,
+};
 use tree_sitter::Node;
 
 // Edition-independent subset of https://doc.rust-lang.org/std/prelude/v1/index.html.
@@ -30,6 +34,17 @@ const TYPE_COUNT: usize = 5;
 const STD_ROOT: usize = STANDARD_PRELUDE.len() + items::BUILTIN_DERIVES.len();
 const STD_ROOT_NAME: (&str, &str) = ("std", "std");
 const SHADOW_COUNT: usize = STD_ROOT + 1;
+
+// Well-known derive-provided helper namespaces. A companion attribute is a
+// registered helper only when the declaration also carries a derive that
+// registers it. Registration and provider identity are assumed from spelling,
+// never resolved; unknown, qualified, or unattributable companions fail closed.
+// Bare registrar derives share this spelling-based trust for prelude discharge,
+// but retain their own derive-identity needs.
+const DERIVE_HELPERS: [(&str, &[&str]); 2] = [
+    ("serde", &["Serialize", "Deserialize"]),
+    ("schemars", &["JsonSchema"]),
+];
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -162,6 +177,7 @@ impl Shadows {
                 {
                     basis.name.as_deref() == Some(name)
                         || (!derive
+                            && matches!(basis.class.as_str(), "shadow" | "macro_shadow")
                             && self.derives.values().any(|i| {
                                 basis.name.as_deref() == Some(items::BUILTIN_DERIVES[*i].0)
                             }))
@@ -188,12 +204,16 @@ impl Shadows {
     fn refuses(&self, index: usize) -> bool {
         self.context_unproved
             || self.names[index]
-            || self.derives.values().any(|i| self.refuses_derive(*i))
+            || self
+                .derives
+                .values()
+                .any(|i| self.refuses_derive_provider(*i))
+    }
+    fn refuses_derive_provider(&self, index: usize) -> bool {
+        self.context_unproved || self.names[STANDARD_PRELUDE.len() + index]
     }
     fn refuses_derive(&self, index: usize) -> bool {
-        self.context_unproved
-            || self.names[STANDARD_PRELUDE.len() + index]
-            || self.conditional_derives[index]
+        self.refuses_derive_provider(index) || self.conditional_derives[index]
     }
     /// Keep unbounded context; filesystem inheritance also keeps scoped prelude controls.
     /// Inline-to-parent promotion must not carry no_implicit_prelude upward.
@@ -288,6 +308,7 @@ impl Shadows {
         {
             return;
         }
+        let declares = declaration_derives(node, source);
         if let Some(names) = items::derive_names(node, source) {
             for (index, range) in names {
                 if let Some(index) = index {
@@ -335,9 +356,17 @@ impl Shadows {
                         sibling = attribute.next_named_sibling();
                     }
                 } else {
-                    // Unknown derives keep their own attribute need, not a
-                    // blanket veto on unrelated type spellings in this scope.
+                    let spelling =
+                        source[range.start_byte..range.end_byte].trim_start_matches("r#");
+                    let registrar = DERIVE_HELPERS
+                        .iter()
+                        .any(|(_, registrars)| registrars.contains(&spelling));
+                    // Registrar spellings share their helpers' trust boundary.
+                    // Every other derive may emit competing module bindings.
                     self.record(RefusalBasis::new("derive_veto", path, Some(range)));
+                    if !registrar {
+                        self.context("conditional_context", path, Some(node));
+                    }
                 }
             }
         } else {
@@ -346,6 +375,29 @@ impl Shadows {
                 self.context("unparseable_attribute", path, Some(node));
                 return;
             };
+            if source[name.byte_range()].trim_start_matches("r#") == "cfg_attr" {
+                match cfg_attr_derive_names(node, source, cfg, &declares) {
+                    Ok(names) => {
+                        for (index, range) in names {
+                            self.derives
+                                .insert((path.into(), range.start_byte, range.end_byte), index);
+                            self.conditional_derives[index] = true;
+                            self.record(
+                                RefusalBasis::new(
+                                    "conditional_context",
+                                    path,
+                                    Some(crate::result::ByteRange {
+                                        start_byte: node.start_byte(),
+                                        end_byte: node.end_byte(),
+                                    }),
+                                )
+                                .named(items::BUILTIN_DERIVES[index].0),
+                            );
+                        }
+                    }
+                    Err(()) => self.context("conditional_context", path, Some(node)),
+                }
+            }
             if matches!(
                 &source[name.byte_range()],
                 "no_std" | "no_core" | "no_implicit_prelude" | "prelude_import"
@@ -372,18 +424,182 @@ impl Shadows {
             }) {
                 next = next.and_then(|n| n.next_named_sibling());
             }
+            let spelling = source[name.byte_range()].trim_start_matches("r#");
             if node.kind() == "inner_attribute_item" {
                 self.context("conditional_context", path, Some(node));
             } else if next.is_some_and(|n| n.kind() == "mod_item")
-                && !matches!(&source[name.byte_range()], "cfg" | "path")
+                && !matches!(spelling, "cfg" | "path")
             {
                 self.context("module_attribute", path, Some(node));
+            } else if !matches!(spelling, "cfg" | "cfg_attr")
+                && !registered_helper(spelling, &declares)
+            {
+                // An unclassified written attribute is a proc-attribute macro that
+                // can emit module-scope items. Fail closed with this exact written
+                // attribute as the original-coordinate refusal witness rather than
+                // silently treating an unexamined companion as inert.
+                self.context("conditional_context", path, Some(node));
             }
             // Otherwise the attributed declaration's written name is already in
             // the superset shadow set, even when its presence is conditional.
             // The attribute's own move/context need remains independently blocked.
         }
     }
+}
+
+/// A companion is inert only when a known helper namespace is registered by a
+/// derive on the same declaration. Attribution is assumed from spelling, never
+/// proved; an unprovable attribution refuses.
+fn registered_helper(name: &str, declares: &BTreeSet<String>) -> bool {
+    DERIVE_HELPERS.iter().any(|(helper, registrars)| {
+        *helper == name
+            && registrars
+                .iter()
+                .any(|registrar| declares.contains(*registrar))
+    })
+}
+
+/// Derive spellings attached to the declaration owning `node`, across its
+/// contiguous attribute/comment run. Used only to attribute a helper attribute
+/// to a registrar derive on the same declaration.
+fn declaration_derives(node: Node<'_>, source: &str) -> BTreeSet<String> {
+    let mut start = node;
+    while let Some(previous) = start.prev_named_sibling().filter(|n| {
+        matches!(
+            n.kind(),
+            "attribute_item" | "line_comment" | "block_comment"
+        )
+    }) {
+        start = previous;
+    }
+    let mut declares = BTreeSet::new();
+    let mut sibling = Some(start);
+    while let Some(attribute) = sibling.filter(|n| {
+        matches!(
+            n.kind(),
+            "attribute_item" | "line_comment" | "block_comment"
+        )
+    }) {
+        if attribute.kind() == "attribute_item"
+            && let Some(names) = items::derive_names(attribute, source)
+        {
+            for (_, range) in names {
+                declares.insert(
+                    source[range.start_byte..range.end_byte]
+                        .trim_start_matches("r#")
+                        .to_string(),
+                );
+            }
+        }
+        sibling = attribute.next_named_sibling();
+    }
+    declares
+}
+
+/// Inspect only actual cfg_attr payloads, never derive-looking doc/helper tokens.
+/// Unknown conditions remain possible; the existing cfg audit skips known-OFF wrappers.
+/// Returned built-in spellings still require the scoped provider-identity audit.
+fn cfg_attr_derive_names(
+    node: Node<'_>,
+    source: &str,
+    cfg: Option<&items::DeclaredCfg>,
+    declares: &BTreeSet<String>,
+) -> Result<Vec<(usize, crate::result::ByteRange)>, ()> {
+    use ra_ap_syntax::{AstNode, Edition, SourceFile, SyntaxKind, ast};
+    let parsed = SourceFile::parse(
+        &format!("{}\nfn __cfg_probe() {{}}", &source[node.byte_range()]),
+        Edition::CURRENT,
+    );
+    if !parsed.errors().is_empty() {
+        return Err(());
+    }
+    let meta = parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .find_map(ast::Attr::cast)
+        .and_then(|attr| attr.meta())
+        .ok_or(())?;
+    let mut stack = vec![(meta, 0)];
+    let mut names = Vec::new();
+    while let Some((meta, depth)) = stack.pop() {
+        if depth > 32 {
+            return Err(());
+        }
+        match meta {
+            ast::Meta::CfgAttrMeta(ref attr) => {
+                if items::cfg::attribute(&format!("#[{}]", meta.syntax()), cfg, false).is_ok() {
+                    continue;
+                }
+                stack.extend(attr.metas().map(|nested| (nested, depth + 1)));
+            }
+            _ if meta
+                .simple_name()
+                .is_some_and(|name| name.trim_start_matches("r#") == "derive") =>
+            {
+                let (_, tree) = meta.as_simple_call().ok_or(())?;
+                let tokens: Vec<_> = tree
+                    .syntax()
+                    .descendants_with_tokens()
+                    .filter_map(|n| n.into_token())
+                    .filter(|t| !t.kind().is_trivia())
+                    .collect();
+                if tokens.first().map(|t| t.text()) != Some("(")
+                    || tokens.last().map(|t| t.text()) != Some(")")
+                    || tokens.len() <= 2
+                {
+                    return Err(());
+                }
+                let mut name = true;
+                for token in &tokens[1..tokens.len() - 1] {
+                    if name {
+                        let index = (token.kind() == SyntaxKind::IDENT)
+                            .then(|| {
+                                items::BUILTIN_DERIVES
+                                    .iter()
+                                    .position(|(n, _)| *n == token.text().trim_start_matches("r#"))
+                            })
+                            .flatten()
+                            .ok_or(())?;
+                        names.push((
+                            index,
+                            crate::result::ByteRange {
+                                start_byte: node.start_byte()
+                                    + usize::from(token.text_range().start()),
+                                end_byte: node.start_byte() + usize::from(token.text_range().end()),
+                            },
+                        ));
+                    } else if token.text() != "," {
+                        return Err(());
+                    }
+                    name = !name;
+                }
+            }
+            // Any cfg_attr spelling not parsed as a structured wrapper must
+            // retain its unexamined-payload veto, not become helper metadata.
+            _ if meta
+                .simple_name()
+                .is_some_and(|name| name.trim_start_matches("r#") == "cfg_attr") =>
+            {
+                return Err(());
+            }
+            // Everything else fails closed: only compiler-inert metadata and
+            // registered helpers attributable to a same-declaration derive are
+            // inert. Unknown, qualified, or unattributable payloads veto.
+            _ => {
+                let text = format!("#[{}]", meta.syntax());
+                if items::context_independent_attribute(&text)
+                    || meta.simple_name().is_some_and(|name| {
+                        registered_helper(name.trim_start_matches("r#"), declares)
+                    })
+                {
+                    continue;
+                }
+                return Err(());
+            }
+        }
+    }
+    Ok(names)
 }
 
 /// Module scans visit immediate declarations only. Lexical bodies are audited
@@ -960,9 +1176,9 @@ pub(super) fn discharge(
                 }
             }
         }
-        // Record contextual derives too: an attribute on a retained declaration
-        // can be the veto that otherwise prevents a moved type reference.
-        let mut derive_identity_unproved = false;
+        // A shadowed built-in spelling may name a custom derive emitting bindings.
+        // Only companion conditionality is independent of type/constructor identity.
+        let mut derive_provider_unproved = false;
         if candidate.is_some() || need.attribute_range.is_some() {
             for ((path, start, end), index) in &visible.derives {
                 items::check(controls.0, controls.1)?;
@@ -970,28 +1186,50 @@ pub(super) fn discharge(
                     .tree
                     .root_node()
                     .named_descendant_for_byte_range(*start, *end);
-                if visible.refuses_derive(*index)
-                    || chain_shadows(path, derive_node, contexts, &modules, false)
-                        .refuses_derive(*index)
+                let original = chain_shadows(path, derive_node, contexts, &modules, false);
+                if visible.refuses_derive_provider(*index)
+                    || original.refuses_derive_provider(*index)
                 {
-                    derive_identity_unproved = true;
+                    derive_provider_unproved = true;
                     if need.reason == DecisionReason::ExternalOrMissingBinding
-                        && candidate.is_some()
+                        && let Some(audited) = audited_candidate
                     {
-                        need.refusal_basis.push(RefusalBasis::new(
-                            "derive_veto",
-                            path,
-                            Some(crate::result::ByteRange {
-                                start_byte: *start,
-                                end_byte: *end,
-                            }),
-                        ));
-                        need.refusal_basis.extend(visible.basis_for(*index, true));
-                        need.refusal_basis.extend(
-                            chain_shadows(path, derive_node, contexts, &modules, false)
-                                .basis_for(*index, true),
-                        );
+                        if visible.names[STANDARD_PRELUDE.len() + index]
+                            || original.names[STANDARD_PRELUDE.len() + index]
+                        {
+                            need.refusal_basis.push(RefusalBasis::new(
+                                "derive_veto",
+                                path,
+                                Some(crate::result::ByteRange {
+                                    start_byte: *start,
+                                    end_byte: *end,
+                                }),
+                            ));
+                        }
+                        // Nested derive names retain the introducing wrapper as
+                        // refusal provenance, not only the provider/name range.
+                        let mut attribute = derive_node;
+                        while attribute.is_some_and(|n| n.kind() != "attribute_item") {
+                            attribute = attribute.and_then(|n| n.parent());
+                        }
+                        if let Some(attribute) = attribute
+                            .filter(|n| items::derive_names(*n, &files[path].source).is_none())
+                        {
+                            need.refusal_basis.push(RefusalBasis::new(
+                                "conditional_context",
+                                path,
+                                Some(crate::result::ByteRange {
+                                    start_byte: attribute.start_byte(),
+                                    end_byte: attribute.end_byte(),
+                                }),
+                            ));
+                        }
+                        need.refusal_basis.extend(visible.basis_for(audited, false));
+                        need.refusal_basis
+                            .extend(original.basis_for(audited, false));
                     }
+                }
+                if visible.refuses_derive(*index) || original.refuses_derive(*index) {
                     continue;
                 }
                 record_proof(
@@ -1032,7 +1270,7 @@ pub(super) fn discharge(
             && let Some(index) = candidate
             && !visible.refuses(audited_candidate.expect("prelude candidate"))
             && (index < TYPE_COUNT || !visible.refuses(0))
-            && !derive_identity_unproved
+            && !derive_provider_unproved
         {
             record_proof(
                 BindingProof {
@@ -1050,7 +1288,7 @@ pub(super) fn discharge(
                     destination_path: destination.clone(),
                     standard_path: STANDARD_PRELUDE[index].1.into(),
                     basis: if index >= TYPE_COUNT {
-                        "caller enabled assume_standard_prelude; bare value-position Option constructor; constructor and Option type spellings unshadowed under the same original/final module, batch, lexical, derive and prelude-control audits as standard-prelude types; constructor identity assumed with the type; derive-generated imports are not modeled; not macro hygiene proved; no import synthesized; semantic checking not performed".into()
+                        "caller enabled assume_standard_prelude; bare value-position Option constructor; constructor and Option type spellings unshadowed under the same original/final module, batch, lexical and prelude-control audits as standard-prelude types; derive provider identity audited for same-spelling competition; shadowed or unresolved built-in derive providers refuse; direct unknown/custom/qualified derives veto with an exact outer-attribute witness, except bare Serialize/Deserialize/JsonSchema admitted under spelling-based trust; constructor identity assumed with the type; derive-generated imports are not modeled; not macro hygiene proved; no import synthesized; semantic checking not performed".into()
                     } else {
                         let form = if qualified {
                             format!(
@@ -1061,7 +1299,7 @@ pub(super) fn discharge(
                             String::new()
                         };
                         format!(
-                            "caller enabled assume_standard_prelude; {form}edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; written lexical bindings checked; direct block macro invocations, macro expression-statement wrappers and outer attribute siblings in the reference's block and ancestor blocks up to the nearest module audited regardless of source order, only strict context-independent attributes exempted; signatures outside those blocks ignore body expansion sites; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; relevant local derives audited for same-spelling competition; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed"
+                            "caller enabled assume_standard_prelude; {form}edition-independent std::prelude::v1 type; complete ordinary module identity chains; own/enclosing inline source scopes and final destination batch scopes examined for competing written names and globs; written lexical bindings checked; direct block macro invocations, macro expression-statement wrappers and outer attribute siblings in the reference's block and ancestor blocks up to the nearest module audited regardless of source order, only strict context-independent attributes exempted; signatures outside those blocks ignore body expansion sites; scoped no_implicit_prelude and chain-wide crate-root prelude controls and unbounded item/module-attribute context examined; derive provider identity audited for same-spelling competition; shadowed or unresolved built-in derive providers refuse; registered helper companions on other module-scope declarations do not veto type identity under spelling-based attribution; direct unknown/custom/qualified derives veto with an exact outer-attribute witness, except bare Serialize/Deserialize/JsonSchema admitted under the same spelling-based trust; cfg_attr payloads that may introduce non-compiler derives retain their exact conditional-context veto; written token-tree not expanded; no macro hygiene claim; no import synthesized; semantic checking not performed"
                         )
                     },
                 },

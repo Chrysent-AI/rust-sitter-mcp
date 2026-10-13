@@ -315,7 +315,8 @@ no terminal-name audit. The `std` root must still be unshadowed: written competi
 module/block scope chain veto proof at either overlay. Extern-crate declarations
 bind their alias when present, otherwise their crate name; renaming `std` to
 `something` does not introduce a competing `std` binding. Original/final root,
-context, derive, macro and prelude-control audits remain in force. Other qualified
+context, macro and prelude-control audits remain in force; visible built-in
+derive spellings still require unshadowed provider identity. Other qualified
 paths, relative paths, associated calls and qualified constructors do not qualify.
 No semantic configuration is required for this
 caller-assumed coverage.
@@ -334,7 +335,8 @@ The same assumption also covers **bare value-position `Some` and `None`** from
 same anchor/item/destination/path/basis shape, and
 `coverage.standard_prelude_constructor` counts occurrences separately from type
 and derive proofs. Both the constructor spelling and `Option` must be unshadowed
-under the original/final module, batch, lexical, derive and prelude-control audits.
+under the original/final module, batch, lexical and prelude-control audits;
+visible built-in derive spellings still require unshadowed provider identity.
 The basis says **"constructor identity assumed with the type; derive-generated
 imports are not modeled; not macro hygiene proved"**. This is a caller assumption,
 not an RA resolution claim about imports emitted by custom derives. Qualified
@@ -363,10 +365,12 @@ macro can emit a competing hoisted item. The refusal discloses the attribute's
 original range as `lexical_uncertainty` with `conditional_local_context`; it is
 not a standalone-macro witness eligible for test-consumer risk acknowledgment.
 The existing strict context-independent predicate exempts written attributes
-(`allow(...)`, `inline`, `inline(always)`, `inline(never)`, `repr(...)`); doc comments
-are inert comment syntax. Declared configuration can additionally discharge
-conditional wrappers as described below. Explicit `doc`/`expect`, unknown
-conditional/custom attributes and local derives remain unexamined: bare derive spelling alone does not prove
+(`allow(...)`, `inline`, `inline(always)`, `inline(never)`, `repr(...)` and bare
+compiler `doc` metadata); doc comments are inert comment syntax. Doc payloads are
+not evaluated, and qualified attribute providers are not exempt. Declared
+configuration can additionally discharge conditional wrappers as described below.
+Explicit `expect`, unknown conditional/custom attributes and local derives remain
+unexamined: bare derive spelling alone does not prove
 compiler-built-in macro identity in that block. Expansion sites confined to sibling
 blocks do not veto, and body attributes do not veto a signature outside their blocks.
 This audits direct block macro invocations, macro expression-statement wrappers
@@ -381,10 +385,36 @@ invocations and unexamined module-declaration attribute macros (including
 `cfg_attr`, whose payload may introduce one). These unbounded vetoes also survive
 sibling inline module scopes. A same-spelling textual macro definition remains relevant
 downward through the chain; unrelated definitions do not veto every type.
-Derive-related type refusals are limited to same-spelling competition for a
-contextual built-in derive or its conditional/unexamined companion attributes
-in relevant own/enclosing inline/final scopes, not unrelated filesystem ancestors.
-Unknown derives retain their own attribute blockers, not a blanket type-name veto.
+Prelude type/constructor refusals depend on their own same-spelling shadows,
+unproved context and shadowed or unresolved providers of visible built-in derive
+spellings: a custom derive with a built-in spelling can emit competing bindings.
+Companion attributes fail closed: only compiler-inert metadata and registered
+derive helpers are inert. A helper namespace (`serde`, `schemars`) is admitted
+only when the declaration also carries a derive that registers it (`Serialize`,
+`Deserialize` or `JsonSchema`); attribution is assumed from spelling, never
+resolved, and an unattributable companion refuses. Every other companion —
+qualified, unknown or custom — sets an unbounded `conditional_context` refusal
+anchored on its exact written attribute, because a proc-attribute macro can emit
+module-scope items. `cfg_attr` payloads are inspected recursively under the same
+classification: only compiler metadata, a registered helper or a built-in derive
+spelling is admitted, and any other payload retains a `conditional_context`
+refusal anchored on the exact outer `cfg_attr` attribute. Introduced built-in
+spellings still face the scoped provider-shadow audit; they receive no
+unconditional derive proof. Only wrappers proved inactive under caller-declared
+configuration are skipped; unknown conditions remain possible, including unlisted
+features. Helper/doc payloads do not introduce derives, even if their strings
+contain derive-like text. Block-local expansion audits and unknown attributes on
+moved or required declarations retain their independent blockers. Conditional
+companions retain their own derive-identity refusals. Direct derive entries other
+than bare compiler-built-in spellings or the known bare registrar spellings
+`Serialize`, `Deserialize` and `JsonSchema` veto unrelated prelude type/constructor
+proofs: unknown, custom and path-qualified entries keep their own `derive_veto`
+at the derive-name range and add unnamed `conditional_context` evidence anchored
+on the exact outer `#[derive(...)]` attribute in original coordinates. The three
+registrar spellings are admitted for prelude discharge under the same disclosed
+spelling-based trust as their helpers, not resolved provider identity or an
+expansion/hygiene proof; they retain their own derive-identity needs. This direct
+registrar exception does not change the `cfg_attr` payload rule above.
 Refusal preserves existing typed needs; it is not an override. A proven written
 binding still uses ordinary repair logic, including explicit standard-library
 imports, never a prelude proof.
@@ -398,8 +428,11 @@ chain controls, not ordinary imports or declarations. Any same-spelling
 `macro_rules!`, item or explicit use-leaf (including aliases), or any visible glob,
 refuses that derive. Child/sibling scopes do not leak bindings to a parent.
 Path forms such as `#[derive(foo::Debug)]` or `#[derive(serde::Serialize)]` never
-qualify. In `#[derive(Debug, Args)]`, an unshadowed `Debug` is separately discharged,
-but `Args` retains the attribute veto and the whole batch remains blocked.
+qualify. In `#[derive(Debug, Args)]`, the unproved `Args` expansion vetoes both
+unrelated prelude proofs and `Debug`'s builtin proof; `Args` also retains its own
+attribute veto and the whole batch remains blocked. A mixed list containing only
+builtins and the admitted bare registrar spellings can still discharge unshadowed
+builtin names independently, while registrar derive-identity needs remain.
 `#[serde(...)]`, `#[expect(...)]` and all other non-allowlisted attributes still
 retain their own move/context needs. Unexamined companion attributes, including unknown or unsupported
 `cfg_attr` payloads, veto an unconditional built-in derive proof on that declaration.
@@ -416,7 +449,7 @@ Derive evidence is additive: `plan.binding_proofs` uses
 contributing `item_ids`, `destination_path`, standard macro `standard_path` and an
 explicit caller-assumption `basis`. `coverage.standard_builtin_derive` counts
 name occurrences separately from the five type names. Contextual derives on
-retained or destination declarations are recorded too when they relieve a veto;
+retained or destination declarations are recorded too when independently admitted;
 the same occurrence/destination is counted once and its contributing items are
 merged. Unknown names never receive proof records under this flag. Counts survive response fitting;
 `counts.omissions.binding_proofs` discloses omitted records, and oversized audits

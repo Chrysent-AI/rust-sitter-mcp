@@ -78,6 +78,42 @@ fn builtin_derive_opt_in_is_lossless_labeled_counted_and_strict_off() {
 }
 
 #[test]
+fn builtin_derive_doc_metadata_matches_undocumented_declarations() {
+    let selected = "struct Record { value: Option<String> }";
+    for companion in [
+        "",
+        "#[doc(hidden)]",
+        "#[doc = include_str!(\"missing.md\")]",
+    ] {
+        let original = format!("#[derive(Debug, Clone)]\n{companion}\n{selected}\n");
+        let repo = fixture(&original);
+        let args = request(&repo, json!([entry(&repo, selected, existing())]));
+        let default = run(&repo, args.clone());
+        let mut off = args.clone();
+        off["assume_standard_prelude"] = json!(false);
+        assert_eq!(
+            serde_json::to_vec(&default).unwrap(),
+            serde_json::to_vec(&run(&repo, off)).unwrap()
+        );
+        withheld(&default);
+        let result = run(&repo, enabled(args));
+        assert_eq!(result["plan"]["applicable"], true, "{companion}: {result}");
+        assert_eq!(result["coverage"]["standard_builtin_derive"], 2);
+        assert_eq!(result["coverage"]["standard_prelude"], 2);
+        for name in ["Debug", "Clone", "Option", "String"] {
+            assert_eq!(proofs(&result, name), 1, "{companion}: {result}");
+        }
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        let copy = apply(&repo, &result);
+        assert!(
+            fs::read_to_string(copy.0.join("cases/layout/destination.rs"))
+                .unwrap()
+                .contains(original.trim_end())
+        );
+    }
+}
+
+#[test]
 fn builtin_derive_macro_identity_refuses_both_chains_and_batch_arrivals() {
     let selected = "struct Record { value: u8 }";
     for path in ["source.rs", "destination.rs", "lib.rs"] {
@@ -149,9 +185,11 @@ fn builtin_derive_unknown_path_mixed_and_other_attributes_keep_vetoes() {
         ("#[derive(serde::Serialize)]", 0),
         ("#[derive(foo::Debug)]", 0),
         ("#[derive(::Debug)]", 0),
-        ("#[derive(Debug, Args)]", 1),
-        ("#[derive(Debug, serde::Serialize)]", 1),
-        ("#[derive(Debug)]\n#[derive(Args)]", 1),
+        ("#[derive(Debug, Args)]", 0),
+        ("#[derive(Debug, serde::Serialize)]", 0),
+        ("#[derive(Debug)]\n#[derive(Args)]", 0),
+        ("#[derive(Debug, Serialize)]", 1),
+        ("#[derive(Debug, Deserialize, JsonSchema)]", 1),
         ("#[derive(Args)]", 0),
         ("#[serde(default)]", 0),
         ("#[expect(dead_code)]", 0),
@@ -249,6 +287,10 @@ fn strict_attribute_classifier_parity_in_advice_move_and_required_binding() {
         ("#[inline(always)]", false),
         ("#[inline(never)]", false),
         ("#[repr(C)]", false),
+        ("#[doc(hidden)]", false),
+        ("#[doc = \"documented\"]", false),
+        ("#[custom::doc(hidden)]", true),
+        ("#[documentary]", true),
         ("#[derive(Debug)]", true),
         ("#[derive(Args)]", true),
         ("#[expect(dead_code)]", true),
@@ -351,10 +393,13 @@ fn shared_attribute_predicate_preserves_inner_and_unfinished_binding_guards() {
 fn builtin_derive_arriving_attributes_audit_their_original_source_identity() {
     let selected = "struct Record { value: Option<u8> }";
     let other = "struct Other;";
-    for prefix in [
-        "#[derive(Debug)]",
-        "use external::Debug;\n#[derive(Debug)]",
-        "#[derive(Args)]",
+    for (prefix, prelude_count) in [
+        ("#[derive(Debug)]", 1),
+        ("use external::Debug;\n#[derive(Debug)]", 0),
+        ("#[derive(Args)]", 0),
+        ("#[derive(Serialize)]", 1),
+        ("#[derive(Deserialize)]", 1),
+        ("#[derive(JsonSchema)]", 1),
     ] {
         let repo = fixture(selected);
         repo.write(
@@ -374,11 +419,7 @@ fn builtin_derive_arriving_attributes_audit_their_original_source_identity() {
         );
         let clean = prefix == "#[derive(Debug)]";
         assert_eq!(proofs(&result, "Debug"), usize::from(clean), "{result}");
-        assert_eq!(
-            proofs(&result, "Option"),
-            usize::from(!prefix.starts_with("use ")),
-            "{result}"
-        );
+        assert_eq!(proofs(&result, "Option"), prelude_count, "{result}");
         if clean {
             apply(&repo, &result);
         } else {

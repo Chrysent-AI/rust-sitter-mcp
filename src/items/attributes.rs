@@ -9,8 +9,8 @@ pub(crate) fn identity_inert_metadata(name: Option<&str>) -> bool {
     matches!(name, Some("allow" | "warn" | "deny" | "forbid" | "doc"))
 }
 
-/// These existing forms require no relaxed proof. Derives deliberately remain
-/// outside this predicate: macro identity needs scoped, opt-in evidence.
+/// These compiler-known forms require no relaxed proof. Derives deliberately
+/// remain outside this predicate: macro identity needs scoped, opt-in evidence.
 pub(crate) fn context_independent_attribute(text: &str) -> bool {
     text.starts_with("#[allow(")
         || text.starts_with("#![allow(")
@@ -18,6 +18,16 @@ pub(crate) fn context_independent_attribute(text: &str) -> bool {
         || text == "#[inline(always)]"
         || text == "#[inline(never)]"
         || text.starts_with("#[repr(")
+        // Doc metadata (including doc-comment equivalents) cannot emit bindings.
+        // Recognize only the bare compiler attribute; do not evaluate its payload.
+        || text
+            .strip_prefix("#[")
+            .or_else(|| text.strip_prefix("#!["))
+            .and_then(|text| text.trim_start().strip_prefix("doc"))
+            .is_some_and(|tail| {
+                let tail = tail.trim_start();
+                tail.starts_with('(') || tail.starts_with('=') || tail == "]"
+            })
 }
 
 // Compiler-provided derive macros, not arbitrary traits with these spellings.
