@@ -13,6 +13,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Admit tuple expressions/patterns and string patterns in exact caller-asserted
+  standard `matches!` invocations. Classify field receivers in stationary
+  consumers without confusing field names with moved free items; unasserted
+  and unknown macro token trees retain conservative name-candidate refusals,
+  including dot-following names.
+
 * Discharge unshadowed standard-prelude types and `Some`/`None` independently of
   registered helper attributes (`serde`, `schemars`) attributable to a
   same-declaration derive on unrelated declarations. Fail closed on every other

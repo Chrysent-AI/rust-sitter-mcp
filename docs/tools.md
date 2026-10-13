@@ -268,18 +268,28 @@ handling. The caller asserts only that each exact invocation uses the standard
 duplicate, overlapping, non-invocation or out-of-scope anchors return
 `INVALID_PARAMS` with indexed `error.field`.
 
-The bounded adapter accepts bare parenthesized `matches!` with a simple
-identifier/path/literal expression (optionally parenthesized), a written unit
-enum-variant path or top-level `|` alternatives, and an optional trailing comma.
-Wildcard/literal alternatives introduce no binding references. It parses copied
-argument slices solely to classify roles, maps sites back byte-exactly, verifies
-the written enum owner and unit variant, and uses ordinary import/path, lexical,
-module, access and collision checks. Only the enum-owner prefix can be spliced;
-`::Variant` remains exact. Strings/comments do not create reference sites.
+The bounded adapter accepts bare parenthesized `matches!` with simple
+identifier/path/literal expressions, parenthesized expressions and tuples, plus
+written unit enum-variant paths, wildcards, integer/boolean/character/string
+literal patterns, tuple patterns and `|` alternatives. A trailing comma is
+optional. In stationary consumer invocations, field expressions such as
+`need.category` are classified by parsed role: the receiver is checked as an
+expression, but the field name is not an item reference. Field access inside a
+moved body still refuses without member/access proof; method calls remain outside
+the subset. For example, an exact assertion can admit
+`matches!((need.category, need.reason), ("binding_collision", DecisionReason::LexicalContextUnproved) | ("macro_dependency", DecisionReason::MacroContextUnexamined))`
+without treating `category` as a free-item reference.
+
+The adapter parses copied argument slices solely to classify roles, maps sites
+back byte-exactly, verifies the written enum owner and unit variant, and uses
+ordinary import/path, lexical, module, access and collision checks. In variant
+paths only the enum-owner prefix can be spliced; `::Variant` remains exact.
+Strings/comments do not create reference sites. Discharging a field-name-only
+candidate creates no affected-reference proof or coverage count.
 
 Known local/module/ancestor macro shadows, renamed imports, visible globs,
 `macro_use`, unknown providers and final destination shadows still refuse with
-original witnesses. Qualified macro names, guards, binders, tuple/record
+original witnesses. Qualified macro names, guards, binders, tuple-struct/record
 constructors, generics/associated paths, nested/token-generating macros and
 malformed/recovered syntax are outside the subset. Assertions are invocation
 specific: another macro's lexical or imported-alias veto is not waived. All
@@ -1605,6 +1615,15 @@ Visibility checks inspect the item and each ordinary module declaration from its
 Bare selected-name references in other admitted files are checked against visible glob imports, including `use super::super::*`, grouped/module-alias routes and possible chained forwarding. A reachable or unproved route emits `glob_consumer_unrepaired` in category `glob_dependency`, with `action.route:"selection_change_required"`, `blocks_applicability:true`, and no acknowledgment or rewrite choice. Its first anchor is the original reference identifier in the consumer file; subsequent anchors contain the complete original candidate glob statements. `refusal_basis` retains their `glob_import` ranges and affected name, plus any lexical uncertainty witness. This is conservative written reachability, not proof of glob binding identity. Named bindings in the same scope and proven independent locals are not glob-only consumers; sibling/parent-module imports are not inherited. Existing explicit-import and same-file repair paths are unchanged. These third-file risks cannot be waived by `acknowledge_test_consumers` or semantic
 resolution. Explicit `parent_facade` may instead prove the narrow direct old-route
 preservation case above; all other such blockers keep every artifact null. Keep the affected item in place or change the selected move; never narrow away admitted consumers just to obtain an applicable plan.
+
+The macro consumer token-candidate scan treats any matching identifier token
+inside a macro as a candidate, including names after `.` or `::`. Token trees
+are not field syntax: a macro may emit a free-item path from a dot-following
+name. Strings/comments do not create candidates. Unknown and unasserted macros
+remain conservative; only an exact `standard_matches_assertions` anchor can
+admit a supported standard `matches!` invocation through parsed role and ordinary
+binding checks as described above. This does not change the advisory
+`macro_token_candidate` observation channel or prove expansion or hygiene.
 
 Each alternative is checked against the same target and final binding/access constraints before assembly; newly colliding aliases block. Caller-authored bytes and associated reference repairs remain `origin:"caller_override"`, never compiler-verified. Always echo a complete published target: synthesized import `binding` identities can include a scope anchor, and separator identities include their boundary role. Neither display IDs nor a cached server plan authorize a choice.
 

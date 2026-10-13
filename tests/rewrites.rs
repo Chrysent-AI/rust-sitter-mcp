@@ -444,6 +444,256 @@ fn local_uses_absolute_restrictions_and_unrelated_same_spelling() {
     );
 }
 #[test]
+fn asserted_tuple_fields_do_not_block_unrelated_function_moves() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\nmod consumer;\n");
+    repo.write("cases/layout/source.rs", "fn category() {}\n");
+    let invocation = "matches!((need.category, need.reason), (\"binding_collision\", DecisionReason::LexicalContextUnproved) | (\"macro_dependency\", DecisionReason::MacroContextUnexamined))";
+    let consumer = format!(
+        "enum DecisionReason {{ LexicalContextUnproved, MacroContextUnexamined }}\nstruct Need {{ category: &'static str, reason: DecisionReason }}\nfn caller(need: Need) -> bool {{ {invocation} }}\n"
+    );
+    repo.write("cases/layout/consumer.rs", &consumer);
+    compile_layout(&repo);
+    let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","fn category() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]});
+    for assertions in [None, Some(Value::Null), Some(json!([]))] {
+        let mut unasserted = args.clone();
+        if let Some(assertions) = assertions {
+            unasserted["standard_matches_assertions"] = assertions;
+        }
+        let result = run(&repo, unasserted);
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "macro_context_unexamined"),
+            "{result}"
+        );
+    }
+    let mut asserted = args;
+    asserted["standard_matches_assertions"] =
+        json!([anchor(&repo, "cases/layout/consumer.rs", invocation)]);
+    let result = run(&repo, asserted);
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    assert_eq!(
+        result["plan"]["integrity"]["semantic"], "not_performed",
+        "{result}"
+    );
+    // No affected item reference was found: field spelling alone is not proof coverage.
+    assert!(
+        result["coverage"].get("assumed_standard_matches").is_none(),
+        "{result}"
+    );
+    assert!(result["coverage"].get("ra_resolved").is_none(), "{result}");
+    let copy = apply(&repo, &result);
+    assert_eq!(
+        fs::read_to_string(copy.0.join("cases/layout/consumer.rs")).unwrap(),
+        consumer
+    );
+    compile_layout(&copy);
+}
+#[test]
+fn dot_capture_macro_remains_a_real_function_consumer() {
+    let repo = Fixture::generate();
+    repo.write("cases/layout/lib.rs", "mod source;\nmod consumer;\n");
+    repo.write("cases/layout/source.rs", "pub(crate) fn category() {}\n");
+    let invocation = "invoke!(unused.category)";
+    repo.write("cases/layout/consumer.rs", "macro_rules! invoke {\n    ($receiver:ident . $name:ident) => { crate::source::$name() };\n}\nfn caller() { invoke!(unused.category); }\n");
+    compile_layout(&repo);
+    let args = json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","pub(crate) fn category() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]});
+    for asserted in [false, true] {
+        let mut args = args.clone();
+        if asserted {
+            args["standard_matches_assertions"] =
+                json!([anchor(&repo, "cases/layout/consumer.rs", invocation)]);
+        }
+        let result = run(&repo, args);
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["category"] == "macro_dependency"
+                    && d["reason"] == "macro_context_unexamined"
+                    && d["anchors"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|a| a["expected_text"] == invocation)),
+            "{result}"
+        );
+    }
+}
+#[test]
+fn macro_path_tokens_still_block_function_moves() {
+    for invocation in [
+        "some_macro!(category)",
+        "some_macro!(crate::source::category)",
+        "some_macro!(need.category(), category)",
+        "some_macro!(need.category)",
+    ] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod source;\nmod consumer;\n");
+        repo.write("cases/layout/source.rs", "pub(crate) fn category() {}\n");
+        repo.write(
+            "cases/layout/consumer.rs",
+            &format!("fn caller() {{ {invocation}; }}\n"),
+        );
+        let result = run(
+            &repo,
+            json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","pub(crate) fn category() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+        );
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["category"] == "macro_dependency"
+                    && d["reason"] == "macro_context_unexamined"
+                    && d["blocks_applicability"] == true),
+            "{invocation}: {result}"
+        );
+    }
+}
+#[test]
+fn asserted_tuple_invocations_keep_grammar_and_binding_refusals() {
+    for invocation in [
+        "matches![(need.category, need.reason), (\"binding_collision\", DecisionReason::LexicalContextUnproved)]",
+        "matches!{(need.category, need.reason), (\"binding_collision\", DecisionReason::LexicalContextUnproved)}",
+        "matches!((nested!(need.category), need.reason), (_, DecisionReason::LexicalContextUnproved))",
+        "matches!((need.category, need.reason), (_, nested!(DecisionReason::LexicalContextUnproved)))",
+        "matches!((need.category(), need.reason), (_, DecisionReason::LexicalContextUnproved))",
+        "matches!((need.category, need.reason), (binder, DecisionReason::LexicalContextUnproved))",
+        "matches!((need.category, need.reason), (_, DecisionReason::LexicalContextUnproved) if true)",
+        "matches!((need.category,, need.reason), (_, DecisionReason::LexicalContextUnproved))",
+        "matches!((need.category, need.reason), (_, DecisionReason::Missing))",
+        "matches!((missing.category, need.reason), (_, DecisionReason::LexicalContextUnproved))",
+        "matches!((need.category, need.reason), (_, DecisionReason::Tuple))",
+        "matches!((crate::source::category(), need.reason), (_, DecisionReason::LexicalContextUnproved))",
+        "matches!((need.category, need.reason), (crate::source::category, DecisionReason::LexicalContextUnproved))",
+    ] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod source;\nmod consumer;\n");
+        repo.write("cases/layout/source.rs", "pub(crate) fn category() {}\n");
+        repo.write("cases/layout/consumer.rs", &format!("enum DecisionReason {{ LexicalContextUnproved, Tuple(u8) }}\nstruct Need {{ category: &'static str, reason: DecisionReason }}\nfn caller(need: Need) -> bool {{ {invocation} }}\n"));
+        let result = run(
+            &repo,
+            json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"standard_matches_assertions":[anchor(&repo,"cases/layout/consumer.rs",invocation)],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","pub(crate) fn category() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+        );
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "macro_context_unexamined"),
+            "{invocation}: {result}"
+        );
+        assert!(
+            result["coverage"].get("assumed_standard_matches").is_none(),
+            "{invocation}: {result}"
+        );
+    }
+}
+#[test]
+fn tuple_assertions_do_not_waive_providers_or_other_invocations() {
+    let invocation = "matches!((need.category, need.reason), (\"binding_collision\", DecisionReason::LexicalContextUnproved))";
+    for (prefix, suffix) in [
+        ("macro_rules! matches { ($($t:tt)*) => { true }; }\n", ""),
+        ("use super::*;\n", ""),
+        ("use crate::source::category as matches;\n", ""),
+        (
+            "",
+            " || matches!((need.category, need.reason), (\"binding_collision\", DecisionReason::LexicalContextUnproved))",
+        ),
+    ] {
+        let repo = Fixture::generate();
+        repo.write("cases/layout/lib.rs", "mod source;\nmod consumer;\n");
+        repo.write("cases/layout/source.rs", "pub(crate) fn category() {}\n");
+        repo.write("cases/layout/consumer.rs", &format!("{prefix}enum DecisionReason {{ LexicalContextUnproved }}\nstruct Need {{ category: &'static str, reason: DecisionReason }}\nfn caller(need: Need) -> bool {{ {invocation}{suffix} }}\n"));
+        let result = run(
+            &repo,
+            json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"standard_matches_assertions":[anchor(&repo,"cases/layout/consumer.rs",invocation)],"moves":[{"item":anchor(&repo,"cases/layout/source.rs","pub(crate) fn category() {}"),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+        );
+        withheld(&result);
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["reason"] == "macro_context_unexamined"),
+            "{prefix}{suffix}: {result}"
+        );
+    }
+}
+#[test]
+fn tuple_variant_repairs_preserve_bytes_and_assumption_proofs() {
+    let repo = Fixture::generate();
+    let declaration =
+        "pub(crate) enum DecisionReason { LexicalContextUnproved, MacroContextUnexamined }";
+    let invocation = "matches!((need.category, need.reason), (\"binding_collision\", crate::source::DecisionReason::LexicalContextUnproved) | (\"macro_dependency\", crate::source::DecisionReason::MacroContextUnexamined),)";
+    let consumer = format!(
+        "// é\r\nstruct Need {{ category: &'static str, reason: crate::source::DecisionReason }}\r\nfn caller(need: Need) -> bool {{ {invocation} }}\r\n"
+    );
+    repo.write("cases/layout/lib.rs", "mod source;\nmod consumer;\n");
+    repo.write("cases/layout/source.rs", &format!("{declaration}\n"));
+    repo.write("cases/layout/consumer.rs", &consumer);
+    compile_layout(&repo);
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"standard_matches_assertions":[anchor(&repo,"cases/layout/consumer.rs",invocation)],"moves":[{"item":anchor(&repo,"cases/layout/source.rs",declaration),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+    );
+    assert_eq!(result["plan"]["applicable"], true, "{result}");
+    assert_eq!(
+        result["coverage"]["assumed_standard_matches"], 2,
+        "{result}"
+    );
+    assert!(result["coverage"].get("ra_resolved").is_none(), "{result}");
+    assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+    let proofs = result["plan"]["binding_proofs"].as_array().unwrap();
+    assert_eq!(proofs.len(), 2, "{result}");
+    for proof in proofs {
+        assert_eq!(proof["class"], "assumed_standard_matches");
+        assert_eq!(proof["invocation"]["expected_text"], invocation);
+        assert_eq!(proof["declaration"]["expected_text"], declaration);
+        assert!(proof["variant"]["expected_text"].as_str().is_some());
+    }
+    let copy = apply(&repo, &result);
+    assert_eq!(
+        fs::read_to_string(copy.0.join("cases/layout/consumer.rs")).unwrap(),
+        consumer.replace(
+            "crate::source::DecisionReason",
+            "crate::target::DecisionReason"
+        )
+    );
+    compile_layout(&copy);
+}
+#[test]
+fn asserted_tuple_fields_do_not_waive_moved_member_access() {
+    let repo = Fixture::generate();
+    let invocation = "matches!((need.category, need.reason), (\"binding_collision\", DecisionReason::LexicalContextUnproved))";
+    let function = format!("fn caller(need: Need) -> bool {{ {invocation} }}");
+    repo.write("cases/layout/lib.rs", "mod source;\n");
+    repo.write("cases/layout/source.rs", &format!("enum DecisionReason {{ LexicalContextUnproved }}\nstruct Need {{ category: &'static str, reason: DecisionReason }}\n{function}\n"));
+    compile_layout(&repo);
+    let result = run(
+        &repo,
+        json!({"repo_path":repo.0,"crate_root":"cases/layout/lib.rs","paths":["cases/layout"],"standard_matches_assertions":[anchor(&repo,"cases/layout/source.rs",invocation)],"moves":[{"item":anchor(&repo,"cases/layout/source.rs",&function),"destination":{"kind":"new_sibling","path":"cases/layout/target.rs","parent_path":"cases/layout/lib.rs"}}]}),
+    );
+    withheld(&result);
+    assert!(
+        result["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["reason"] == "macro_context_unexamined"),
+        "{result}"
+    );
+}
+#[test]
 fn constructor_and_alias_macro_uncertainties_remain_anchored() {
     for (source, selected, root, category) in [
         (

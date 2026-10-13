@@ -132,7 +132,12 @@ pub(super) fn validate(
     }
     Ok(ledger)
 }
-fn shape(node: Node<'_>, source: &str, controls: (Instant, &AtomicBool)) -> Option<Vec<Site>> {
+fn shape(
+    node: Node<'_>,
+    source: &str,
+    controls: (Instant, &AtomicBool),
+    allow_fields: bool,
+) -> Option<Vec<Site>> {
     if node.has_error()
         || node.is_missing()
         || node.end_byte() - node.start_byte() > 64 * 1024
@@ -235,7 +240,14 @@ fn shape(node: Node<'_>, source: &str, controls: (Instant, &AtomicBool)) -> Opti
     let arm = body.named_child(0)?;
     let pat = arm.child_by_field_name("pattern")?;
     let mut sites = Vec::new();
-    expression_sites(value, &scratch, source, &expr_segment, &mut sites)?;
+    expression_sites(
+        value,
+        &scratch,
+        source,
+        &expr_segment,
+        &mut sites,
+        allow_fields,
+    )?;
     pattern_sites(pat, &scratch, source, &pattern_segment, &mut sites)?;
     Some(sites)
 }
@@ -245,6 +257,7 @@ fn expression_sites(
     source: &str,
     segment: &Segment,
     sites: &mut Vec<Site>,
+    allow_fields: bool,
 ) -> Option<()> {
     match node.kind() {
         "identifier" | "scoped_identifier" => {
@@ -258,8 +271,37 @@ fn expression_sites(
                 variant: None,
             });
         }
-        "parenthesized_expression" => {
-            expression_sites(node.named_child(0)?, scratch, source, segment, sites)?
+        "parenthesized_expression" => expression_sites(
+            node.named_child(0)?,
+            scratch,
+            source,
+            segment,
+            sites,
+            allow_fields,
+        )?,
+        "tuple_expression" => {
+            for i in 0..node.named_child_count() {
+                expression_sites(
+                    node.named_child(i as u32)?,
+                    scratch,
+                    source,
+                    segment,
+                    sites,
+                    allow_fields,
+                )?;
+            }
+        }
+        "field_expression" if allow_fields => {
+            // Only stationary consumers: moving the receiver's scope still needs member proof.
+            segment.map(node, scratch, source)?;
+            expression_sites(
+                node.child_by_field_name("value")?,
+                scratch,
+                source,
+                segment,
+                sites,
+                allow_fields,
+            )?;
         }
         "integer_literal" | "float_literal" | "boolean_literal" | "string_literal"
         | "raw_string_literal" | "char_literal" => {
@@ -283,7 +325,7 @@ fn pattern_sites(
             }
             pattern_sites(node.named_child(0)?, scratch, source, segment, sites)?;
         }
-        "or_pattern" => {
+        "or_pattern" | "tuple_pattern" => {
             for i in 0..node.named_child_count() {
                 pattern_sites(node.named_child(i as u32)?, scratch, source, segment, sites)?;
             }
@@ -304,7 +346,7 @@ fn pattern_sites(
                 variant: Some(variant.into()),
             });
         }
-        "_" | "integer_literal" | "boolean_literal" | "char_literal" => {
+        "_" | "integer_literal" | "boolean_literal" | "char_literal" | "string_literal" => {
             segment.map(node, scratch, source)?;
         }
         _ => return None,
@@ -476,7 +518,8 @@ impl Analyzer<'_> {
             };
             node = parent;
         }
-        let Some(sites) = shape(node, source, self.controls) else {
+        let moved_owner = self.consumer(&need.path, node) != need.path;
+        let Some(sites) = shape(node, source, self.controls, !moved_owner) else {
             return false;
         };
         if self.lexical_module(&need.path, node, false).is_none() {
@@ -497,7 +540,6 @@ impl Analyzer<'_> {
         let observations = self.visibility_observations.clone();
         let proofs = self.matches_proofs.clone();
         self.active_matches = Some(invocation.anchor.range.clone());
-        let moved_owner = self.consumer(&need.path, node) != need.path;
         let mut ok = true;
         for site in sites {
             *self.reference_candidates += 1;
@@ -703,7 +745,12 @@ impl Analyzer<'_> {
             return false;
         }
         let source = &self.files[&need.path].source;
-        let Some(sites) = shape(node, source, self.controls) else {
+        let Some(sites) = shape(
+            node,
+            source,
+            self.controls,
+            self.consumer(&need.path, node) == need.path,
+        ) else {
             return false;
         };
         let mut stack = vec![node];

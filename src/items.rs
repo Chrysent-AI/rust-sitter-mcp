@@ -11,6 +11,8 @@ mod lexical;
 mod refusal;
 pub use refusal::{RefusalAnchor, RefusalBasis};
 mod test_consumers;
+#[cfg(test)]
+mod tests;
 use crate::{
     matching::Lines,
     result::{ByteRange, DomainError, SourceSlice, SyntaxFlags},
