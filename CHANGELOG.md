@@ -13,6 +13,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Avoid `glob_consumer_unrepaired` for a moved free function when the consumer's
+  only lexical uncertainty is a same-named pattern binding versus constant.
+  Non-function selections, genuine glob-carried calls and other lexical
+  uncertainties retain their blockers.
+
 * Resolve cross-file qualified consumer evidence against the enclosing written
   path instead of its terminal identifier. Original-overlay facts can now be
   reached; missing final-overlay repairs still refuse, and semantic resolution

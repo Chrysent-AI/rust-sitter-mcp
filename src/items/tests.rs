@@ -2,6 +2,72 @@ use super::*;
 use std::time::Duration;
 
 #[test]
+fn glob_consumer_filter_only_excludes_function_pattern_ambiguity() {
+    let kinds = [
+        "function_item",
+        "const_item",
+        "static_item",
+        "struct_item",
+        "enum_item",
+        "enum_variant",
+        "type_item",
+        "unknown_kind",
+    ];
+    for kind in kinds {
+        for reason in [
+            LexicalReason::IdentifierPatternBindingOrConstant,
+            LexicalReason::UnsupportedPattern,
+            LexicalReason::ValueBindingInTypePosition,
+            LexicalReason::RelevantLocalImport,
+            LexicalReason::ConditionalLocalContext,
+            LexicalReason::SyntaxRecovery,
+        ] {
+            let location = lexical::LexicalLocation {
+                path: "consumer.rs".into(),
+                range: ByteRange {
+                    start_byte: 0,
+                    end_byte: 8,
+                },
+                kind: "identifier".into(),
+            };
+            let assessment = lexical::LexicalAssessment {
+                binding: LexicalBinding::Uncertain,
+                uncertainty: Some(LexicalUncertainty {
+                    spelling: "selected".into(),
+                    reason,
+                    scope: location.clone(),
+                    pattern: Some(location),
+                    witness_relation: None,
+                }),
+                definite_binding: None,
+            };
+            assert_eq!(
+                glob_consumer_needs_repair(kind, &assessment),
+                !(kind == "function_item"
+                    && reason == LexicalReason::IdentifierPatternBindingOrConstant),
+                "{kind}: {reason:?}"
+            );
+        }
+        for binding in [
+            LexicalBinding::Independent,
+            LexicalBinding::Absent,
+            LexicalBinding::Uncertain,
+        ] {
+            let assessment = lexical::LexicalAssessment {
+                binding,
+                uncertainty: None,
+                definite_binding: None,
+            };
+            assert_eq!(
+                glob_consumer_needs_repair(kind, &assessment),
+                binding != LexicalBinding::Independent,
+                "{kind}: {binding:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn macro_token_candidates_include_dot_names_and_paths() {
     for (source, expected) in [
         (

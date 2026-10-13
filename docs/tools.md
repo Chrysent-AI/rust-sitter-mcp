@@ -1616,6 +1616,16 @@ Bare selected-name references in other admitted files are checked against visibl
 resolution. Explicit `parent_facade` may instead prove the narrow direct old-route
 preservation case above; all other such blockers keep every artifact null. Keep the affected item in place or change the selected move; never narrow away admitted consumers just to obtain an applicable plan.
 
+A glob-consumer need is omitted for a selected `function_item` when its lexical
+assessment is uncertain solely because of `identifier_pattern_binding_or_constant`:
+that pattern can bind a local or denote a constant/constructor, never the moved
+function. This includes references to the possible binder inside a for/if-let
+body. Needs for non-function selections (including consts, statics and unit
+structs), genuine glob-carried calls and other lexical uncertainties remain.
+The check is per selected item, so a mixed batch retains its non-function needs.
+It adds no flag or binding proof and does not change glob-import route checks,
+explicit-import/same-file repairs or the final moved-binder audit.
+
 The macro consumer token-candidate scan treats any matching identifier token
 inside a macro as a candidate, including names after `.` or `::`. Token trees
 are not field syntax: a macro may emit a free-item path from a dot-following

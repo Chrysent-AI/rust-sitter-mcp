@@ -979,6 +979,15 @@ pub(crate) fn reference_role(node: Node<'_>) -> bool {
     }
     true
 }
+fn glob_consumer_needs_repair(kind: &str, assessment: &lexical::LexicalAssessment) -> bool {
+    assessment.binding != LexicalBinding::Independent
+        && !(kind == "function_item"
+            && assessment.binding == LexicalBinding::Uncertain
+            && assessment
+                .uncertainty
+                .as_ref()
+                .is_some_and(|u| u.reason == LexicalReason::IdentifierPatternBindingOrConstant))
+}
 /// Conservative relocation guard: dependencies requiring a repair are evidence, not edits.
 /// `final_paths` is simultaneous membership; co-moved written declarations can remain bound.
 pub fn dependencies(
@@ -1566,7 +1575,10 @@ pub fn dependencies(
                                     None,
                                     Some(&pattern_routes),
                                 )?;
-                                if assessment.binding != LexicalBinding::Independent {
+                                // Each need here belongs only to the current selected item.
+                                // Pattern/constant ambiguity cannot refer to a function;
+                                // non-function selections keep their own needs.
+                                if glob_consumer_needs_repair(&item.kind, &assessment) {
                                     let mut value = need(
                                         DecisionReason::GlobConsumerUnrepaired,
                                         "glob_dependency",

@@ -94,6 +94,146 @@ fn assert_blocked(repo: &Fixture, result: &Value, path: &str, glob: &str) {
 }
 
 #[test]
+fn function_moves_ignore_glob_consumer_pattern_constant_ambiguity() {
+    for body in [
+        "for (selected, reason) in [(1u8, 2u8)] { let _ = (selected, reason); }",
+        "if let (selected, Some(reason)) = (1u8, Some(2u8)) { let _ = (selected, reason); }",
+    ] {
+        let repo = fixture(&format!("use super::*;\nfn settle() {{ {body} }}\n"));
+        // An unrelated public import keeps the route conservative, matching
+        // the intermediate-module forwarding shape of the reported failure.
+        repo.write(
+            "cases/layout/operations/verification_flow.rs",
+            "mod settlement;\npub(crate) use crate::unrelated::other;\n",
+        );
+        let result = run(&repo, false);
+        assert!(glob_decisions(&result).is_empty(), "{result}");
+        assert!(
+            result["plan"]["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d["category"] != "glob_dependency"),
+            "{result}"
+        );
+        assert_eq!(result["plan"]["applicable"], true, "{result}");
+        assert_eq!(result["plan"]["integrity"]["semantic"], "not_performed");
+        let copy = apply(&repo, &result);
+        for fixture in [&repo, &copy] {
+            let output = std::process::Command::new("rustc")
+                .args(["--crate-type=lib", "--edition=2024"])
+                .arg(fixture.0.join("cases/layout/lib.rs"))
+                .arg("-o")
+                .arg(fixture.0.join("pattern-control.rlib"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn non_function_moves_keep_glob_consumer_pattern_constant_ambiguity() {
+    for selected in [
+        "pub(crate) const selected: u8 = 1;",
+        "pub(crate) static selected: u8 = 1;",
+        "pub(crate) struct selected;",
+    ] {
+        let repo = fixture(
+            "use super::super::*;\nfn settle() { for (selected,) in values { let _ = selected; } }\n",
+        );
+        repo.write(SOURCE, &format!("mod verification_flow;\n{selected}\n"));
+        let result = run_selected(&repo, false, selected);
+        assert_eq!(result["status"], "complete", "{result}");
+        assert_eq!(result["plan"]["applicable"], false, "{result}");
+        assert!(result["plan"]["patch"].is_null(), "{result}");
+        assert!(
+            glob_decisions(&result).iter().any(|d| {
+                d["lexical_uncertainty"]["reason"] == "identifier_pattern_binding_or_constant"
+                    && d["anchors"][0]["path"] == CONSUMER
+                    && d["blocks_applicability"] == true
+                    && d["refusal_basis"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|b| b["class"] == "glob_import")
+            }),
+            "{selected}: {result}"
+        );
+    }
+}
+
+#[test]
+fn mixed_function_and_const_moves_keep_the_const_glob_consumer() {
+    let repo = fixture(
+        "use super::super::*;\nuse crate::unrelated::*;\nfn settle() { for (selected,) in values { let _ = selected; } }\n",
+    );
+    let constant = "pub(crate) const selected: u8 = 1;";
+    repo.write("cases/layout/unrelated.rs", constant);
+    let before = observe(&repo.0);
+    let request = json!({
+        "repo_path": repo.0, "crate_root": "cases/layout/lib.rs", "paths": ["cases/layout"],
+        "moves": [
+            {"item": anchor(&repo, SOURCE, SELECTED),
+             "destination": {"kind": "new_sibling", "path": "cases/layout/projections.rs", "parent_path": "cases/layout/lib.rs"}},
+            {"item": anchor(&repo, "cases/layout/unrelated.rs", constant),
+             "destination": {"kind": "new_sibling", "path": "cases/layout/constants.rs", "parent_path": "cases/layout/lib.rs"}}
+        ]
+    });
+    let result = serde_json::to_value(Engine::new(repo.0.clone()).unwrap().move_item(
+        serde_json::from_value::<MoveRequest>(request).unwrap(),
+        &AtomicBool::new(false),
+    ))
+    .unwrap();
+    assert_eq!(observe(&repo.0), before);
+    assert_eq!(result["status"], "complete", "{result}");
+    assert_eq!(result["plan"]["applicable"], false, "{result}");
+    assert!(result["plan"]["patch"].is_null(), "{result}");
+    let constant = result["plan"]["moves"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["item"]["kind"] == "const_item")
+        .unwrap();
+    let decisions = glob_decisions(&result);
+    assert_eq!(decisions.len(), 1, "{result}");
+    assert_eq!(decisions[0]["item_ids"], json!([constant["item"]["id"]]));
+    assert_eq!(
+        decisions[0]["lexical_uncertainty"]["reason"],
+        "identifier_pattern_binding_or_constant"
+    );
+}
+
+#[test]
+fn function_moves_keep_non_pattern_glob_consumer_uncertainties() {
+    for (body, reason) in [
+        ("selected();", None),
+        (
+            "use super::super::*; selected();",
+            Some("relevant_local_import"),
+        ),
+        (
+            "for (selected,) in values { unknown!(); selected(); }",
+            Some("unsupported_pattern"),
+        ),
+    ] {
+        let repo = fixture(&format!("use super::super::*;\nfn settle() {{ {body} }}\n"));
+        let result = run(&repo, false);
+        assert_blocked(&repo, &result, CONSUMER, "use super::super::*;");
+        assert!(
+            glob_decisions(&result)
+                .iter()
+                .any(|d| d["lexical_uncertainty"]["reason"].as_str() == reason),
+            "{body}: {result}"
+        );
+    }
+}
+
+#[test]
 fn chain_glob_settlement_call_is_anchored_and_cannot_be_acknowledged() {
     // Unicode and CRLF ensure the exposed coordinates are bytes, not columns.
     let repo = fixture("use super::super::*;\r\n// é\r\nfn settle() { selected(); }\r\n");
