@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+* Clarify the documented capability of the `sysroot_sources` evidence tier: it
+  proves written inherent methods only. Written field accesses and direct
+  constructions of sysroot types remain refused by the audited installation
+  profile, and `docs/known-limitations.md` now records the measured walls. No
+  engine behavior changed.
+
 ### Added
 
 * Bumped version.

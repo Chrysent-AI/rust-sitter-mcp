@@ -63,7 +63,18 @@ everything the engine cannot prove is refused with anchored, classified disclosu
   alone is not proof. The bounded sysroot trait-only macro footprint audit admits
   surrounding written context, not generated members or trait facts. `.iter()`,
   `.push()`, `.ok()` and `format!`-adjacent chains are not a supported allowlist;
-  default-off requests retain their existing refusals. Concrete written inherent
+  default-off requests retain their existing refusals. The delivered sysroot
+  positive category is written **inherent methods** only. Written field accesses
+  and direct constructions of sysroot types are not discharged even though the
+  shared fact gate supports those classes for other origins: reaching them
+  requires profile depth the audited installation does not yet admit. The next
+  reachable refusals were measured against the installed stable 1.97.1 sources —
+  the `std` root's `#[prelude_import]` (a real name-resolution control that sets
+  the analyzer's prelude module), `#[lang]` items on `std`/`core` declarations
+  such as `Termination` and `Range`, and the `core` root's
+  `#![rustc_coherence_is_core]`; the `std` root alone carries 159 inner-root
+  attributes. Widening that profile is not authorized here and is not claimed.
+  Concrete written inherent
   calls in explicitly configured local crates or opt-in captured path, locally
   cached registry or source-replaced libraries and their bounded transitive
   normal-dependency closure can separately discharge under `resolve_semantic`.
