@@ -29,6 +29,35 @@ manually everywhere hooks cannot reach — PRs, issues, external posts — and
 never introduce the identifiers through branch names, worktree directory
 names, tags, or saved artifacts inside the repository.
 
+## Private environment data never leaks (binding)
+
+Nothing that identifies a maintainer, contributor, or machine may appear on any
+tracked or published surface — the same list as above: commit messages, PRs and
+issues, documentation, code comments, test fixtures and their captured request
+or response bodies, benchmark corpora, logs, and saved artifacts. This
+specifically includes:
+
+- **Device and account paths**: absolute home or user paths (`/Users/<name>/…`,
+  `/home/<name>/…`, `C:\\Users\\<name>\\…`), device or volume names, and
+  machine-specific temp trees (`/var/folders/…`, `/private/var/…`).
+- **Network and host details**: hostnames, LAN/inner-IP addresses, SSH targets
+  (`user@host`), VPN or proxy endpoints, and any internal service URL.
+- **Personal identifiers and credentials**: Git handles or account names used as
+  repository hosts or in URLs, personal email addresses, tokens, keys, and
+  password material.
+
+Use a neutral placeholder with the same shape instead — `/workspace/<project>`,
+`$HOME/…`, `user@host`, `<maintainer>`, `example.test`. When you capture or
+replay real requests and responses, sanitise them before committing, and prefer
+calling out a path generically ("the Docker socket") over embedding the literal.
+
+`scripts/check-leaked-identifiers.sh` currently enforces the identifier and
+proprietary-name classes only; it does not yet pattern-match device paths or
+network details, so this class is on the author and the reviewer. Treat a leak
+found after publication as a history-rewrite incident, not a follow-up commit:
+agree the rewrite with the maintainer, purge the string from all refs, and let
+the maintainer handle the force-push and tag cleanup.
+
 ## Dependency policy (binding for all work in this repo)
 
 Every change that adds or re-pins a dependency requires a short research step BEFORE the Cargo.toml change lands. No exceptions for "small" or "obvious" deps — the note can be one line, but it must exist.
