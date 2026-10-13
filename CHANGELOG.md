@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Stop compiling and running the workspace test suite in `make bump-version`.
+  The helper still rewrites the package version, refreshes the `Cargo.lock`
+  entry, and re-checks test version literals; bumping now assumes the tree
+  already passed the gates.
+
+## [0.6.1] - 2026-10-14
+
+### Changed
+
 * Correct the install and clone URLs in `README.md` and `CONTRIBUTING.md`, which
   pointed at the wrong repository host. Add a "configure the request for this
   repository" section to the bundled skill covering crate-graph derivation from
