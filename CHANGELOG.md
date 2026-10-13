@@ -13,6 +13,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Repair qualified consumer paths with `resolve_semantic:true` when one admitted
+  immediate-parent glob carries a unique written module declaration or
+  non-renamed module-import route. Preserve exact route anchors and path bytes
+  outside the splice; ambiguous, conditional, recursive, competing and
+  provider-uncertain routes still refuse. This is a written repair, not a new
+  semantic proof or `ra_resolved` count; default-off and bare-name glob behavior
+  are unchanged.
+
 * Avoid `glob_consumer_unrepaired` for a moved free function when the consumer's
   only lexical uncertainty is a same-named pattern binding versus constant.
   Non-function selections, genuine glob-carried calls and other lexical

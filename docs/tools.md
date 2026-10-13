@@ -1612,6 +1612,35 @@ Complete `crate`/`self`/`super` paths and at most one uniquely evidenced explici
 
 Visibility checks inspect the item and each ordinary module declaration from its declaring parent scope. Already sufficient visibility and proven unchanged ancestor restrictions survive. A proven insufficient access receives the deepest common ancestor region containing the declaration's preserved access region and all proven final callers: `pub(super)` for a non-root immediate parent, `pub(in crate::path)` for a more distant non-root ancestor, or `pub(crate)` only when the root is the smallest covering region. Multiple callers merge into one repair and can escalate a previously narrower requirement. Moved private inherent members also preserve their original defining region's access, without inventing callers outside the admitted corpus. Retained relative restrictions can be widened when their parent scope is unchanged; moved relative/re-scoped restrictions still block. Visibility alternatives must denote an evidenced ancestor and cover the merged requirement; insufficient choices block artifacts with `visibility_scope_unproved`, while public exposure, non-ancestor paths, comments and injected tokens are rejected. Private fields/tuple constructors, unproved associated/type-directed references, relevant globs/macros, unadmitted conditional imports/modules and unsupported dependency forms remain decisions rather than guessed repairs. An unrelated glob/macro outside the relevant binding context is not by itself a veto. Consumer-glob candidates are checked against written module routes: file identity plus inline-module anchors, scoped module aliases, grouped use prefixes, and exact default-layout parent declarations. A same-named module in another subtree is not the source module. Proven different modules and enum-variant globs are excluded; a caller-selected file root does not inherit aliases from every unrelated `crate` import. Unknown/recovered routes, competing inclusions, local alias shadows, and possible wildcard/re-export/same-name forwarding remain conservative candidates. This is admitted written-syntax evidence, not Cargo discovery, cfg evaluation, macro expansion, or semantic name resolution. Optional `coverage.glob_exclusions` counts excluded selected-item/glob pairs by reason (`different_written_module`, `enum_variants`, `no_written_route`); it is not a count of files skipped or semantic absence proofs. Test-consumer advice uses the same written-route classifier, including aliases that glob the immediate test parent; it infers no edge from an unknown route.
 
+With `resolve_semantic:true`, an otherwise unresolved qualified-path root has one
+additional **written repair** route: one ungrouped module-scope glob must resolve
+to the consumer's admitted immediate parent, which supplies a unique written
+module declaration or non-renamed explicit module-import route. Grouped named
+leaves (including `self`) and bounded named module chains are supported; the
+canonical module must be an admitted file-root module. The existing path repair
+then splices only the qualified path, with original-byte anchors for the call,
+glob statement and named route declarations/imports. Named/local lookup still
+takes precedence, and omission or `resolve_semantic:false` retains the prior
+behavior.
+
+This fallback refuses ambiguous/competing aliases, missing or inaccessible
+routes, conditional providers, renamed imports in traced use statements,
+recursive/over-depth named routes, recursive/forwarded globs, competing visible
+globs, grouped globs, non-parent globs and macro/provider-uncertain scopes. The
+existing named resolver's depth limit remains 16; no workspace/Cargo discovery
+or general glob resolution is added. Existing inert attributes remain admitted.
+The sole additional attribute exception is a directly attached `#[cfg(...)]`
+on the enclosing consumer function, proven active under declared configuration
+(for example `#[cfg(all())]`); it does not admit conditional glob/import/module
+providers, unrelated cfg-gated functions or unknown/inactive consumer cfg.
+
+A successful written repair consumes its occurrence before semantic discharge;
+it does **not** emit a new semantic binding proof or contribute `ra_resolved`.
+When no other semantic work remains, `integrity.semantic` correctly stays
+`"not_performed"`. Applicability is not a compilation/equivalence claim: apply and
+compile only in a caller-controlled disposable copy for independent validation.
+Third-file bare-name glob consumers retain the policy below.
+
 Bare selected-name references in other admitted files are checked against visible glob imports, including `use super::super::*`, grouped/module-alias routes and possible chained forwarding. A reachable or unproved route emits `glob_consumer_unrepaired` in category `glob_dependency`, with `action.route:"selection_change_required"`, `blocks_applicability:true`, and no acknowledgment or rewrite choice. Its first anchor is the original reference identifier in the consumer file; subsequent anchors contain the complete original candidate glob statements. `refusal_basis` retains their `glob_import` ranges and affected name, plus any lexical uncertainty witness. This is conservative written reachability, not proof of glob binding identity. Named bindings in the same scope and proven independent locals are not glob-only consumers; sibling/parent-module imports are not inherited. Existing explicit-import and same-file repair paths are unchanged. These third-file risks cannot be waived by `acknowledge_test_consumers` or semantic
 resolution. Explicit `parent_facade` may instead prove the narrow direct old-route
 preservation case above; all other such blockers keep every artifact null. Keep the affected item in place or change the selected move; never narrow away admitted consumers just to obtain an applicable plan.

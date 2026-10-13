@@ -310,6 +310,226 @@ impl<'a> GlobRoutes<'a> {
         }
         Ok(Some(target))
     }
+    /// Resolve only a module prefix carried by one immediate-parent glob. Named
+    /// routes use the existing bounded resolver; no glob is followed recursively.
+    pub(crate) fn qualified_prefix(
+        &self,
+        path: &str,
+        reference: Node<'_>,
+        name: &str,
+        cfg: Option<&DeclaredCfg>,
+    ) -> Result<Option<(String, Vec<crate::plan::SourceAnchor>)>, DomainError> {
+        let using = self.lexical(path, reference);
+        if !self.admitted(&using)? {
+            return Ok(None);
+        }
+        let Some(scope) = self.scope(&using, &self.parsed[path].tree) else {
+            return Ok(None);
+        };
+        let source = &self.files[path].source;
+        if !self.prefix_consumer_attributes(reference, source, cfg)? {
+            return Ok(None);
+        }
+        let mut glob = None;
+        for i in 0..scope.named_child_count() {
+            check(self.controls.0, self.controls.1)?;
+            let node = scope.named_child(i as u32).expect("scope child");
+            if node
+                .child_by_field_name("name")
+                .is_some_and(|n| source[n.byte_range()].trim_start_matches("r#") == name)
+            {
+                return Ok(None);
+            }
+            if node.kind() != "use_declaration" {
+                continue;
+            }
+            if use_leaves(node, source, self.controls)?
+                .iter()
+                .any(|leaf| leaf.binding.trim_start_matches("r#") == name)
+            {
+                return Ok(None);
+            }
+            if use_facts(node, source, self.controls)?.0 {
+                // Grouped/multiple and block-local globs are not positive evidence.
+                let Some(argument) = node.child_by_field_name("argument") else {
+                    return Ok(None);
+                };
+                if argument.kind() != "use_wildcard"
+                    || glob.is_some()
+                    || !self.safe_attributes(node, source)?
+                {
+                    return Ok(None);
+                }
+                glob = Some(node);
+            }
+        }
+        let Some(glob) = glob else { return Ok(None) };
+        if !self.prefix_scope(&using, Some((glob, reference)), cfg)? {
+            return Ok(None);
+        }
+        let argument = glob.child_by_field_name("argument").expect("glob argument");
+        let route = source[argument.byte_range()]
+            .trim_end_matches('*')
+            .trim_end()
+            .trim_end_matches("::")
+            .trim();
+        let mut trace = Vec::new();
+        let Some(Target::Module(provider)) =
+            self.resolve_traced(&using, route, 0, &using, &mut trace)?
+        else {
+            return Ok(None);
+        };
+        if self.parent(&using).as_ref() != Some(&provider)
+            || !self.admitted(&provider)?
+            || !self.prefix_scope(&provider, None, cfg)?
+        {
+            return Ok(None);
+        }
+        let Some(Target::Module(target)) =
+            self.resolve_traced(&provider, name, 0, &using, &mut trace)?
+        else {
+            return Ok(None);
+        };
+        // The repair engine's declarations are file-root items. Do not infer an
+        // inline module or an unadmitted canonical target for that engine.
+        if !target.inline.is_empty() || !self.admitted(&target)? {
+            return Ok(None);
+        }
+        for anchor in &trace {
+            check(self.controls.0, self.controls.1)?;
+            let data = &self.parsed[&anchor.path];
+            let node = data
+                .tree
+                .root_node()
+                .named_descendant_for_byte_range(anchor.range.start_byte, anchor.range.end_byte)
+                .expect("traced route node");
+            let module = self.lexical(&anchor.path, node);
+            if !self.prefix_scope(&module, (module == using).then_some((glob, reference)), cfg)? {
+                return Ok(None);
+            }
+            if node.kind() == "use_declaration" {
+                let text = &self.files[&anchor.path].source;
+                for leaf in use_leaves(node, text, self.controls)? {
+                    let leaf_node = data
+                        .tree
+                        .root_node()
+                        .named_descendant_for_byte_range(
+                            leaf.leaf_range.start_byte,
+                            leaf.leaf_range.end_byte,
+                        )
+                        .expect("use leaf");
+                    if leaf_node.kind() == "use_as_clause" {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        self.trace(&using, glob, &mut trace)?;
+        let Some(segments) = self.segments(&target) else {
+            return Ok(None);
+        };
+        Ok(Some((format!("crate::{}", segments.join("::")), trace)))
+    }
+    fn prefix_consumer_attributes(
+        &self,
+        mut node: Node<'_>,
+        source: &str,
+        cfg: Option<&DeclaredCfg>,
+    ) -> Result<bool, DomainError> {
+        let mut found_owner = false;
+        loop {
+            check(self.controls.0, self.controls.1)?;
+            // Only the nearest consumer function (including a method) can use
+            // the active cfg exception. Intermediate owners remain strict.
+            let checked = if !found_owner && node.kind() == "function_item" {
+                node.prev_named_sibling()
+                    .filter(|attr| {
+                        attr.kind() == "attribute_item"
+                            && source[attr.byte_range()].starts_with("#[cfg(")
+                            && cfg::attribute(&source[attr.byte_range()], cfg, true).is_ok()
+                    })
+                    .unwrap_or(node)
+            } else {
+                node
+            };
+            // Checking the cfg's preceding siblings still audits every other
+            // attached attribute, including ones separated by comments.
+            if !self.safe_attributes(checked, source)? {
+                return Ok(false);
+            }
+            found_owner |= node.kind().ends_with("_item") || node.kind() == "closure_expression";
+            for i in 0..node.named_child_count() {
+                check(self.controls.0, self.controls.1)?;
+                let child = node.named_child(i as u32).expect("consumer context child");
+                if child.kind() == "inner_attribute_item"
+                    && !context_independent_attribute(&source[child.byte_range()])
+                {
+                    return Ok(false);
+                }
+            }
+            let Some(parent) = node.parent() else {
+                return Ok(true);
+            };
+            node = parent;
+        }
+    }
+    fn prefix_scope(
+        &self,
+        module: &Module,
+        consumer: Option<(Node<'_>, Node<'_>)>,
+        cfg: Option<&DeclaredCfg>,
+    ) -> Result<bool, DomainError> {
+        let data = &self.parsed[&module.path];
+        let Some(scope) = self.scope(module, &data.tree) else {
+            return Ok(false);
+        };
+        let source = &self.files[&module.path].source;
+        for i in 0..scope.named_child_count() {
+            check(self.controls.0, self.controls.1)?;
+            let node = scope.named_child(i as u32).expect("prefix scope child");
+            if node.kind() == "use_declaration" {
+                if consumer.map(|(glob, _)| glob) != Some(node)
+                    && use_facts(node, source, self.controls)?.0
+                {
+                    return Ok(false);
+                }
+            } else if matches!(node.kind(), "attribute_item" | "inner_attribute_item") {
+                // Only a directly attached, active cfg on the enclosing consumer
+                // function is exempt. Providers and other functions stay strict.
+                if !context_independent_attribute(&source[node.byte_range()])
+                    && !(consumer.is_some_and(|(_, reference)| {
+                        node.kind() == "attribute_item"
+                            && source[node.byte_range()].starts_with("#[cfg(")
+                            && node.next_named_sibling().is_some_and(|n| {
+                                n.kind() == "function_item"
+                                    && n.start_byte() <= reference.start_byte()
+                                    && n.end_byte() >= reference.end_byte()
+                            })
+                    }) && cfg::attribute(&source[node.byte_range()], cfg, true).is_ok())
+                {
+                    return Ok(false);
+                }
+            } else if !matches!(
+                node.kind(),
+                "function_item"
+                    | "struct_item"
+                    | "enum_item"
+                    | "union_item"
+                    | "type_item"
+                    | "trait_item"
+                    | "impl_item"
+                    | "const_item"
+                    | "static_item"
+                    | "mod_item"
+                    | "line_comment"
+                    | "block_comment"
+                    | "shebang"
+            ) {
+                return Ok(false);
+            }
+        }
+        Ok(!scope.has_error() && !scope.is_missing())
+    }
     /// Completeness is deliberately stricter than affected-consumer reachability.
     pub(crate) fn pattern_competition(
         &self,

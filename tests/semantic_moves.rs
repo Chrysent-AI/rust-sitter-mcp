@@ -174,84 +174,548 @@ fn reason(value: &Value, expected: &str) -> bool {
         .any(|d| d["reason"] == expected && d["blocks_applicability"] == true)
 }
 
+fn assert_default_off(repo: &Fixture, args: &Value) {
+    let omitted = run(repo, args.clone());
+    let mut explicit = args.clone();
+    explicit["resolve_semantic"] = json!(false);
+    explicit["semantic_configuration"] = config();
+    assert_eq!(
+        serde_json::to_vec(&omitted).unwrap(),
+        serde_json::to_vec(&run(repo, explicit)).unwrap()
+    );
+    assert_eq!(omitted["plan"]["applicable"], false, "{omitted}");
+    assert_eq!(omitted["plan"]["integrity"]["semantic"], "not_performed");
+    assert!(omitted["plan"]["resolution_coverage"].is_null());
+}
+
+fn assert_written_prefix_repair(repo: &Fixture, consumer: &str, routes: &[(&str, &str, usize)]) {
+    let args = request(repo, "pub(crate) fn selected() {}");
+    assert_default_off(repo, &args);
+    let on = resolved(repo, args);
+    assert!(on["error"].is_null(), "{on}");
+    assert_eq!(on["plan"]["applicable"], true, "{on}");
+    // Written repair consumes the need: it is not a both-overlay semantic proof.
+    assert_eq!(on["plan"]["integrity"]["semantic"], "not_performed");
+    for field in ["binding_proofs", "resolution_coverage"] {
+        assert!(on["plan"][field].is_null(), "{on}");
+    }
+    assert!(on["coverage"]["ra_resolved"].is_null(), "{on}");
+    let edits: Vec<_> = on["plan"]["edits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["path"] == consumer)
+        .collect();
+    assert_eq!(edits.len(), 1, "{on}");
+    let original = std::fs::read_to_string(repo.0.join(consumer)).unwrap();
+    let start = original.find("source::selected").unwrap();
+    assert_eq!(
+        edits[0]["range"],
+        json!({"start_byte":start,"end_byte":start+16})
+    );
+    assert_eq!(edits[0]["original_text"], "source::selected");
+    assert_eq!(edits[0]["replacement_text"], "crate::moved::selected");
+    let rewrite = on["plan"]["rewrites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "path" && r["target"]["anchor"]["path"] == consumer)
+        .unwrap();
+    assert!(rewrite["anchors"].as_array().unwrap().contains(&anchor(
+        repo,
+        consumer,
+        "source::selected"
+    )));
+    for (path, text, line) in routes {
+        let expected = anchor(repo, path, text);
+        assert!(
+            rewrite["anchors"].as_array().unwrap().contains(&expected),
+            "{on}"
+        );
+        let source = std::fs::read_to_string(repo.0.join(path)).unwrap();
+        let offset = expected["range"]["start_byte"].as_u64().unwrap() as usize;
+        assert_eq!(
+            source[..offset].bytes().filter(|b| *b == b'\n').count() + 1,
+            *line
+        );
+    }
+    let before = observe(&repo.0);
+    let copy = move_artifacts::apply(repo, &on);
+    assert_eq!(
+        std::fs::read_to_string(copy.0.join(consumer)).unwrap(),
+        original.replacen("source::selected", "crate::moved::selected", 1)
+    );
+    copy.write("Cargo.toml", "[package]\nname = \"fixture-corpus\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"cases/layout/lib.rs\"\n");
+    let check = std::process::Command::new("cargo")
+        .current_dir(&copy.0)
+        .args(["check", "--locked", "--offline", "--quiet"])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert_eq!(observe(&repo.0), before);
+    eprintln!(
+        "written prefix repair applied and cargo check passed: {consumer}; routes={routes:?}"
+    );
+}
+
 #[test]
-fn cross_file_qualified_consumer_proves_original_but_requires_final_repair() {
-    let text = "pub(crate) fn selected() {}";
-    for (prefix, refusal) in [
-        ("source", "semantic_final_fact_unproved"),
-        ("absent", "semantic_source_fact_unproved"),
+fn glob_qualified_prefix_repairs_the_original_consumer_fixture() {
+    let repo = fixture("pub(crate) fn selected() {}");
+    repo.write("cases/layout/lib.rs", "mod source; mod consumer;");
+    repo.write(
+        "cases/layout/consumer.rs",
+        "use super::*; #[cfg(all())] fn caller() { source::selected(); }",
+    );
+    assert_written_prefix_repair(
+        &repo,
+        "cases/layout/consumer.rs",
+        &[
+            ("cases/layout/lib.rs", "mod source;", 1),
+            ("cases/layout/consumer.rs", "use super::*;", 1),
+        ],
+    );
+}
+
+#[test]
+fn glob_qualified_prefix_repairs_imported_grouped_and_named_module_routes() {
+    for (parent, bridge, consumer) in [
+        ("use crate::source;", "", "use super::*;"),
+        ("use crate::{source::{self}};", "", "use super::*;"),
+        (
+            "use crate::{source::{self, retained}};",
+            "",
+            "use super::*;",
+        ),
+        (
+            "use crate::bridge::source;",
+            "pub(crate) use crate::source;",
+            "use super::*;",
+        ),
+        (
+            "use crate::source;",
+            "",
+            "use crate::parent;\nuse parent::*;",
+        ),
     ] {
-        let repo = fixture(text);
+        let repo = fixture("pub(crate) fn selected() {}");
+        repo.write(
+            "cases/layout/source.rs",
+            "pub(crate) fn selected() {}\npub(crate) fn retained() {}\n",
+        );
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source;\nmod parent;\nmod bridge;\n",
+        );
+        repo.write(
+            "cases/layout/parent.rs",
+            &format!("{parent}\nmod consumer;\n"),
+        );
+        repo.write("cases/layout/bridge.rs", bridge);
+        repo.write(
+            "cases/layout/parent/consumer.rs",
+            &format!("{consumer}\nfn caller() {{ source::selected(); }}\n"),
+        );
+        let glob = consumer.lines().last().unwrap();
+        let mut routes = vec![
+            ("cases/layout/lib.rs", "mod source;", 1),
+            ("cases/layout/parent.rs", parent, 1),
+            (
+                "cases/layout/parent/consumer.rs",
+                glob,
+                consumer.lines().count(),
+            ),
+        ];
+        if !bridge.is_empty() {
+            routes.push(("cases/layout/bridge.rs", bridge, 1));
+        }
+        if consumer.contains("parent::*") {
+            routes.push(("cases/layout/parent/consumer.rs", "use crate::parent;", 1));
+        }
+        assert_written_prefix_repair(&repo, "cases/layout/parent/consumer.rs", &routes);
+    }
+}
+
+#[test]
+fn glob_qualified_prefix_repairs_associated_function_consumers() {
+    for attributes in ["", "#[cfg(all())]", "#[allow(dead_code)] #[cfg(all())]"] {
+        let repo = fixture("pub(crate) fn selected() {}");
         repo.write("cases/layout/lib.rs", "mod source; mod consumer;");
         repo.write(
             "cases/layout/consumer.rs",
-            &format!("use super::*; #[cfg(all())] fn caller() {{ {prefix}::selected(); }}"),
+            &format!(
+                "use super::*; struct Caller; impl Caller {{ {attributes} fn caller() {{ source::selected(); }} }}"
+            ),
         );
-        let args = request(&repo, text);
-        let off = run(&repo, args.clone());
-        let mut explicit_off = args.clone();
-        explicit_off["resolve_semantic"] = json!(false);
-        explicit_off["semantic_configuration"] = config();
-        assert_eq!(
-            serde_json::to_vec(&off).unwrap(),
-            serde_json::to_vec(&run(&repo, explicit_off)).unwrap()
+        assert_written_prefix_repair(
+            &repo,
+            "cases/layout/consumer.rs",
+            &[
+                ("cases/layout/lib.rs", "mod source;", 1),
+                ("cases/layout/consumer.rs", "use super::*;", 1),
+            ],
         );
-        assert_eq!(off["plan"]["integrity"]["semantic"], "not_performed");
-        assert!(off["plan"]["resolution_coverage"].is_null());
-        let on = resolved(&repo, args);
-        assert!(on["error"].is_null(), "{on}");
-        assert_eq!(on["plan"]["applicable"], false, "{on}");
-        assert_eq!(on["plan"]["integrity"]["semantic"], "resolution_performed");
-        // Zero successful both-overlay proofs keep the existing omitted-field shape.
-        assert!(on["coverage"]["ra_resolved"].is_null(), "{on}");
-        assert_eq!(on["plan"]["resolution_coverage"]["decisions"], 0, "{on}");
-        assert!(on["plan"]["binding_proofs"].is_null(), "{on}");
-        for field in ["edits", "created_files", "patch"] {
-            assert!(on["plan"][field].is_null(), "{on}");
-        }
-        let consumer = on["plan"]["decisions"]
+    }
+}
+
+#[test]
+fn glob_qualified_prefix_refuses_unproved_enclosing_consumer_attributes() {
+    for (label, consumer) in [
+        (
+            "inactive method cfg",
+            "struct Caller; impl Caller { #[cfg(any())] fn caller() { source::selected(); } }",
+        ),
+        (
+            "unknown method cfg",
+            "struct Caller; impl Caller { #[cfg(unknown)] fn caller() { source::selected(); } }",
+        ),
+        (
+            "replacing method attribute",
+            "struct Caller; impl Caller { #[unknown] fn caller() { source::selected(); } }",
+        ),
+        (
+            "method cfg_attr",
+            "struct Caller; impl Caller { #[cfg_attr(all(), unknown)] fn caller() { source::selected(); } }",
+        ),
+        (
+            "replacing method attribute before active cfg",
+            "struct Caller; impl Caller { #[unknown] #[cfg(all())] fn caller() { source::selected(); } }",
+        ),
+        (
+            "inactive method cfg before active cfg",
+            "struct Caller; impl Caller { #[cfg(any())] #[cfg(all())] fn caller() { source::selected(); } }",
+        ),
+        (
+            "active impl cfg",
+            "struct Caller; #[cfg(all())] impl Caller { fn caller() { source::selected(); } }",
+        ),
+        (
+            "unknown impl cfg",
+            "struct Caller; #[cfg(unknown)] impl Caller { fn caller() { source::selected(); } }",
+        ),
+        (
+            "replacing impl attribute",
+            "struct Caller; #[unknown] impl Caller { fn caller() { source::selected(); } }",
+        ),
+        (
+            "impl cfg_attr",
+            "struct Caller; #[cfg_attr(all(), unknown)] impl Caller { fn caller() { source::selected(); } }",
+        ),
+        (
+            "nested impl cfg",
+            "fn outer() { struct Caller; #[cfg(all())] impl Caller { fn caller() { source::selected(); } } }",
+        ),
+        (
+            "nested module cfg",
+            "#[cfg(all())] mod nested { use super::*; fn caller() { source::selected(); } }",
+        ),
+        (
+            "replacing closure attribute",
+            "fn caller() { let call = #[unknown] || { source::selected(); }; }",
+        ),
+        (
+            "impl inner attribute",
+            "struct Caller; impl Caller { #![unknown] fn caller() { source::selected(); } }",
+        ),
+        (
+            "outer function cfg around nested consumer",
+            "#[cfg(all())] fn outer() { fn caller() { source::selected(); } }",
+        ),
+    ] {
+        let repo = fixture("pub(crate) fn selected() {}");
+        repo.write("cases/layout/lib.rs", "mod source; mod consumer;");
+        repo.write(
+            "cases/layout/consumer.rs",
+            &format!("use super::*; {consumer}"),
+        );
+        let mut args = request(&repo, "pub(crate) fn selected() {}");
+        // Keep cfg evidence fixed: lexical refusals disclose its consultation
+        // independently of whether semantic resolution is enabled.
+        args["semantic_configuration"] = config();
+        assert_prefix_request_refused(&repo, "cases/layout/consumer.rs", label, args);
+    }
+}
+
+fn assert_prefix_refused(repo: &Fixture, consumer: &str, label: &str) {
+    assert_prefix_request_refused(
+        repo,
+        consumer,
+        label,
+        request(repo, "pub(crate) fn selected() {}"),
+    );
+}
+
+fn assert_prefix_request_refused(repo: &Fixture, consumer: &str, label: &str, args: Value) {
+    assert_default_off(repo, &args);
+    let on = resolved(repo, args);
+    assert!(on["error"].is_null(), "{label}: {on}");
+    assert_eq!(on["plan"]["applicable"], false, "{label}: {on}");
+    for field in ["edits", "created_files", "patch"] {
+        assert!(on["plan"][field].is_null(), "{label}: {on}");
+    }
+    assert!(
+        on["plan"]["decisions"].as_array().unwrap().iter().any(|d| {
+            d["blocks_applicability"] == true
+                && matches!(
+                    d["reason"].as_str(),
+                    Some(
+                        "external_or_missing_binding"
+                            | "lexical_context_unproved"
+                            | "conditional_or_inherited_context"
+                    )
+                )
+                && d["anchors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["path"] == consumer)
+        }),
+        "{label}: {on}"
+    );
+    assert!(
+        !on["plan"]["rewrites"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|d| {
-                d["anchors"].as_array().unwrap().iter().any(|a| {
-                    a["path"] == "cases/layout/consumer.rs" && a["expected_text"] == "selected"
-                })
-            })
-            .expect("qualified consumer decision");
-        assert_eq!(consumer["blocks_applicability"], true, "{on}");
-        assert!(
-            consumer["refusal_basis"]
+            .any(|r| { r["kind"] == "path" && r["target"]["anchor"]["path"] == consumer }),
+        "refused route must not plan a consumer repair: {label}: {on}"
+    );
+    eprintln!("qualified prefix refused: {label}");
+}
+
+#[test]
+fn glob_qualified_prefix_refusal_matrix() {
+    for (label, parent, bridge, consumer) in [
+        (
+            "competing imports",
+            "use crate::source; use crate::other::source;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "duplicate aliases",
+            "use crate::source; use crate::{source};",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "missing route",
+            "use crate::absent::source;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "conditional provider",
+            "#[cfg(all())] use crate::source;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "recursive named route",
+            "use crate::bridge::source;",
+            "pub(crate) use crate::parent::source;",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "glob forwarding",
+            "use crate::bridge::*;",
+            "pub(crate) use crate::source;",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "renamed import",
+            "use crate::source as renamed;",
+            "",
+            "use super::*; fn caller() { renamed::selected(); }",
+        ),
+        (
+            "same-spelling rename",
+            "use crate::source as source;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "renamed intermediate",
+            "use crate::bridge::source;",
+            "pub(crate) use crate::source as source;",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "competing consumer globs",
+            "use crate::source;",
+            "",
+            "use super::*; use crate::other::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "competing provider glob",
+            "use crate::source; use crate::other::*;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "provider macro",
+            "use crate::source; unknown!();",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "consumer macro",
+            "use crate::source;",
+            "",
+            "use super::*; unknown!(); fn caller() { source::selected(); }",
+        ),
+        (
+            "attribute provider",
+            "use crate::source; #[unknown] struct Generated;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "derive provider",
+            "use crate::source; #[derive(Unknown)] struct Generated;",
+            "",
+            "use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "block-local glob",
+            "use crate::source;",
+            "",
+            "use super::*; fn caller() { use crate::other::*; source::selected(); }",
+        ),
+        (
+            "block-local shadow",
+            "use crate::source;",
+            "",
+            "use super::*; fn caller() { use crate::absent as source; source::selected(); }",
+        ),
+        (
+            "nonparent glob",
+            "use crate::source;",
+            "",
+            "use crate::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "grouped glob",
+            "use crate::source;",
+            "",
+            "use super::{*}; fn caller() { source::selected(); }",
+        ),
+        (
+            "conditional glob",
+            "use crate::source;",
+            "",
+            "#[cfg(all())] use super::*; fn caller() { source::selected(); }",
+        ),
+        (
+            "unknown consumer cfg",
+            "use crate::source;",
+            "",
+            "use super::*; #[cfg(unknown)] fn caller() { source::selected(); }",
+        ),
+        (
+            "inactive consumer cfg",
+            "use crate::source;",
+            "",
+            "use super::*; #[cfg(any())] fn caller() { source::selected(); }",
+        ),
+        (
+            "other function cfg",
+            "use crate::source;",
+            "",
+            "use super::*; #[cfg(all())] fn other() {} fn caller() { source::selected(); }",
+        ),
+        (
+            "consumer cfg_attr",
+            "use crate::source;",
+            "",
+            "use super::*; #[cfg_attr(all(), inline)] fn caller() { source::selected(); }",
+        ),
+        (
+            "consumer replacing attribute",
+            "use crate::source;",
+            "",
+            "use super::*; #[unknown] fn caller() { source::selected(); }",
+        ),
+    ] {
+        let repo = fixture("pub(crate) fn selected() {}");
+        repo.write(
+            "cases/layout/lib.rs",
+            "mod source; mod parent; mod bridge; mod other;",
+        );
+        repo.write(
+            "cases/layout/parent.rs",
+            &format!("{parent}\nmod consumer;\n"),
+        );
+        repo.write("cases/layout/bridge.rs", bridge);
+        repo.write(
+            "cases/layout/other.rs",
+            "pub(crate) mod source { pub(crate) fn selected() {} }",
+        );
+        repo.write("cases/layout/parent/consumer.rs", consumer);
+        assert_prefix_refused(&repo, "cases/layout/parent/consumer.rs", label);
+    }
+}
+
+#[test]
+fn glob_qualified_prefix_bounds_named_route_depth() {
+    let repo = fixture("pub(crate) fn selected() {}");
+    let mut root = String::from("mod source; mod parent;\n");
+    for i in 0..18 {
+        root.push_str(&format!("mod link{i};\n"));
+        repo.write(
+            &format!("cases/layout/link{i}.rs"),
+            &if i == 17 {
+                "pub(crate) use crate::source;".into()
+            } else {
+                format!("pub(crate) use crate::link{}::source;", i + 1)
+            },
+        );
+    }
+    repo.write("cases/layout/lib.rs", &root);
+    repo.write(
+        "cases/layout/parent.rs",
+        "use crate::link0::source; mod consumer;",
+    );
+    repo.write(
+        "cases/layout/parent/consumer.rs",
+        "use super::*; fn caller() { source::selected(); }",
+    );
+    assert_prefix_refused(
+        &repo,
+        "cases/layout/parent/consumer.rs",
+        "over-depth named route",
+    );
+}
+
+#[test]
+fn cross_file_missing_qualified_prefix_keeps_source_fact_refusal() {
+    let repo = fixture("pub(crate) fn selected() {}");
+    repo.write("cases/layout/lib.rs", "mod source; mod consumer;");
+    repo.write(
+        "cases/layout/consumer.rs",
+        "use super::*; #[cfg(all())] fn caller() { absent::selected(); }",
+    );
+    assert_prefix_refused(&repo, "cases/layout/consumer.rs", "missing prefix");
+    let on = resolved(&repo, request(&repo, "pub(crate) fn selected() {}"));
+    assert_eq!(on["plan"]["integrity"]["semantic"], "resolution_performed");
+    assert!(on["coverage"]["ra_resolved"].is_null(), "{on}");
+    assert_eq!(on["plan"]["resolution_coverage"]["decisions"], 0, "{on}");
+    assert!(on["plan"]["binding_proofs"].is_null(), "{on}");
+    assert!(
+        on["plan"]["decisions"].as_array().unwrap().iter().any(|d| {
+            d["anchors"].as_array().unwrap().iter().any(|a| {
+                a["path"] == "cases/layout/consumer.rs" && a["expected_text"] == "selected"
+            }) && d["refusal_basis"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|b| b["class"] == refusal),
-            "{on}"
-        );
-        if prefix == "source" {
-            assert!(
-                !consumer["refusal_basis"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|b| b["class"] == "semantic_source_fact_unproved"),
-                "{on}"
-            );
-            assert!(
-                on["plan"]["resolution_coverage"]["context_evaluations"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|e| {
-                        e["revision"] == "original"
-                            && e["status"] == "admitted"
-                            && e["anchor"]["path"] == "cases/layout/consumer.rs"
-                            && e["anchor"]["expected_text"] == "#[cfg(all())]"
-                    }),
-                "{on}"
-            );
-        }
-    }
+                .any(|b| b["class"] == "semantic_source_fact_unproved")
+        }),
+        "{on}"
+    );
 }
 
 #[test]

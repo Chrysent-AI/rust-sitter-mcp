@@ -2143,6 +2143,7 @@ impl Analyzer<'_> {
                 items::LexicalBinding::Absent => {}
             }
         }
+        let mut prefix_evidence = RouteEvidence::default();
         let old = if local_aliases.len() == 1
             && !local_aliases[0].conditioned
             && !local_aliases[0].leaf.public
@@ -2159,6 +2160,25 @@ impl Analyzer<'_> {
         } else {
             None
         };
+        let old = old.or_else(|| {
+            // Opt-in only: preserve the written-only response and never widen
+            // bare-name glob repair or override a local named binding.
+            if !self.request.resolve_semantic
+                || !local_aliases.is_empty()
+                || !self.imported(&need.path, &old_module, first).is_empty()
+                || matches!(first, "crate" | "self" | "super" | "Self")
+                || !simple_path(text)
+                || !text.contains("::")
+            {
+                return None;
+            }
+            let (base, anchors) = self
+                .pattern_routes
+                .qualified_prefix(&need.path, node, first, self.cfg.as_ref())
+                .ok()??;
+            prefix_evidence.anchors = anchors;
+            Some(format!("{base}{}", text.strip_prefix(first)?))
+        });
         let Some(old) = old else {
             need.reason = DecisionReason::ExternalOrMissingBinding;
             return false;
@@ -2181,6 +2201,7 @@ impl Analyzer<'_> {
         if after != old || old_module != using {
             self.source_repair(need, range.clone(), after, "path");
             self.path_evidence(need, &resolved.evidence);
+            self.path_evidence(need, &prefix_evidence);
         }
         self.visibility_need(
             need,
