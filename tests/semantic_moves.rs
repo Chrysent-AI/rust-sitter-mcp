@@ -175,6 +175,86 @@ fn reason(value: &Value, expected: &str) -> bool {
 }
 
 #[test]
+fn cross_file_qualified_consumer_proves_original_but_requires_final_repair() {
+    let text = "pub(crate) fn selected() {}";
+    for (prefix, refusal) in [
+        ("source", "semantic_final_fact_unproved"),
+        ("absent", "semantic_source_fact_unproved"),
+    ] {
+        let repo = fixture(text);
+        repo.write("cases/layout/lib.rs", "mod source; mod consumer;");
+        repo.write(
+            "cases/layout/consumer.rs",
+            &format!("use super::*; #[cfg(all())] fn caller() {{ {prefix}::selected(); }}"),
+        );
+        let args = request(&repo, text);
+        let off = run(&repo, args.clone());
+        let mut explicit_off = args.clone();
+        explicit_off["resolve_semantic"] = json!(false);
+        explicit_off["semantic_configuration"] = config();
+        assert_eq!(
+            serde_json::to_vec(&off).unwrap(),
+            serde_json::to_vec(&run(&repo, explicit_off)).unwrap()
+        );
+        assert_eq!(off["plan"]["integrity"]["semantic"], "not_performed");
+        assert!(off["plan"]["resolution_coverage"].is_null());
+        let on = resolved(&repo, args);
+        assert!(on["error"].is_null(), "{on}");
+        assert_eq!(on["plan"]["applicable"], false, "{on}");
+        assert_eq!(on["plan"]["integrity"]["semantic"], "resolution_performed");
+        // Zero successful both-overlay proofs keep the existing omitted-field shape.
+        assert!(on["coverage"]["ra_resolved"].is_null(), "{on}");
+        assert_eq!(on["plan"]["resolution_coverage"]["decisions"], 0, "{on}");
+        assert!(on["plan"]["binding_proofs"].is_null(), "{on}");
+        for field in ["edits", "created_files", "patch"] {
+            assert!(on["plan"][field].is_null(), "{on}");
+        }
+        let consumer = on["plan"]["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| {
+                d["anchors"].as_array().unwrap().iter().any(|a| {
+                    a["path"] == "cases/layout/consumer.rs" && a["expected_text"] == "selected"
+                })
+            })
+            .expect("qualified consumer decision");
+        assert_eq!(consumer["blocks_applicability"], true, "{on}");
+        assert!(
+            consumer["refusal_basis"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["class"] == refusal),
+            "{on}"
+        );
+        if prefix == "source" {
+            assert!(
+                !consumer["refusal_basis"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|b| b["class"] == "semantic_source_fact_unproved"),
+                "{on}"
+            );
+            assert!(
+                on["plan"]["resolution_coverage"]["context_evaluations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| {
+                        e["revision"] == "original"
+                            && e["status"] == "admitted"
+                            && e["anchor"]["path"] == "cases/layout/consumer.rs"
+                            && e["anchor"]["expected_text"] == "#[cfg(all())]"
+                    }),
+                "{on}"
+            );
+        }
+    }
+}
+
+#[test]
 fn macro_free_batch_resolves_inherent_constructor_method_and_field_with_full_evidence() {
     let text = "fn selected(value: crate::Value) -> u32 { let constructed = crate::Value::new(); value.read() + constructed.number }";
     let repo = fixture(text);

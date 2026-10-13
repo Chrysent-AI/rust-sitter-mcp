@@ -2671,7 +2671,7 @@ fn build(
         {
             semantic::discharge(
                 request,
-                &files,
+                (&files, &parsed),
                 overlay,
                 &mut semantic_needs,
                 (external.as_ref(), sysroot.as_ref()),

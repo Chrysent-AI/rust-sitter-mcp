@@ -1,4 +1,4 @@
-use super::*;
+use super::{tests::evaluate, *};
 const LIBRARY: &str = "@sysroot/0/library/fixture/src/lib.rs";
 const CALL: &str = "thing.written";
 fn inputs(library: &str, caller: &str, enabled: bool, controls: (Instant, &AtomicBool)) -> Inputs {

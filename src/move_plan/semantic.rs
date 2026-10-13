@@ -607,7 +607,10 @@ impl Inputs {
 /// Both databases are dropped and the controller joined before the admission permit releases.
 pub fn discharge(
     request: &MoveRequest,
-    files: &BTreeMap<String, FileSnapshot>,
+    original_files: (
+        &BTreeMap<String, FileSnapshot>,
+        &BTreeMap<String, items::ParsedFile>,
+    ),
     overlay: BTreeMap<String, String>,
     needs: &mut Vec<Need>,
     sources: (
@@ -617,6 +620,7 @@ pub fn discharge(
     controls: (Instant, &AtomicBool),
     result: &mut MoveEnvelope,
 ) -> Result<(), DomainError> {
+    let (files, parsed) = original_files;
     let (external, sysroot) = sources;
     let Some(config) = &request.semantic_configuration else {
         configuration_refusal(needs);
@@ -680,7 +684,15 @@ pub fn discharge(
         context_evaluations: Vec::new(),
     };
     let mut proofs = controlled(&old.db, &new.db, controls, || {
-        evaluate(&old, &new, needs, &result.plan.origins, &coverage, controls)
+        evaluate(
+            &old,
+            &new,
+            parsed,
+            needs,
+            &result.plan.origins,
+            &coverage,
+            controls,
+        )
     })?;
     let mut coverage = coverage;
     if external.is_some() {
@@ -884,9 +896,42 @@ fn normalize_receiver(
     Some(normalized)
 }
 
+fn fact_anchor(need: &Need, source: &str, parsed: &items::ParsedFile) -> SourceAnchor {
+    // Keep diagnostics at the original occurrence, but match the written repair's
+    // scoped-path granularity for evidence and byte-exact origin mapping.
+    let mut span = need.attribute_range.as_ref().unwrap_or(&need.range).clone();
+    if need.attribute_range.is_none()
+        && let Some(mut node) = parsed
+            .tree
+            .root_node()
+            .named_descendant_for_byte_range(span.start_byte, span.end_byte)
+            .filter(|n| {
+                n.byte_range() == (span.start_byte..span.end_byte)
+                    && matches!(n.kind(), "identifier" | "type_identifier")
+            })
+    {
+        while let Some(parent) = node.parent() {
+            if !matches!(
+                parent.kind(),
+                "scoped_identifier" | "scoped_type_identifier"
+            ) {
+                break;
+            }
+            node = parent;
+        }
+        span = range(node.start_byte(), node.end_byte());
+    }
+    SourceAnchor {
+        path: need.path.clone(),
+        expected_text: source[span.start_byte..span.end_byte].into(),
+        range: span,
+    }
+}
+
 fn evaluate(
     old: &Inputs,
     new: &Inputs,
+    parsed: &BTreeMap<String, items::ParsedFile>,
     needs: &mut Vec<Need>,
     origins: &[MoveOrigin],
     coverage: &ResolutionCoverage,
@@ -896,14 +941,8 @@ fn evaluate(
     let mut retained = Vec::new();
     for mut need in needs.drain(..) {
         items::check(controls.0, controls.1)?;
-        // Selected-item context needs retain the whole item as their diagnostic
-        // range; the attached attribute is the evidence to compare across overlays.
-        let span = need.attribute_range.as_ref().unwrap_or(&need.range);
-        let anchor = SourceAnchor {
-            path: need.path.clone(),
-            range: span.clone(),
-            expected_text: old.texts[&need.path][span.start_byte..span.end_byte].into(),
-        };
+        // Selected-item context needs compare their attached attribute, not the item.
+        let anchor = fact_anchor(&need, &old.texts[&need.path], &parsed[&need.path]);
         let mut refusal_class = "semantic_mapping_unproved";
         let proof = (|| {
             let final_anchor = mapped(&anchor, origins, new)?;

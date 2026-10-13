@@ -1,4 +1,4 @@
-use super::*;
+use super::{tests::evaluate, *};
 
 const MACRO: &str = "macro_rules! make { ($name:ident) => { pub struct $name(Opaque); }; }";
 const SELECTED: &str = "fn selected(value: crate::model::ItemId) {}";

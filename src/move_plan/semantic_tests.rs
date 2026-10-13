@@ -1,6 +1,210 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
+fn parsed_inputs(
+    inputs: &Inputs,
+    controls: (Instant, &AtomicBool),
+) -> BTreeMap<String, items::ParsedFile> {
+    inputs
+        .texts
+        .iter()
+        .map(|(path, text)| {
+            (
+                path.clone(),
+                items::ParsedFile {
+                    tree: crate::trivia::parse(text, controls.0, controls.1)
+                        .unwrap()
+                        .unwrap(),
+                    items: Vec::new(),
+                    associated_items: Vec::new(),
+                    trivia: Vec::new(),
+                },
+            )
+        })
+        .collect()
+}
+
+pub(super) fn evaluate(
+    old: &Inputs,
+    new: &Inputs,
+    needs: &mut Vec<Need>,
+    origins: &[MoveOrigin],
+    coverage: &ResolutionCoverage,
+    controls: (Instant, &AtomicBool),
+) -> Result<Vec<Proof>, DomainError> {
+    super::evaluate(
+        old,
+        new,
+        &parsed_inputs(old, controls),
+        needs,
+        origins,
+        coverage,
+        controls,
+    )
+}
+
+#[test]
+fn qualified_consumer_anchors_preserve_exact_syntax_boundaries() {
+    let flag = AtomicBool::new(false);
+    let controls = (Instant::now() + Duration::from_secs(30), &flag);
+    for (text, occurrence, expected) in [
+        (
+            "fn f() { root::module::item(); }",
+            "item",
+            "root::module::item",
+        ),
+        (
+            "fn f() { root::module::item(); }",
+            "module",
+            "root::module::item",
+        ),
+        (
+            "fn f(_: root::module::Value) {}",
+            "Value",
+            "root::module::Value",
+        ),
+        (
+            "fn f() { root /* gap */ :: r#item(); }",
+            "r#item",
+            "root /* gap */ :: r#item",
+        ),
+        ("fn f() { module::item::<u8>(); }", "item", "module::item"),
+        (
+            "fn f() { item::<module::Value>(); }",
+            "Value",
+            "module::Value",
+        ),
+        ("fn f() { item::<u8>(); }", "item", "item"),
+        ("fn f(value: Value) { value.item(); }", "item", "item"),
+        ("fn f(value: Value) { value.item; }", "item", "item"),
+        ("fn f() { item(); }", "item", "item"),
+        ("fn f() { module::item(); }", "tem", "tem"),
+        ("fn f() { module::item(); }", "module::item", "module::item"),
+    ] {
+        let at = text.rfind(occurrence).unwrap();
+        let need = Need {
+            path: "lib.rs".into(),
+            range: range(at, at + occurrence.len()),
+            item_ids: Vec::new(),
+            reason: DecisionReason::ExternalOrMissingBinding,
+            category: "test",
+            message: "unproved".into(),
+            attribute_range: None,
+            choice_target: None,
+            lexical_uncertainty: None,
+            refusal_basis: Vec::new(),
+        };
+        let parsed = items::ParsedFile {
+            tree: crate::trivia::parse(text, controls.0, controls.1)
+                .unwrap()
+                .unwrap(),
+            items: Vec::new(),
+            associated_items: Vec::new(),
+            trivia: Vec::new(),
+        };
+        let anchor = fact_anchor(&need, text, &parsed);
+        assert_eq!(anchor.expected_text, expected, "{text}: {occurrence}");
+        assert_eq!(
+            &text[anchor.range.start_byte..anchor.range.end_byte],
+            expected
+        );
+        assert_eq!(need.range, range(at, at + occurrence.len()));
+    }
+}
+
+#[test]
+fn qualified_consumer_facts_require_full_path_mapping_and_both_overlays() {
+    let flag = AtomicBool::new(false);
+    let controls = (Instant::now() + Duration::from_secs(30), &flag);
+    let config: Configuration = serde_json::from_value(serde_json::json!({"crates":[{
+        "name":"probe", "root_file":"lib.rs", "edition":"2024", "features":[], "cfg":[], "dependencies":[]
+    }]})).unwrap();
+    let text = "use super::*; fn caller() { source::item(); }";
+    let make = |definition: &str, consumer: &str| {
+        Inputs::new(
+            BTreeMap::from([
+                ("lib.rs".into(), "mod source; mod consumer;".into()),
+                ("source.rs".into(), definition.into()),
+                ("consumer.rs".into(), consumer.into()),
+            ]),
+            &config,
+            controls,
+        )
+        .unwrap()
+    };
+    let old = make("pub(crate) fn item() {}", text);
+    let at = text.find("item").unwrap();
+    let need = Need {
+        path: "consumer.rs".into(),
+        range: range(at, at + 4),
+        item_ids: Vec::new(),
+        reason: DecisionReason::ExternalOrMissingBinding,
+        category: "test",
+        message: "unproved".into(),
+        attribute_range: None,
+        choice_target: None,
+        lexical_uncertainty: None,
+        refusal_basis: Vec::new(),
+    };
+    let anchor = fact_anchor(&need, text, &parsed_inputs(&old, controls)["consumer.rs"]);
+    assert_eq!(anchor.expected_text, "source::item");
+    let original = fact(&old, &anchor, false).unwrap();
+    assert_eq!(original.classification, "written_function");
+    assert_eq!(original.declaration.anchor.path, "source.rs");
+    assert_eq!(original.declaration.anchor.expected_text, "item");
+    let coverage = ResolutionCoverage {
+        decisions: 0,
+        configuration: config.clone(),
+        snapshot_id: String::new(),
+        semantic_input_digest: String::new(),
+        final_overlay_digest: String::new(),
+        analyzer: ANALYZER.into(),
+        statement: String::new(),
+        omissions: Vec::new(),
+        context_evaluations: Vec::new(),
+    };
+    for (definition, consumer, refusal) in [
+        ("pub(crate) fn item() {}", text.to_owned(), None),
+        ("", text.to_owned(), Some("semantic_final_fact_unproved")),
+        (
+            "pub(crate) fn item() {}",
+            text.replace("source::", "absent::"),
+            Some("semantic_mapping_unproved"),
+        ),
+    ] {
+        let new = make(definition, &consumer);
+        let mut needs = vec![need.clone()];
+        let proofs = evaluate(&old, &new, &mut needs, &[], &coverage, controls).unwrap();
+        if let Some(refusal) = refusal {
+            assert!(proofs.is_empty());
+            assert_eq!(needs.len(), 1);
+            assert_eq!(needs[0].refusal_basis[0].class, refusal);
+            assert_eq!(
+                needs[0].refusal_basis[0].anchor.range,
+                Some(need.range.clone())
+            );
+        } else {
+            assert!(needs.is_empty());
+            assert_eq!(proofs.len(), 1);
+            assert_eq!(proofs[0].anchor, anchor);
+            assert_eq!(proofs[0].final_anchor, anchor);
+            assert_eq!(proofs[0].classification, "written_function");
+        }
+    }
+    let absent = make("", text);
+    assert!(fact(&absent, &anchor, false).is_none());
+    let mut needs = vec![need];
+    assert!(
+        evaluate(&absent, &old, &mut needs, &[], &coverage, controls)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        needs[0].refusal_basis[0].class,
+        "semantic_source_fact_unproved"
+    );
+}
+
 #[test]
 fn context_grammar_reports_false_unknown_and_parser_recovery_without_shortcuts() {
     let flag = AtomicBool::new(false);

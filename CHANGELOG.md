@@ -13,6 +13,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+* Resolve cross-file qualified consumer evidence against the enclosing written
+  path instead of its terminal identifier. Original-overlay facts can now be
+  reached; missing final-overlay repairs still refuse, and semantic resolution
+  remains opt-in.
+
 * Admit tuple expressions/patterns and string patterns in exact caller-asserted
   standard `matches!` invocations. Classify field receivers in stationary
   consumers without confusing field names with moved free items; unasserted
