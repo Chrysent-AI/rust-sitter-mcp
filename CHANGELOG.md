@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+* Correct the install and clone URLs in `README.md` and `CONTRIBUTING.md`, which
+  pointed at the wrong repository host. Add a "configure the request for this
+  repository" section to the bundled skill covering crate-graph derivation from
+  `Cargo.toml`, source-tier selection and local preconditions, scope/budget
+  reconnaissance, and the eligibility rule for macro- or glob-dense modules.
+
 * Clarify the documented capability of the `sysroot_sources` evidence tier: it
   proves written inherent methods only. Written field accesses and direct
   constructions of sysroot types remain refused by the audited installation

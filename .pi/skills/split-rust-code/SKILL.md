@@ -42,12 +42,70 @@ caller repository, reads no skill directory at runtime, and changes nothing;
 
 ## Workflow checklist
 
+- [ ] 0. Configure the request for this repository (this section)
 - [ ] 1. Call `suggest_split` on the target file → get inventory + drafts
 - [ ] 2. Triage advice completeness, review drafts, edit groups/filenames
 - [ ] 3. Construct an exact-anchor `move_item` batch manually, or optionally export an inactive request from explicitly retained advice and review/edit it
 - [ ] 4. Independently submit the reviewed request to `move_item` and review its plan (rewrites, decisions, trivia)
 - [ ] 5. If `applicable: true`, save and apply the patch externally
 - [ ] 6. Run `cargo check` from the affected Cargo project
+
+## Step 0: Configure the request for this repository
+
+There is **no configuration file**. Every option is per request, so build one reusable request object (keep it in your harness) and pass it on every call. Four things decide whether the tool can prove anything at all.
+
+**1. Declare the crate graph from the caller's `Cargo.toml`.** `semantic_configuration` is not optional in spirit — without it most moves are refused, and a *wrong* graph refuses silently in ways that look like missing evidence. Derive each field from the manifest:
+
+| Field | Where it comes from |
+|---|---|
+| `crates[].name` | the package's **Rust crate identifier**: `[package] name` with `-` mapped to `_` (for `rust-sitter-mcp` → `rust_sitter_mcp`). Use identifiers, never Cargo package names. |
+| `crates[].root_file` | the package's lib/bin root relative to the Git root (`src/lib.rs`, or `src/main.rs` for a binary-only crate; workspace members use `member/src/lib.rs`). |
+| `crates[].edition` | `[package] edition` exactly (`"2021"`/`"2024"`). |
+| `crates[].features` | the feature set you are treating as **active** at resolution time (include `"default"` when it is on). Unlisted features stay *unknown*, never assumed off. |
+| `crates[].cfg` | extra ON cfg atoms you intend to treat as true, as `{"key":"feature","value":"name"}` or plain name/value pairs. Do not guess. |
+| `crates[].dependencies` | one entry per dependency edge you want resolved: `{"name": <alias as used in the manifest>, "crate_name": <the dependency's Rust identifier>}`. Targets must be explicit, names unique, and the graph acyclic. |
+
+The graph must include **every hop** the moved item and its consumers traverse. A missing dependency is not an error — it becomes an unresolved binding, so consumers in files that use that dependency quietly fail their facts. If you cannot back an edge with admitted sources, expect refusals in the files that use it instead of guessing a root.
+
+**2. Enable the source tiers a dependency's facts need.** The caller graph never contains dependency or std sources; those arrive only through opt-in tiers, each with a local precondition:
+
+| Your code uses | Enable | Requires locally |
+|---|---|---|
+| prelude types, built-in derives, variant paths, `Some`/`None` | `assume_standard_prelude: true` | nothing |
+| std inherent methods (`String::push_str`, `Vec::push`, `.iter()`) | `sysroot_sources: true` + `resolve_semantic:true` | the toolchain's `rust-src` installed for the selected stable profile |
+| methods/fields/constructions of path, cached-registry or vendor crates | `external_path_dependencies: true` + `resolve_semantic:true` | offline-locked inputs present (warm Cargo cache / checkout / vendor dir) |
+| a `matches!` invocation that mentions the moved name | `standard_matches_assertions: [{path,range,expected_text}]` per exact whole invocation | nothing |
+| provider-uncertain derive helpers you can vouch for | `assume_declared_helpers: true` + `resolve_semantic:true` | nothing |
+
+Everything semantic additionally needs `resolve_semantic: true` and a valid `semantic_configuration` whose crate name, edition and resolved features match the manifest.
+
+**3. Reconnoiter the scope and budgets.** `crate_root` is the admitted root file; `paths` must admit that root **and every ordinary chain hop** to the target — for a new sibling destination, `paths` must include an existing **directory** covering the future path (file-only `paths` can never admit an absent sibling; the advice hint says so when it happens). Add positive `globs` when you want a narrow scan: include the chain files *and* a pattern matching proposed sibling names, or nothing is discoverable/admissible. Set `max_items` at or above the crate's eligible-item count (a low cap reports `membership_complete:false` and no drafts). Give large files an explicit `limits.time_budget_ms` (up to `300000`); raise `limits.response_bytes` and `diagnostic_count` when detail is truncated (the default hides most blockers on large files).
+
+**4. Decide whether this file is worth the tool.** Measured behavior: whole items with explicit bindings in a dependency-declared crate are the sweet spot. Macro- or glob-dense modules refuse broadly (`chain_macro_statement` for macro statements in the item's module chain, `glob_consumer_unrepaired` for bare-name glob consumers, `macro_context_unexamined` for the moved name appearing as any token inside a macro — including a field name in a struct literal), and those refusals are honest, not bugs. For such modules use the tool for its inventory, candidate drafts, consumer-import repair and safety adjudication, and fall back to editing plus `cargo check` where it refuses. Do not fight a refusal by loosening a gate.
+
+Example request skeleton (fill from the manifest):
+
+```json
+{
+  "crate_root": "src/lib.rs",
+  "paths": ["src"],
+  "globs": ["src/lib.rs", "src/parser*.rs"],
+  "resolve_semantic": true,
+  "assume_standard_prelude": true,
+  "sysroot_sources": true,
+  "semantic_configuration": {
+    "crates": [{
+      "name": "my_package",
+      "root_file": "src/lib.rs",
+      "edition": "2021",
+      "features": ["default"],
+      "cfg": [],
+      "dependencies": [{"name": "serde", "crate_name": "serde"}]
+    }]
+  },
+  "limits": {"time_budget_ms": 300000, "response_bytes": 8388608}
+}
+```
 
 ## Step 1: Get split advice
 
