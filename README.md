@@ -1,5 +1,9 @@
 # rust-sitter-mcp
 
+<p align="center">
+    <img src="./rust-sitter-mcp-logo.jpg" alt="Rust sitter logo. Blade cuts through jigsaw puzzle of rusted steel in patina covered bronze frame" />
+</p>
+
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server for structural Rust refactoring — built for coding agents, useful to anyone who edits Rust.
 
 It finds and rewrites Rust **syntactically** (tree-sitter), preserves every comment, attribute, and byte outside the edit, and emits **git-apply-compatible patches** your agent (or you) can review and apply. Whole-item moves can additionally opt into bounded rust-analyzer resolution over explicitly configured, admitted source texts. The server never writes to your source tree.
