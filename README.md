@@ -2,6 +2,7 @@
 
 <p align="center">
     <img src="./rust-sitter-mcp-logo.jpg" alt="Rust sitter logo. Blade cuts through jigsaw puzzle of rusted steel in patina covered bronze frame" />
+      Copyright © 2026 <a href="https://chrysent.ai/">Chrysent</a>. MIT licensed.
 </p>
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server for structural Rust refactoring — built for coding agents, useful to anyone who edits Rust.
