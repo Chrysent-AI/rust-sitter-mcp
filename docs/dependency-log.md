@@ -1,5 +1,20 @@
 # Dependency decisions
 
+## 2026-11-06 — tokio 1.54.1
+
+Security-driven Cargo.lock refresh for
+[RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386):
+`AsyncFd::new` and related constructors violate I/O safety up to 1.53.2;
+fixed from 1.53.3. `cargo update -p tokio` moved the lockfile from 1.53.2 to
+1.54.1 with no manifest change — the caret `1` requirement and the
+macros/rt-multi-thread/sync feature set of the 2026-10-04 tokio 1.53.2
+admission still govern. `cargo info tokio` verified 1.54.1 as the current
+latest release, MIT, Rust 1.85 minimum, fitting the tested 1.98.1 toolchain.
+The same change prunes the now-dead BSD-2-Clause, BSD-3-Clause and ISC
+allowances from `deny.toml`, which the current cargo-deny flags with its
+`license-not-encountered` warning; re-add any of them deliberately if a
+future dependency needs it.
+
 ## 2026-10-11 — sha2 0.11.0
 
 Raw-byte SHA-256 for locked registry archives and vendored file checksums:

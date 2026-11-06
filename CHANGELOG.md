@@ -14,6 +14,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   entry, and re-checks test version literals; bumping now assumes the tree
   already passed the gates.
 
+### Fixed
+
+* Refresh the locked `tokio` runtime to 1.54.1 to clear RUSTSEC-2026-0386
+  (I/O-safety unsoundness in `AsyncFd` constructors, fixed from 1.53.3). No
+  manifest, feature, or tool contract change.
+
 ## [0.6.1] - 2026-10-14
 
 ### Changed
